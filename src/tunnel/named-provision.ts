@@ -379,7 +379,7 @@ export async function provisionNamedTunnel(opts: {
     const changedHost = Boolean(owned && (previous.hostname !== hostname || previous.zone !== zone));
     const changedName = Boolean(owned && owned.name !== tunnelName);
     if (changedHost || changedName) {
-      if (!previous.zone || !previous.hostname) throw new Error("OWNERSHIP_CONFLICT: Legacy tunnel needs its saved zone and hostname before rename.");
+      if (!previous.zone || !previous.hostname) throw new Error("OWNERSHIP_CONFLICT: Saved tunnel needs its zone and hostname before rename.");
       const oldDns = await account.dns(previous.zone, previous.hostname);
       if (!oldDns) throw new Error("OWNERSHIP_CONFLICT: Saved DNS route is missing before rename.");
       assertDnsOwnership(oldDns, owned!.id);
