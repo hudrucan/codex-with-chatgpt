@@ -7,7 +7,7 @@ import {
   mcpUrlFromPublic,
   normalizePublicUrl,
   reclaimUserMessage,
-} from "../src/config/endpoint.js";
+} from "../../src/config/endpoint.js";
 
 describe("connectorAction", () => {
   it("creates on the first successful URL", () => {

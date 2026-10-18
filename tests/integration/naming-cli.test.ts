@@ -4,17 +4,17 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Workspace } from "../src/workspace/manager.js";
-import { AuthStore } from "../src/auth/store.js";
-import { startBridge, type Bridge } from "../src/bridge/server.js";
-import { readRuntimeState } from "../src/bridge/runtime.js";
-import { readLastEndpoint, writeLastEndpoint, confirmConnectorBinding } from "../src/config/endpoint.js";
-import { readTunnelState, writeTunnelState } from "../src/tunnel/state.js";
-import type { TunnelProvider } from "../src/tunnel/provider.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "./helpers.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { AuthStore } from "../../src/auth/store.js";
+import { startBridge, type Bridge } from "../../src/bridge/server.js";
+import { readRuntimeState } from "../../src/bridge/runtime.js";
+import { readLastEndpoint, writeLastEndpoint, confirmConnectorBinding } from "../../src/config/endpoint.js";
+import { readTunnelState, writeTunnelState } from "../../src/tunnel/state.js";
+import type { TunnelProvider } from "../../src/tunnel/provider.js";
+import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 const execFileAsync = promisify(execFile);
-const cliEntry = fileURLToPath(new URL("../src/cli/index.ts", import.meta.url));
+const cliEntry = fileURLToPath(new URL("../../src/cli/index.ts", import.meta.url));
 
 describe("naming through setup and repair commands", () => {
   const dirs: string[] = [];

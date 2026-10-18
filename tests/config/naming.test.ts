@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { Workspace } from "../src/workspace/manager.js";
-import { saveWorkspaceDisplayName, workspaceRegistrationFile } from "../src/config/naming.js";
-import { connectorNameFor, persistWorkspaceEndpoint, readLastEndpoint, writeLastEndpoint } from "../src/config/endpoint.js";
-import { normalizeTunnelName, provisionNamedTunnel, TunnelNamingConflict, type CloudflaredAccount, type ListedTunnel } from "../src/tunnel/named-provision.js";
-import { readTunnelState, writeTunnelState } from "../src/tunnel/state.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "./helpers.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { saveWorkspaceDisplayName, workspaceRegistrationFile } from "../../src/config/naming.js";
+import { connectorNameFor, persistWorkspaceEndpoint, readLastEndpoint, writeLastEndpoint } from "../../src/config/endpoint.js";
+import { normalizeTunnelName, provisionNamedTunnel, TunnelNamingConflict, type CloudflaredAccount, type ListedTunnel } from "../../src/tunnel/named-provision.js";
+import { readTunnelState, writeTunnelState } from "../../src/tunnel/state.js";
+import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 describe("runtime naming", () => {
   const dirs: string[] = [];

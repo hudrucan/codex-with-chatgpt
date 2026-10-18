@@ -4,14 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
-import { findBinary } from "../src/tunnel/detect.js";
+import { findBinary } from "../../src/tunnel/detect.js";
 import {
   CloudflaredQuickTunnel,
   parseQuickTunnelUrl,
   type CloudflaredQuickTunnelOptions,
-} from "../src/tunnel/cloudflared.js";
-import { normalizeNamedTunnelHostname } from "../src/tunnel/cloudflared-named.js";
-import { hostnameSlug, parseZoneInput, suggestedNamedHostname } from "../src/tunnel/hostname.js";
+} from "../../src/tunnel/cloudflared.js";
+import { normalizeNamedTunnelHostname } from "../../src/tunnel/cloudflared-named.js";
+import { hostnameSlug, parseZoneInput, suggestedNamedHostname } from "../../src/tunnel/hostname.js";
 import {
   chooseQuickTunnel,
   cloudflaredCredentialPath,
@@ -21,10 +21,10 @@ import {
   parseTunnelList,
   provisionNamedTunnel,
   type CloudflaredAccount,
-} from "../src/tunnel/named-provision.js";
-import { resolveTunnelProtocol, tunnelProtocolArgs } from "../src/tunnel/protocol.js";
-import { isNamedTunnelReady, needsTunnelChoice, readTunnelState } from "../src/tunnel/state.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "./helpers.js";
+} from "../../src/tunnel/named-provision.js";
+import { resolveTunnelProtocol, tunnelProtocolArgs } from "../../src/tunnel/protocol.js";
+import { isNamedTunnelReady, needsTunnelChoice, readTunnelState } from "../../src/tunnel/state.js";
+import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 const stateDirs: string[] = [];
 const previousStateDir = process.env.C2C_STATE_DIR;

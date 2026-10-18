@@ -2,10 +2,10 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { cleanup, makeTmpDir, write } from "./helpers.js";
+import { cleanup, makeTmpDir, write } from "../helpers.js";
 import fs from "node:fs";
 
-const entry = fileURLToPath(new URL("../src/cli/index.ts", import.meta.url));
+const entry = fileURLToPath(new URL("../../src/cli/index.ts", import.meta.url));
 let state: string;
 beforeAll(() => { state = makeTmpDir("bridge-cli"); });
 afterAll(() => cleanup(state));

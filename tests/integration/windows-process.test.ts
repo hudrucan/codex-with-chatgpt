@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
-import { makeTmpDir, cleanup, makeGitRepo, write } from "./helpers.js";
+import { makeTmpDir, cleanup, makeGitRepo, write } from "../helpers.js";
 
 const spawnSyncCalls: { file: string; args: any[]; options: any }[] = [];
 const spawnCalls: { file: string; args: any[]; options: any }[] = [];
@@ -22,11 +22,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 // Import modules under test after mock is established
-import { runGit } from "../src/workspace/git.js";
-import { findRipgrep, resetRipgrepCache, searchWorkspace } from "../src/workspace/search.js";
-import { Workspace } from "../src/workspace/manager.js";
-import { findBinary } from "../src/tunnel/detect.js";
-import { ProcessCloudflaredAccount } from "../src/tunnel/named-provision.js";
+import { runGit } from "../../src/workspace/git.js";
+import { findRipgrep, resetRipgrepCache, searchWorkspace } from "../../src/workspace/search.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { findBinary } from "../../src/tunnel/detect.js";
+import { ProcessCloudflaredAccount } from "../../src/tunnel/named-provision.js";
 
 describe("Windows background subprocess windowsHide: true (RED verification)", () => {
   let tmpDir: string;

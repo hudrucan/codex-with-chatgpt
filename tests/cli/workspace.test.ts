@@ -3,10 +3,10 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { Workspace } from "../src/workspace/manager.js";
-import { cleanup, isolateStateDir, makeTmpDir } from "./helpers.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { cleanup, isolateStateDir, makeTmpDir } from "../helpers.js";
 
-const entry = fileURLToPath(new URL("../src/cli/index.ts", import.meta.url));
+const entry = fileURLToPath(new URL("../../src/cli/index.ts", import.meta.url));
 let state: string;
 let root: string;
 let other: string;

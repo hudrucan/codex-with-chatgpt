@@ -8,71 +8,60 @@ ChatGPT MCP client → HTTPS tunnel → loopback bridge → owner's registered r
 Codex Skill → local c2c CLI → authenticated local admin API
 ```
 
-The Skill is a small control plane for setup/naming, connection binding,
-verification and lifecycle. The MCP connection is the read-only data plane.
-Successful setup/reconnect ends at `MCP READY`; there is no Project/session
-management, execution recording or automatic planning/review protocol.
+The Skill manages setup, naming, connection verification and lifecycle. MCP is
+the read-only data plane. Successful setup or reconnect ends at `MCP READY`.
 
 ## Components
 
 | Module | Responsibility |
 | --- | --- |
-| `bridge/` | Express assembly, loopback listener, port fallback, runtime discovery, local admin API |
-| `mcp/` | Eight read-only tools and stateless Streamable HTTP transport |
-| `auth/` | OAuth discovery, client registration, PKCE S256, token rotation/revocation; opaque tokens stored as hashes |
+| `bridge/` | Express assembly, loopback listener, port fallback, runtime discovery and local admin API |
+| `mcp/` | Read-only tools and stateless Streamable HTTP transport |
+| `auth/` | OAuth discovery, client registration, PKCE, token rotation/revocation and token hashes |
 | `pairing/` | Expiring one-time pairing codes, attempt limits and rate limiting |
-| `workspace/` | Canonical containment, sensitive-file/ignore rules, project detection, read/list/image/search/git |
-| `tunnel/` | Quick/Named cloudflared processes, resource provisioning, rename rollback and ownership-checked DNS cleanup |
+| `workspace/` | Owner-scoped registry, canonical containment, ignore rules, detection, reads, search and git |
+| `tunnel/` | Quick/Named cloudflared processes, provisioning, naming and rollback |
 | `process/` | Daemon spawn/reuse and local admin requests |
-| `lifecycle/` | Workspace operation locks, disconnect and ownership-checked destroy |
-| `config/` | External state, display names, desired/bound endpoint, UI preferences and explicit fork update |
+| `lifecycle/` | Workspace operation locks and connection lifecycle |
+| `config/` | External state, display names, desired/bound endpoint, UI preferences and explicit updates |
 | `cli/` | `c2c` commands driving the bridge and lifecycle |
 | `logger/` | Local diagnostics with credential redaction |
 
-## Requests and identity
-
-An MCP request passes bearer validation before the tool handler. Each tool
-checks its scope, independently resolves a registered alias/ID within the startup
-owner's `workspace-registries/<ownerWorkspaceId>.json`, then resolves paths within
-that canonical root and applies bounds/ignore rules before returning data.
-`list_workspaces` returns only that owner's aliases and IDs; there is no mutable
-current workspace or cross-owner registry fallback. `read_image` returns bounded
-validated image content; it never imports or writes media.
+## Request flow
 
 Authorization follows protected-resource discovery, OAuth server discovery,
-client registration, authorization + pairing, and PKCE code exchange. Tokens
-bind client and workspace identities. Refresh rotation and revocation are
-unchanged. New grants advertise workspace.read, workspace.search, git.read and
-offline_access; execution.read no longer represents a tool capability. Existing
-tokens carrying that historical scope still work for their remaining core scopes.
+client registration, authorization with pairing, and PKCE code exchange.
+An MCP request passes bearer validation before its tool handler checks the
+required scope. Streamable HTTP uses a fresh server and transport per POST.
 
-The root-derived `workspaceId` remains stable through display-name changes.
-A local external registration takes precedence over legacy `.c2c.json` `name`;
-otherwise the root basename is used. Legacy loop-limit fields are ignored.
-The listener prefers port 48765; runtime discovery distinguishes a matching
-healthy bridge, a stopped process and uncertain state before automatic repair.
+Workspace selection is independent on every call. The handler resolves a
+registered alias or ID within the startup owner's registry, then applies the
+selected workspace's path and content policies. See [multi-repo access](multi-repo.md)
+for selectors and schemas, and [security](security.md) for authorization boundaries.
+
+The canonical startup root determines the bridge's `workspaceId`. Its resource
+identity is separate from display names and registered read targets. The listener
+prefers port 48765 and falls back to a free port on collision. Runtime discovery
+distinguishes a matching healthy bridge, a stopped process and uncertain state
+before automatic repair.
 
 ## Public connection and binding
 
-Quick Tunnel addresses may change on restart. Named Tunnel UUID, chosen name,
-zone and hostname are persisted outside the repo. An explicit naming conflict
-never falls back to another name/address. In-place tunnel rename retains the
-UUID; hostname migration and rollback verify CNAME targets.
+Quick Tunnel addresses may change on restart. Named Tunnel UUID, name, zone and
+hostname are persisted outside the repo. Desired endpoint settings and the last
+verified ChatGPT binding are stored separately. Doctor keeps reconciliation
+pending until actual MCP verification and `connector bind` acknowledge the target.
+See [lifecycle](lifecycle.md) for naming, reconnect and disconnect operations.
 
-Current desired endpoint/name and last verified ChatGPT binding are distinct.
-The Skill checks exact plugin ID/name/URL, obtains a real `workspace_info` result,
-then acknowledges with `connector bind`. Doctor keeps reconciliation pending
-until that acknowledgement. It does not rely on chat history or saved sessions.
+## Development checks
 
-Disconnect revokes/stops while retaining resources. Destroy checks ownership,
-uses verified browser-removal receipts, cleans recorded DNS/tunnel, and only
-then removes workspace-local state. It retains failure receipts for retry.
-See [lifecycle](lifecycle.md) for remote transaction boundaries and recovery.
+```bash
+corepack pnpm test
+corepack pnpm build
+corepack pnpm typecheck
+git diff --check
+```
 
-## Compatibility
-
-The CLI remains `c2c`, the service identity remains `c2c-bridge`, and the existing
-OS state namespace remains `codex-with-chatgpt`. Existing connector names are
-not regenerated; new default suggestions use Desk C2C Hub. Obsolete external
-session/execution files are not loaded, exposed or migrated automatically.
-Destroy retains targeted cleanup of those old workspace-keyed files.
+Source and tests are organized by feature. `tests/integration/` covers workflows
+across features. `tests/helpers.ts` provides shared fixtures. Build replaces
+compiled output from `src/`.

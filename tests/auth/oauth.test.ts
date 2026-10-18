@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import path from "node:path";
-import { filterScopes } from "../src/auth/store.js";
-import { startBridge, type Bridge } from "../src/bridge/server.js";
-import { makeTmpDir, cleanup, write, isolateStateDir, pkceVerifierAndChallenge } from "./helpers.js";
+import { filterScopes } from "../../src/auth/store.js";
+import { startBridge, type Bridge } from "../../src/bridge/server.js";
+import { makeTmpDir, cleanup, write, isolateStateDir, pkceVerifierAndChallenge } from "../helpers.js";
 
 let root: string;
 let bridge: Bridge;

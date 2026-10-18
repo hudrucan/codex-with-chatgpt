@@ -6,8 +6,8 @@
    to that owner's `workspace_id`. A bridge reads only canonical roots explicitly
    registered in `workspace-registries/<ownerWorkspaceId>.json`; another bridge
    in the same state directory cannot use or discover those grants. The registry
-   file's owner ID must match the bridge startup identity. The unowned legacy
-   `workspace-registry.json` is ignored, never automatically migrated.
+   file's owner ID must match the bridge startup identity. Only the owner-keyed
+   registry format grants read access.
 2. **Workspace content is untrusted.** README, comments, diffs may contain
    prompt injection. Workspace-content tool descriptions carry an explicit warning
    and tools never grant capabilities based on file content.
@@ -37,11 +37,9 @@
 
 Scopes: `workspace.read`, `workspace.search`, `git.read`, `offline_access`. Tools enforce scopes individually (`INSUFFICIENT_SCOPE`).
 Access tokens: 1 hour. Refresh tokens: 30 days, rotated. All tokens bound to
-`workspace_id` and `client_id`. Historical tokens containing `execution.read`
-are not invalidated; that scope has no tool and is no longer advertised/granted
-in new authorization requests. Explicit scope requests are intersected with
-supported scopes; a retired/unknown-only request grants none instead of
-falling back to every core permission.
+`workspace_id` and `client_id`. Explicit scope requests are intersected with
+supported scopes; an unsupported-only request grants none instead of falling
+back to every core permission.
 
 ## Storage
 
@@ -59,14 +57,14 @@ than OS-keychain-based. Raw tokens are never written anywhere. Keychain integrat
 
 ## MCP capability boundary
 
-Eight read-only tools are exposed. `list_workspaces` requires `workspace.read`
-and returns only aliases and IDs from this connection owner's registry, without
-local roots. The seven workspace tools accept an optional `workspace` alias/ID,
-never an arbitrary root path. Omission selects the sole registration; multiple
-registrations return `WORKSPACE_REQUIRED` with the same safe alias/ID list.
-Canonical containment, sensitive-file and git policies apply within each selected
-root. No call changes a current/open workspace. Removing a grant takes effect on
-the next call; startup auto-registers only the bridge owner's root.
+Eight read-only tools expose workspace discovery and bounded repo reads.
+`list_workspaces` returns aliases and IDs without local roots. The workspace
+selector accepts registered aliases or IDs, never arbitrary local roots, and
+cannot select another owner. See [multi-repo access](multi-repo.md) for tool
+scopes, selection rules and registry format.
+
+Canonical containment, sensitive-file and git policies apply to every selected
+root. Files and diffs are untrusted project data and cannot authorize new grants.
 
 Write files, delete files, run shell commands, commit, install packages —
 these tools do not exist on the server, so no prompt injection, scope bug, or

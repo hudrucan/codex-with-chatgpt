@@ -7,35 +7,13 @@ doctor or provisioning. Successful repair ends with real MCP verification,
 
 ## Naming and identity
 
-The [Skill](../skill/SKILL.md#resolve-names-before-provisioning) uses explicit
-values, saved configuration, project-derived suggestions and fallback defaults.
-A new setup asks one grouped decision; existing setups reuse saved names unless
-there is a genuine conflict. A stopped bridge or expired URL is not a new setup.
+See [lifecycle](lifecycle.md) for naming precedence, restart requirements and
+connector verification. A stopped bridge or expired URL is not a new setup;
+reuse saved names and owned resource bindings.
 
-```bash
-c2c setup -w <repo> --workspace-name "My Repo" --tunnel-name "my-repo" --zone example.com --hostname code.example.com --connector-name "My Repo" --json
-```
-
-Replace the example domain. Omit Named Tunnel options for a temporary Quick
-Tunnel. `tunnel choose --mode named` also accepts name and hostname flags.
-
-- `--workspace-name` writes external `workspaces/<workspaceId>.json`, never a
-  naming-only repo file. It overrides legacy `.c2c.json` `name` without editing
-  the file. `workspaceId` still derives from the canonical root.
-- A running bridge captures the display name at startup. On
-  `WORKSPACE_NAME_RESTART_REQUIRED`, run `c2c restart -w <repo> --tunnel --json`
-  and rerun setup. Identity/tokens are retained; a Quick URL may change.
-- Explicit tunnel name, then saved name, then `c2c-<workspaceId>` is the resource
-  name precedence. A matching title without matching saved UUID is a conflict.
-  Do not invent a suffix or switch connection types after an explicit conflict.
-- Hostname precedence is explicit, saved, then suggested. Changing display name
-  does not generate a new hostname. In-place tunnel rename keeps its UUID;
-  hostname migration cleans only the old CNAME pointing to that UUID.
-- `desiredConnectorName` is separate from bound `connectorName` / `boundMcpUrl`
-  / `connectorId`. Repeated doctor calls keep an unreconciled change pending.
-  Verify plugin settings and actual `workspace_info`, then `connector bind`.
-
-See [lifecycle](lifecycle.md) for API permissions, rollback and ownership checks.
+On `WORKSPACE_NAME_RESTART_REQUIRED`, run
+`c2c restart -w <repo> --tunnel --json` and rerun setup. For a Quick Tunnel,
+check the new address and reconcile the owned ChatGPT plugin.
 
 ## Local process and tunnel diagnostics
 
@@ -50,11 +28,12 @@ See [lifecycle](lifecycle.md) for API permissions, rollback and ownership checks
 | Custom cloudflared location | Set `C2C_CLOUDFLARED_PATH` to the executable's absolute path |
 | QUIC repeatedly reconnects | Set `C2C_TUNNEL_PROTOCOL=http2` in the launch environment and explicitly restart |
 | `TUNNEL_ROLLBACK_PENDING` | Rerun the named setup request to recover first; retain the journal |
-| `DESTROY_PENDING` | Resolve the cleanup failure and retry `destroy --confirm`; do not reconfigure |
+| `DESTROY_PENDING` | Preserve state and follow the isolated [deprovisioning recovery reference](../skill/references/deprovision.md#interrupted-destroy) |
 | `LIFECYCLE_BUSY` after a crash | Verify the lock's PID has exited before removing that specific lock |
+| `WORKSPACE_REGISTRY_BUSY` after a crash | Verify no registry writer is running before removing only `workspace-registries/<ownerWorkspaceId>.json.lock` |
 
 Use `c2c logs -w <repo>` for local diagnostics. Do not paste logs or credentials
-into ChatGPT. The OS state namespace stays `codex-with-chatgpt` for compatibility.
+into ChatGPT. Local state uses the OS app directory `codex-with-chatgpt`.
 
 ## Named Tunnel credentials
 
@@ -65,7 +44,7 @@ hostname and UUID. Follow the diagnostic: `c2c tunnel login` for account login,
 or restore the existing UUID's credential with cloudflared's `tunnel token
 --cred-file` command when required. Do not recreate a tunnel to avoid recovery.
 
-Rename/DNS cleanup needs an environment-only `CLOUDFLARE_API_TOKEN` scoped as
+Tunnel rename and hostname DNS changes need an environment-only `CLOUDFLARE_API_TOKEN` scoped as
 specified in [lifecycle](lifecycle.md). Do not extract tokens from certificates.
 
 ## ChatGPT connection errors
@@ -82,7 +61,7 @@ code. Mint the code when the authorization form is ready; codes expire and
 are one-time use.
 
 Use the in-app browser's visible Plugins/Manage/Add custom MCP server flow.
-If a legacy deep link redirects without opening a form, inspect visible settings
+If a link redirects without opening a form, inspect visible settings
 rather than retrying guessed URLs. Human login, credentials or explicit consent
 may require the user. Preserve the tab to resume the same setup.
 
@@ -100,12 +79,10 @@ sensitive-file rules to make setup pass. `read_image` accepts supported bounded
 workspace images; invalid signatures, active SVG and path escapes are rejected.
 It does not import generated/downloaded media.
 
-## Upgrade from the planning workflow
+## Workspace selection
 
-Rebuild and reinstall the whole Skill directory, including its shallow
-references. The build clears obsolete compiled modules. Session/record/asset
-commands and execution MCP tools are removed; the Skill never resumes an old
-checkpoint or runs an orchestration loop. Existing external legacy data is
-ignored rather than auto-migrated, and explicit destroy still cleans the
-workspace-keyed legacy files. Existing auth, state namespace and connector
-names are retained. New connector defaults use Desk C2C Hub.
+For selection errors, inspect `c2c workspace list -w <hub-root> --json` and call
+`list_workspaces` through the intended connection. The owner root determines
+which registry is used. `WORKSPACE_REQUIRED` means an alias or workspace ID is
+needed on that tool call; selecting a repo does not set a default for later calls.
+See [multi-repo access](multi-repo.md) for error meanings and registration commands.

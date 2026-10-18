@@ -4,8 +4,8 @@ const { spawnSync } = vi.hoisted(() => ({ spawnSync: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...await importOriginal<typeof import("node:child_process")>(), spawnSync,
 }));
-import { pullFork } from "../src/config/update.js";
-import { ProcessCloudflaredAccount } from "../src/tunnel/named-provision.js";
+import { pullFork } from "../../src/config/update.js";
+import { ProcessCloudflaredAccount } from "../../src/tunnel/named-provision.js";
 
 describe("Cloudflare naming conflicts", () => {
   beforeEach(() => { spawnSync.mockReset(); });

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Workspace } from "../src/workspace/manager.js";
-import { readWorkspaceImage } from "../src/workspace/media.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "./helpers.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { readWorkspaceImage } from "../../src/workspace/media.js";
+import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 const previousState = process.env.C2C_STATE_DIR;
 let root: string;

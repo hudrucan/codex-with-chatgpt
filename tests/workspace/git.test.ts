@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { gitDiff, gitInfo, gitStatus } from "../src/workspace/git.js";
-import { makeTmpDir, cleanup, write, makeGitRepo, git } from "./helpers.js";
+import { gitDiff, gitInfo, gitStatus } from "../../src/workspace/git.js";
+import { makeTmpDir, cleanup, write, makeGitRepo, git } from "../helpers.js";
 
 let repo: string;
 let plain: string;

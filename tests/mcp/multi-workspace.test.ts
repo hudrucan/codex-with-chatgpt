@@ -3,9 +3,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { startBridge, type Bridge } from "../src/bridge/server.js";
-import { WorkspaceRegistry, type WorkspaceRegistration } from "../src/workspace/registry.js";
-import { cleanup, git, isolateStateDir, makeGitRepo, makeTmpDir, write } from "./helpers.js";
+import { startBridge, type Bridge } from "../../src/bridge/server.js";
+import { WorkspaceRegistry, type WorkspaceRegistration } from "../../src/workspace/registry.js";
+import { cleanup, git, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
 
 let state: string;
 let root: string;

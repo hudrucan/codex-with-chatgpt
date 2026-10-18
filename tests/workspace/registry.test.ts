@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Workspace } from "../src/workspace/manager.js";
-import { WorkspaceRegistry } from "../src/workspace/registry.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "./helpers.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { WorkspaceRegistry } from "../../src/workspace/registry.js";
+import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 let state: string;
 let root: string;

@@ -3,12 +3,12 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { startBridge, type Bridge } from "../src/bridge/server.js";
-import { createMcpServer } from "../src/mcp/server.js";
-import { nullLogger } from "../src/logger/index.js";
-import { Workspace } from "../src/workspace/manager.js";
-import { WorkspaceRegistry } from "../src/workspace/registry.js";
-import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "./helpers.js";
+import { startBridge, type Bridge } from "../../src/bridge/server.js";
+import { createMcpServer } from "../../src/mcp/server.js";
+import { nullLogger } from "../../src/logger/index.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { WorkspaceRegistry } from "../../src/workspace/registry.js";
+import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
 
 async function connect(bridge: Bridge): Promise<Client> {
   const token = bridge.authStore.issueTokens({

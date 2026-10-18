@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { startBridge } from "../src/bridge/server.js";
-import { probeBridge } from "../src/bridge/runtime.js";
-import { makeTmpDir, cleanup, write, isolateStateDir } from "./helpers.js";
+import { startBridge } from "../../src/bridge/server.js";
+import { probeBridge } from "../../src/bridge/runtime.js";
+import { makeTmpDir, cleanup, write, isolateStateDir } from "../helpers.js";
 
 describe("port collision handling", () => {
   it("falls back to a free port when the preferred one is taken", async () => {

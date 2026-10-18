@@ -1,133 +1,98 @@
-# Naming and resource lifecycle
+# Setup and connection lifecycle
 
-The canonical workspace root determines `workspaceId`. Display names never key
-OAuth tokens, runtime state, or Cloudflare tunnel UUIDs. Each bridge and connector
-retains its startup workspace as resource owner. Its owner-scoped registry can
-grant read access to additional repos without transferring lifecycle ownership;
-MCP remains read-only.
+The canonical startup workspace determines the resource owner's `workspaceId`.
+Display names and additional read targets do not transfer ownership of OAuth
+tokens, runtime state, connectors or tunnel UUIDs.
 
-## Local display names
+## Setup and naming
 
-`setup --workspace-name <name>` writes only external C2C state:
-`workspaces/<workspaceId>.json` contains `workspaceId`, canonical `workspaceRoot`
-and `displayName`. Resolution is external local override, then legacy
-`.c2c.json` `name`, then root basename. Other `.c2c.json` settings remain readable.
-Setup does not create or edit repository files for naming. A display-name change
-requires an explicit bridge restart; auth and root identity survive.
+Ask Codex to set up Desk C2C Hub using the [Skill](../skill/SKILL.md). It resolves
+names from explicit user values, saved settings, project-derived suggestions
+and defaults. New setups ask one grouped decision for the workspace display
+name, tunnel name, hostname and connector name. Saved setups reuse their values
+unless a conflict needs resolution.
 
-## Tunnel and hostname rename
+For a fixed hostname, provide a domain configured in Cloudflare:
 
-Tunnel rename updates the saved Cloudflare UUID in place, retaining credentials
-and CNAME target. It does not create a replacement tunnel. Conflicting names,
-missing IDs or externally changed bindings fail without choosing another name.
+```bash
+node bin/c2c.js setup -w /path/to/repo --workspace-name "My Repo" --tunnel-name "my-repo" --zone example.com --hostname code.example.com --connector-name "My Repo" --json
+```
 
-Hostname rename verifies the old CNAME targets the saved UUID and the new name
-has no existing DNS record. It routes the new name, then deletes only the old
-owned CNAME. Neither unrelated A/AAAA records nor a CNAME to another UUID may be
-overwritten/deleted. Cleanup rereads the exact record ID immediately before delete.
+Replace the example values. Omit Named Tunnel options for a temporary Quick
+Tunnel. `--no-tunnel` is local development only and does not establish a public
+ChatGPT connection. The Skill completes authorization and verifies actual MCP
+results before reporting `MCP READY`.
 
-An external tunnel-state `pending` journal records intent before mutations.
-Failure rolls back the new DNS/name and restores the old DNS if necessary. A
-failed rollback retains its journal and returns `TUNNEL_ROLLBACK_PENDING`.
-Rerun the named setup request to retry rollback before applying the request.
-Doctor cannot silently switch to a different tunnel while this is pending.
-Quick selection retains saved Named Tunnel ownership fields for later destroy.
+`setup --workspace-name` writes external `workspaces/<workspaceId>.json` with
+`workspaceId`, canonical `workspaceRoot` and `displayName`. Name precedence is
+external display choice, `.c2c.json` `name`, then root basename. Setup does not
+write repository configuration. A running bridge captures its display name;
+`WORKSPACE_NAME_RESTART_REQUIRED` requires an explicit restart and setup rerun.
 
-Initial setup still uses `cloudflared` and the existing account certificate.
-Rename/ownership-checked DNS cleanup additionally requires an environment-only
-`CLOUDFLARE_API_TOKEN`, scoped to the relevant zone/account:
+## Tunnel and hostname changes
 
-- Zone Read and DNS Edit for DNS lookup/removal.
-- Cloudflare Tunnel Write (or the equivalent Cloudflare One connector write
-  permission) for in-place tunnel rename.
+Tunnel rename updates the saved UUID in place, retaining credentials and CNAME
+target. Conflicting names, missing IDs or changed bindings fail without choosing
+another name. Hostname changes verify the old CNAME's UUID and require the new
+hostname to be free. Cleanup rechecks the exact DNS record before changing it.
 
-No token is persisted or printed; the account certificate is not parsed to
-extract API credentials. No new package dependency is required.
-Cloudflare references: [rename tunnel](https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/methods/edit/)
-and [delete DNS record](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/delete/).
+A pending operation journal supports rollback. `TUNNEL_ROLLBACK_PENDING` requires
+recovery by rerunning the named setup request before other changes; doctor does
+not switch connection types to bypass it.
 
-## Connector transaction
+Account login uses cloudflared and its account certificate. Tunnel rename needs
+an environment-only `CLOUDFLARE_API_TOKEN` with Zone Read and Cloudflare Tunnel
+Write permissions for the relevant zone/account. Hostname DNS changes require
+DNS Edit. Tokens are not extracted from certificates, persisted or printed.
 
-Endpoint state distinguishes:
+## Connector verification
+
+Endpoint state separates desired settings from the verified ChatGPT binding:
 
 | Field | Meaning |
 | --- | --- |
-| `desiredConnectorName` | Setup-selected name, reused on rerun/restart/doctor |
-| `mcpUrl`, `publicUrl` | Current desired service address |
-| `connectorName`, `boundMcpUrl`, `connectorId` | Last verified ChatGPT plugin binding |
+| `desiredConnectorName` | Selected connector name |
+| `mcpUrl`, `publicUrl` | Desired connection addresses |
+| `connectorName`, `boundMcpUrl`, `connectorId` | Verified plugin binding |
 | `bindingVersion: 1` | Explicit desired/bound state format |
 
-Legacy endpoint records are read as their previous binding without renaming.
-Setup/doctor never advance the bound fields on their own. A failed or interrupted
-browser reconcile stays pending across repeated doctor calls. Inspect the saved
-plugin ID, name and Server URL before modifying that plugin. Verify settings,
-authorize if required, call `workspace_info` through the desired plugin and
-check the canonical workspace ID. Only then acknowledge:
+Inspect the exact plugin ID, name and Server URL. Verify `workspace_info` through
+the plugin, selecting the startup workspace ID when its registry has multiple
+entries, then acknowledge the observed binding:
 
 ```bash
-c2c connector bind -w <workspace> --name "<desired-name>" --mcp-url "<desired-url>" --connector-id "<observed-plugin-id>" --verified-workspace "<observed-workspace-id>" --json
+c2c connector bind -w <repo> --name "<desired-name>" --mcp-url "<desired-url>" --connector-id "<observed-plugin-id>" --verified-workspace "<observed-workspace-id>" --json
 ```
 
-The acknowledgement checks the current desired name/URL/workspace. It is a
-trusted local agent receipt of observed ChatGPT results, not independent browser
-attestation. Never fabricate it. After bind and a healthy doctor check, report
-`MCP READY` and stop; no Project/session metadata is managed.
+The acknowledgement rejects stale name/URL/workspace values. It is a trusted
+local receipt of observed MCP results. Setup and doctor do not advance binding
+fields on their own; a local health check does not prove a ChatGPT binding.
 
-## Disconnect and destroy
+## Reconnect and disconnect
 
-`c2c unpair` retains its original token-revocation-only behavior.
-`c2c disconnect` revokes access, confirms bridge shutdown, and retains connector,
-DNS, tunnel, naming state and the owner's workspace registry. Doctor respects
-`disconnected`; explicit
-setup/start/restart reconnects. Stopping/revoking never deprovisions resources.
+| Command | Behavior |
+| --- | --- |
+| `start -w <repo> --tunnel` | Start or reuse the bridge and establish public access |
+| `status -w <repo> --json` | Inspect connection state |
+| `doctor -w <repo> --json` | Diagnose and repair; add `--no-fix` for diagnosis only |
+| `restart -w <repo> --tunnel` | Explicitly restart and reconnect |
+| `unpair -w <repo>` | Revoke tokens, retaining the running bridge |
+| `stop -w <repo>` | Stop the bridge without revoking tokens or removing resources |
+| `disconnect -w <repo> --json` | Revoke access, confirm shutdown and retain resources, configuration and registrations |
 
-`c2c destroy --json` produces a read-only plan with ownership checks. The Skill
-then verifies the exact bound plugin ID/name/Server URL in ChatGPT and deletes
-only that plugin (or verifies that exact ID is already absent). Legacy bindings
-without a plugin ID require verified `connector bind` before deletion. Inspect
-any pending desired name/URL too, so partial browser setup is not forgotten.
-Execute only after those UI actions:
+Run these commands with `c2c`. Doctor respects an intentional disconnect;
+explicit setup/start/restart reconnects. Matching owned resources are reused.
+Uncertain runtime state or ownership conflicts must be resolved before repair.
+For diagnostics and lock recovery, see [troubleshooting](troubleshooting.md).
 
-```bash
-c2c destroy -w <workspace> --confirm --connector-removed <bound-plugin-id> --json
-```
+## Explicit updates
 
-Add `--desired-connector-absent` only when an unreconciled desired plugin has
-been verified absent or its owned partial plugin has been removed. Omit the
-bound-plugin flag when the plan has no bound connector. These local flags are
-agent receipts, not direct ChatGPT API calls; runtime cannot independently
-prove a browser deletion. The Skill must enforce those ownership checks.
+`c2c update --json` verifies the exact `hudrucan/desk-c2c-hub` origin and a clean
+branch checkout, then pulls with `--ff-only`. It does not stash or reset changes.
+Build and reinstall the complete Skill directory after an update. Explicitly
+restart and verify active connections; disconnected workspaces stay stopped.
+Updates run only when requested.
 
-Destroy retains a receipt before revoke/stop, then rechecks/removes owned DNS,
-deletes the exact UUID/name without forcing active connections, and finally
-removes only that workspace's auth/runtime/endpoint/tunnel/registration and
-daemon log. For upgrades, it also cleans obsolete workspace-keyed session and
-execution files; no active feature reads or writes them. The final local cleanup
-removes only `workspace-registries/<ownerWorkspaceId>.json`, after all other local
-state and receipt cleanup succeeds. A failure before that step retains the
-registry; a registry-removal failure restores the receipt for recovery. Partial
-or failed destroy retains the registry; retry `destroy --confirm`. The unowned
-`workspace-registry.json` and every other owner's registry remain untouched.
-Other setup commands are blocked during destroy.
-Shared credentials, global prefs/logs, other workspaces, repository configuration
-and ChatGPT Project/chat history are not removed.
-
-## Failure boundaries
-
-- Lifecycle CLI commands serialize per workspace. A crash leaves a lock; verify
-  the recorded PID is gone before removing that specific lock file. No automatic
-  age-based lock takeover or resource adoption.
-- Cloudflare does not provide a transaction spanning tunnel/DNS/local state.
-  A create response lost before receiving its UUID has an uncertain outcome:
-  intent retains the requested name, but automatic adoption/deletion is unsafe.
-  Verify the created UUID/account ownership manually before restoring the journal.
-  Missing API credentials can likewise leave a tracked cleanup pending.
-- External dashboard edits can race checks. DNS/tunnel IDs and targets are
-  rechecked, but there is no cross-service conditional-delete guarantee. Stop on
-  conflicts; never use a force-delete or force DNS overwrite to bypass them.
-- Connector deletion/recreation can succeed before the local acknowledgement.
-  Reconcile by exact observed plugin ID/name/URL, then verify MCP and bind;
-  never treat a green local health check as proof of a ChatGPT binding.
-- Destroy cannot discover undocumented historical resources absent from saved
-  state, or other DNS aliases manually attached to a tunnel. Inspect those
-  manually; the command only removes its recorded hostname/UUID.
+Experimental resource removal is isolated in the
+[Skill deprovisioning reference](../skill/references/deprovision.md); setup,
+reconnect and repair do not invoke that workflow.

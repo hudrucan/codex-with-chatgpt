@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Workspace } from "../src/workspace/manager.js";
-import { WorkspaceRegistry } from "../src/workspace/registry.js";
-import { AuthStore } from "../src/auth/store.js";
-import { acquireWorkspaceLock, destroyWorkspace, disconnectWorkspace, lifecycleFile } from "../src/lifecycle/workspace.js";
-import { boundConnector, confirmConnectorBinding, connectorReconciliation, persistWorkspaceEndpoint, readLastEndpoint, writeLastEndpoint } from "../src/config/endpoint.js";
-import { readTunnelState, writeTunnelState } from "../src/tunnel/state.js";
-import { CloudflareApi } from "../src/tunnel/cloudflare-api.js";
-import { verifyForkOrigin } from "../src/config/update.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "./helpers.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { WorkspaceRegistry } from "../../src/workspace/registry.js";
+import { AuthStore } from "../../src/auth/store.js";
+import { acquireWorkspaceLock, destroyWorkspace, disconnectWorkspace, lifecycleFile } from "../../src/lifecycle/workspace.js";
+import { boundConnector, confirmConnectorBinding, connectorReconciliation, persistWorkspaceEndpoint, readLastEndpoint, writeLastEndpoint } from "../../src/config/endpoint.js";
+import { readTunnelState, writeTunnelState } from "../../src/tunnel/state.js";
+import { CloudflareApi } from "../../src/tunnel/cloudflare-api.js";
+import { verifyForkOrigin } from "../../src/config/update.js";
+import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 const originalStateDir = process.env.C2C_STATE_DIR;
 const originalApiToken = process.env.CLOUDFLARE_API_TOKEN;

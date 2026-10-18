@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { startBridge } from "../src/bridge/server.js";
+import { startBridge } from "../../src/bridge/server.js";
 import {
   findBridgeObservation,
   findLiveBridge,
   writeRuntimeState,
   type RuntimeState,
-} from "../src/bridge/runtime.js";
-import { ensureBridge } from "../src/process/daemon.js";
-import { SERVICE_NAME, VERSION } from "../src/version.js";
-import { Workspace } from "../src/workspace/manager.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "./helpers.js";
+} from "../../src/bridge/runtime.js";
+import { ensureBridge } from "../../src/process/daemon.js";
+import { SERVICE_NAME, VERSION } from "../../src/version.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 function stubRuntime(workspaceId: string, workspaceRoot: string, pid: number, port: number): RuntimeState {
   return {

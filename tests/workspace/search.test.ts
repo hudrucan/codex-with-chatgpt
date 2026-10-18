@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
-import { Workspace } from "../src/workspace/manager.js";
-import { searchWorkspace, resetRipgrepCache, findRipgrep } from "../src/workspace/search.js";
-import { makeTmpDir, cleanup, write } from "./helpers.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { searchWorkspace, resetRipgrepCache, findRipgrep } from "../../src/workspace/search.js";
+import { makeTmpDir, cleanup, write } from "../helpers.js";
 
 let root: string;
 let ws: Workspace;

@@ -7,8 +7,8 @@ import {
   pathsEquivalent,
   toTomlPath,
   upsertWritableRoot,
-} from "../src/config/sandbox-allow.js";
-import { makeTmpDir, cleanup } from "./helpers.js";
+} from "../../src/config/sandbox-allow.js";
+import { makeTmpDir, cleanup } from "../helpers.js";
 
 describe("sandbox allowlist", () => {
   it("treats Windows slash variants as the same path", () => {

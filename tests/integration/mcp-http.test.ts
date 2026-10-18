@@ -3,9 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { AuthStore } from "../src/auth/store.js";
-import { startBridge, type Bridge } from "../src/bridge/server.js";
-import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir } from "./helpers.js";
+import { AuthStore } from "../../src/auth/store.js";
+import { startBridge, type Bridge } from "../../src/bridge/server.js";
+import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir } from "../helpers.js";
 
 let root: string;
 let bridge: Bridge;

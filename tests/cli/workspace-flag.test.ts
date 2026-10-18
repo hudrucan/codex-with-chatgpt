@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { Workspace } from "../src/workspace/manager.js";
-import { writeTunnelState } from "../src/tunnel/state.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { writeTunnelState } from "../../src/tunnel/state.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "./helpers.js";
+import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
 
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const cliEntry = path.join(projectRoot, "src/cli/index.ts");
 
 function runCli(args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
