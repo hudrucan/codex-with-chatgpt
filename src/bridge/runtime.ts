@@ -1,109 +1,119 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ensureDir, getStateDir, readJsonIfExists, writeSecureJson } from "../config/paths.js";
+import { z } from "zod";
+import { getStateDir, writeSecureJson } from "../config/paths.js";
+import { hubIdSchema, readConfiguredHub } from "../hub/store.js";
+import { Workspace } from "../workspace/manager.js";
 import { SERVICE_NAME, VERSION } from "../version.js";
 
-/**
- * Runtime state file: how the CLI/Skill finds a running bridge for a
- * workspace. Contains the admin token, so it is 0600 and lives in the user
- * state dir, never in the project.
- */
-export interface RuntimeState {
-  service: string;
-  version: string;
-  workspaceId: string;
-  workspaceRoot: string;
-  pid: number;
-  port: number;
-  adminToken: string;
-  publicUrl: string | null;
-  startedAt: string;
+const runtimeFields = {
+  service: z.literal(SERVICE_NAME), version: z.string(),
+  workspaceId: z.string().regex(/^[a-f0-9]{12}$/),
+  workspaceRoot: z.string().refine((root) => path.isAbsolute(root)),
+  pid: z.number().int().positive(), port: z.number().int().min(1).max(65535),
+  adminToken: z.string().min(1), publicUrl: z.string().nullable(), startedAt: z.string().datetime(),
+};
+const legacyRuntimeSchema = z.object(runtimeFields).strict();
+const hubRuntimeSchema = z.object({ ...runtimeFields, stateVersion: z.literal(1), hubId: hubIdSchema }).strict();
+export type HubRuntimeState = z.infer<typeof hubRuntimeSchema>;
+/** Startup workspace fields are compatibility metadata, not the runtime identity. */
+export type RuntimeState = z.infer<typeof legacyRuntimeSchema> & { hubId?: string; stateVersion?: 1 };
+
+export function runtimeFile(hubId: string): string {
+  if (!hubIdSchema.safeParse(hubId).success) throw new Error("RUNTIME_OWNERSHIP_CONFLICT: Runtime owner must be a Hub ID.");
+  return path.join(getStateDir(), "runtime", `${hubId}.json`);
 }
 
-export function runtimeFile(workspaceId: string): string {
-  return path.join(ensureDir(path.join(getStateDir(), "runtime")), `${workspaceId}.json`);
+export function writeRuntimeState(state: HubRuntimeState): void {
+  const parsed = hubRuntimeSchema.parse(state);
+  writeSecureJson(runtimeFile(parsed.hubId), parsed);
 }
 
-export function writeRuntimeState(state: RuntimeState): void {
-  writeSecureJson(runtimeFile(state.workspaceId), state);
-}
-
-export function readRuntimeState(workspaceId: string): RuntimeState | null {
-  return readJsonIfExists<RuntimeState>(runtimeFile(workspaceId));
-}
-
-export function clearRuntimeState(workspaceId: string): void {
-  try {
-    fs.rmSync(runtimeFile(workspaceId), { force: true });
-  } catch {
-    // ignore
+function readRuntime(file: string, hubId?: string): RuntimeState | null {
+  let raw: string;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error("RUNTIME_STATE_INVALID: Cannot read runtime state.");
   }
+  try {
+    const value = hubId ? hubRuntimeSchema.parse(JSON.parse(raw)) : legacyRuntimeSchema.parse(JSON.parse(raw));
+    if (hubId && (!('hubId' in value) || value.hubId !== hubId)) throw new Error("Wrong owner");
+    return value;
+  } catch { throw new Error("RUNTIME_STATE_INVALID: Runtime ownership or format is invalid."); }
+}
+
+export function readRuntimeState(hubId: string): HubRuntimeState | null {
+  return readRuntime(runtimeFile(hubId), hubId) as HubRuntimeState | null;
+}
+
+export function clearRuntimeState(hubId: string): void {
+  fs.rmSync(runtimeFile(hubId), { force: true });
 }
 
 export interface HealthPayload {
   service: string;
   version: string;
-  workspaceId: string;
+  hubId?: string;
+  workspaceId?: string;
   status: string;
 }
 
-/** Probe a port and check whether a healthy c2c bridge for the workspace answers. */
-export async function probeBridge(
-  port: number,
-  timeoutMs = 2000
-): Promise<HealthPayload | null> {
+export async function probeBridge(port: number, timeoutMs = 2000): Promise<HealthPayload | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: controller.signal });
-    clearTimeout(timer);
     if (!response.ok) return null;
-    const body = (await response.json()) as HealthPayload;
-    if (body.service !== SERVICE_NAME) return null;
-    return body;
-  } catch {
-    return null;
-  }
+    const body = await response.json() as HealthPayload;
+    return body.service === SERVICE_NAME && body.status === "ok" ? body : null;
+  } catch { return null; }
+  finally { clearTimeout(timer); }
 }
 
 export type BridgeObservation =
   | { state: "healthy"; runtime: RuntimeState }
   | { state: "stopped"; runtime: RuntimeState | null; reason: "runtime_missing" | "pid_missing" }
-  | { state: "unknown"; runtime: RuntimeState | null; reason: "probe_failed" | "pid_unknown" | "workspace_mismatch" };
+  | { state: "unknown"; runtime: RuntimeState | null; reason: "probe_failed" | "pid_unknown" | "workspace_mismatch" | "runtime_invalid" };
 
 function observePid(pid: number): "present" | "missing" | "unknown" {
-  if (!Number.isInteger(pid) || pid <= 0) return "unknown";
-  try {
-    process.kill(pid, 0);
-    return "present";
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ESRCH" ? "missing" : "unknown";
-  }
+  try { process.kill(pid, 0); return "present"; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? "missing" : "unknown"; }
 }
 
-/**
- * Distinguish a dead bridge from a probe that simply failed.
- * Read-only: never starts, stops, or clears runtime.
- */
-export async function findBridgeObservation(workspaceId: string): Promise<BridgeObservation> {
-  const runtime = readRuntimeState(workspaceId);
+async function observe(file: string, hubId: string, legacyOwner?: string): Promise<BridgeObservation> {
+  let runtime: RuntimeState | null;
+  try { runtime = readRuntime(file, legacyOwner ? undefined : hubId); }
+  catch { return { state: "unknown", runtime: null, reason: "runtime_invalid" }; }
   if (!runtime) return { state: "stopped", runtime: null, reason: "runtime_missing" };
-
-  const health = await probeBridge(runtime.port);
-  if (health && health.workspaceId === workspaceId) {
-    return { state: "healthy", runtime };
-  }
-  if (health) {
-    return { state: "unknown", runtime, reason: "workspace_mismatch" };
-  }
-
   const pid = observePid(runtime.pid);
   if (pid === "missing") return { state: "stopped", runtime, reason: "pid_missing" };
+  if (legacyOwner) {
+    try {
+      const workspace = new Workspace(runtime.workspaceRoot);
+      if (runtime.workspaceId !== legacyOwner || workspace.id !== legacyOwner || workspace.root !== runtime.workspaceRoot) throw new Error("Wrong legacy owner");
+    } catch { return { state: "unknown", runtime, reason: "workspace_mismatch" }; }
+  }
+  const health = await probeBridge(runtime.port);
+  const matches = health && (legacyOwner
+    ? health.workspaceId === legacyOwner && (health.hubId === undefined || health.hubId === hubId)
+    : health.hubId === hubId);
+  if (matches) return { state: "healthy", runtime };
+  if (health) return { state: "unknown", runtime, reason: "workspace_mismatch" };
   return { state: "unknown", runtime, reason: pid === "unknown" ? "pid_unknown" : "probe_failed" };
 }
 
-export async function findLiveBridge(workspaceId: string): Promise<RuntimeState | null> {
-  const observation = await findBridgeObservation(workspaceId);
+/** Read-only discovery. Live legacy runtime stays in its own file until its process exits. */
+export async function findBridgeObservation(hubId: string): Promise<BridgeObservation> {
+  const hub = readConfiguredHub(hubId);
+  const current = await observe(runtimeFile(hubId), hubId);
+  if (current.state !== "stopped" || !hub.legacyOwnerWorkspaceId) return current;
+  const legacy = await observe(path.join(getStateDir(), "runtime", `${hub.legacyOwnerWorkspaceId}.json`), hubId, hub.legacyOwnerWorkspaceId);
+  return legacy.state !== "stopped" ? legacy : current.runtime ? current : legacy;
+}
+
+export async function findLiveBridge(hubId: string): Promise<RuntimeState | null> {
+  const observation = await findBridgeObservation(hubId);
   return observation.state === "healthy" ? observation.runtime : null;
 }
 

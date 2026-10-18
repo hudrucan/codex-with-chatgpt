@@ -5,11 +5,14 @@ import { startBridge } from "../../src/bridge/server.js";
 import {
   findBridgeObservation,
   findLiveBridge,
-  writeRuntimeState,
+  readRuntimeState,
+  runtimeFile,
   type RuntimeState,
 } from "../../src/bridge/runtime.js";
 import { ensureBridge } from "../../src/process/daemon.js";
 import { SERVICE_NAME, VERSION } from "../../src/version.js";
+import fs from "node:fs";
+import { resolveHub } from "../../src/hub/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
@@ -42,10 +45,10 @@ describe("findBridgeObservation", () => {
     dirs.push(root);
     write(root, "a.txt", "a");
     const workspace = new Workspace(root);
-    const observation = await findBridgeObservation(workspace.id);
+    const observation = await findBridgeObservation(resolveHub(workspace).hubId);
     expect(observation.state).toBe("stopped");
     if (observation.state === "stopped") expect(observation.reason).toBe("runtime_missing");
-    expect(await findLiveBridge(workspace.id)).toBeNull();
+    expect(await findLiveBridge(resolveHub(workspace).hubId)).toBeNull();
   });
 
   it("treats a dead pid plus a failed probe as stopped", async () => {
@@ -54,11 +57,11 @@ describe("findBridgeObservation", () => {
     dirs.push(root);
     write(root, "a.txt", "a");
     const workspace = new Workspace(root);
-    writeRuntimeState(stubRuntime(workspace.id, workspace.root, 999_999_999, 1));
-    const observation = await findBridgeObservation(workspace.id);
+    write(process.env.C2C_STATE_DIR!, `runtime/${workspace.id}.json`, JSON.stringify(stubRuntime(workspace.id, workspace.root, 999_999_999, 1)));
+    const observation = await findBridgeObservation(resolveHub(workspace).hubId);
     expect(observation.state).toBe("stopped");
     if (observation.state === "stopped") expect(observation.reason).toBe("pid_missing");
-    expect(await findLiveBridge(workspace.id)).toBeNull();
+    expect(await findLiveBridge(resolveHub(workspace).hubId)).toBeNull();
   });
 
   it("does not treat a live pid plus a failed probe as stopped", async () => {
@@ -74,11 +77,11 @@ describe("findBridgeObservation", () => {
     child.unref();
     try {
       if (!child.pid) throw new Error("failed to spawn helper");
-      writeRuntimeState(stubRuntime(workspace.id, workspace.root, child.pid, 1));
-      const observation = await findBridgeObservation(workspace.id);
+      write(process.env.C2C_STATE_DIR!, `runtime/${workspace.id}.json`, JSON.stringify(stubRuntime(workspace.id, workspace.root, child.pid, 1)));
+      const observation = await findBridgeObservation(resolveHub(workspace).hubId);
       expect(observation.state).toBe("unknown");
       if (observation.state === "unknown") expect(observation.reason).toBe("probe_failed");
-      expect(await findLiveBridge(workspace.id)).toBeNull();
+      expect(await findLiveBridge(resolveHub(workspace).hubId)).toBeNull();
       await expect(ensureBridge(root)).rejects.toThrow(/uncertain/);
     } finally {
       if (child.pid) {
@@ -105,11 +108,17 @@ describe("findBridgeObservation", () => {
       authStoreFile: auth,
     });
     try {
-      const observation = await findBridgeObservation(bridge.workspace.id);
+      const observation = await findBridgeObservation(bridge.hubId);
       expect(observation.state).toBe("healthy");
-      expect(await findLiveBridge(bridge.workspace.id)).not.toBeNull();
+      expect(readRuntimeState(bridge.hubId)).toMatchObject({ stateVersion: 1, hubId: bridge.hubId });
+      expect(fs.existsSync(runtimeFile(bridge.hubId))).toBe(true);
+      expect(fs.existsSync(path.join(process.env.C2C_STATE_DIR!, "runtime", `${bridge.workspace.id}.json`))).toBe(false);
+      const health = await fetch(`${bridge.localBaseUrl()}/health`).then((response) => response.json());
+      expect(health).toMatchObject({ hubId: bridge.hubId, workspaceId: bridge.workspace.id });
+      expect(await findLiveBridge(bridge.hubId)).not.toBeNull();
     } finally {
       await bridge.close();
     }
+    expect(readRuntimeState(bridge.hubId)).toBeNull();
   });
 });

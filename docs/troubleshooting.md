@@ -19,6 +19,9 @@ check the new address and reconcile the owned ChatGPT plugin.
 
 | Diagnostic | Recovery |
 | --- | --- |
+| Healthy legacy bridge | Reuse the verified running process; do not create another bridge or copy its runtime state |
+| `AUTH_STATE_CONFLICT` | Preserve both auth files and the Hub mapping/checkpoint; verify ownership and the interrupted copy before retrying, without merging or resetting credentials |
+| `RUNTIME_STATE_INVALID` / uncertain runtime | Preserve state and verify Hub/legacy identity and PID; never stop or replace an unverified process |
 | Bridge stopped | Doctor can start it; explicit `start --tunnel` also reconnects |
 | `disconnected: true` | Intentional; reconnect only when requested |
 | Bridge state unknown | Resolve the local uncertainty; never spawn another process or delete the plugin |
@@ -30,7 +33,9 @@ check the new address and reconcile the owned ChatGPT plugin.
 | `TUNNEL_ROLLBACK_PENDING` | Rerun the named setup request to recover first; retain the journal |
 | `DESTROY_PENDING` | Preserve state and follow the isolated [deprovisioning recovery reference](../skill/references/deprovision.md#interrupted-destroy) |
 | `LIFECYCLE_BUSY` after a crash | Verify the lock's PID has exited before removing that specific lock |
-| `WORKSPACE_REGISTRY_BUSY` after a crash | Verify no registry writer is running before removing only `workspace-registries/<ownerWorkspaceId>.json.lock` |
+| `HUB_STATE_BUSY` after a crash | Verify no Hub operation is running before removing only `hub-mappings/.lock` |
+| `HUB_STATE_INVALID` / `HUB_MAPPING_CONFLICT` | Preserve state; inspect the exact Hub record and owner mapping before repair; do not merge or create replacement identities |
+| `WORKSPACE_REGISTRY_BUSY` after a crash | Verify no registry writer is running before removing only `workspace-registries/<hubId>.json.lock` |
 
 Use `c2c logs -w <repo>` for local diagnostics. Do not paste logs or credentials
 into ChatGPT. Local state uses the OS app directory `codex-with-chatgpt`.

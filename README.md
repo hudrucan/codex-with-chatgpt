@@ -2,7 +2,7 @@
 
 A secure read-only MCP bridge from ChatGPT to explicitly registered local repos.
 Codex manages setup and connection lifecycle; ChatGPT reads repo content through
-MCP. Each connection has a canonical startup owner and its own workspace grants.
+MCP. Each connection resolves a stable local Hub with its own workspace grants.
 
 ## Install
 

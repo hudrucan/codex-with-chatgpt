@@ -69,3 +69,20 @@ export function pkceVerifierAndChallenge(): { verifier: string; challenge: strin
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
 }
+
+/** Persist an exact legacy auth fixture without using the Hub-owned AuthStore. */
+export function legacyAuthFixture(stateDir: string, workspaceId: string) {
+  const client = { clientId: `c2c_client_${randomBytes(12).toString("base64url")}`, clientName: "Existing client",
+    redirectUris: ["http://127.0.0.1:19999/callback"], createdAt: new Date().toISOString() };
+  const accessToken = `c2c_at_${randomBytes(32).toString("base64url")}`;
+  const refreshToken = `c2c_rt_${randomBytes(32).toString("base64url")}`;
+  const now = Date.now();
+  const tokens = [[accessToken, "access", 60 * 60_000], [refreshToken, "refresh", 30 * 24 * 60 * 60_000]].map(([raw, kind, ttl]) => ({
+    hash: createHash("sha256").update(String(raw)).digest("hex"), kind, clientId: client.clientId, workspaceId,
+    scopes: ["workspace.read", "workspace.search", "git.read", "offline_access"], issuedAt: now,
+    expiresAt: now + Number(ttl), revoked: false,
+  }));
+  const data = { clients: [client], tokens };
+  const file = write(stateDir, `auth/${workspaceId}.json`, JSON.stringify(data));
+  return { file, data, client, accessToken, refreshToken, contents: fs.readFileSync(file, "utf8") };
+}

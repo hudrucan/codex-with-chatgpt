@@ -1,8 +1,9 @@
 # Multi-repo access
 
-One MCP connection can read multiple explicitly registered local repos. Its
-canonical startup workspace is the owner of those grants. Connections with
-different owners have separate registries, even in the same C2C state directory.
+One MCP connection can read multiple explicitly registered local repos. A stable
+local Hub owns those grants. The configured startup workspace resolves its Hub
+through an explicit local mapping. Different legacy owners resolve different Hubs,
+even in the same C2C state directory.
 
 ## Register and remove workspaces
 
@@ -14,8 +15,8 @@ c2c workspace remove backend -w /path/to/hub-root
 c2c workspace remove <workspaceId> -w /path/to/hub-root
 ```
 
-For these commands, `-w` selects the bridge owner's root, defaulting to the
-current directory. The repo to add is a separate positional path. Adding a repo
+For these commands, `-w` selects the configured startup root used to resolve its
+Hub, defaulting to the current directory. The repo to add is a separate positional path. Adding a repo
 grants read access without starting another bridge or provisioning resources.
 Bare `c2c workspace -w <path> [--json]` shows local identity and project information
 without registering that path.
@@ -37,7 +38,7 @@ order, including repos with identical directory names. Explicit aliases contain
 lowercase letters/digits separated by hyphens, at most 100 characters, and cannot
 be a 12-character hexadecimal workspace ID. Alias conflicts fail without changing
 grants. Re-adding a root preserves its alias unless `--alias` changes it.
-Aliases are unique within an owner's registry and may be reused by other owners.
+Aliases are unique within a Hub's registry and may be reused by other Hubs.
 
 ## MCP selection
 
@@ -73,7 +74,7 @@ see [security](security.md).
 | `WORKSPACE_UNAVAILABLE` | Registered root is missing or its canonical identity has changed; re-register locally |
 | `INVALID_WORKSPACE_ALIAS` | Alias violates the naming rules |
 | `WORKSPACE_ALIAS_CONFLICT` | Another root already uses that alias in this owner's registry |
-| `INVALID_WORKSPACE_OWNER` | Registry owner is not a canonical workspace ID or does not match the bridge |
+| `INVALID_WORKSPACE_OWNER` | Registry owner is not a valid Hub ID or does not match the configured Hub |
 | `WORKSPACE_REGISTRY_INVALID` | Registry is unreadable, malformed or belongs to a different owner; access is denied |
 | `WORKSPACE_REGISTRY_BUSY` | A local registry writer holds the owner's lock |
 
@@ -92,21 +93,64 @@ see [security](security.md).
 
 ## Registry storage
 
-`workspace-registries/<ownerWorkspaceId>.json` lives in the external C2C state
-directory, separately from display names in `workspaces/`. `C2C_STATE_DIR` can
-override that directory. No repository configuration is written.
+Hub identity lives in `hubs/<hubId>.json` in the external C2C state directory.
+`hubId` is an opaque random UUID with a `hub_` prefix, independent of repo paths
+and display names. The initial display name uses the configured workspace's name;
+resolving that connection again preserves the Hub's identity and display name.
+The optional `legacyOwnerWorkspaceId` links an existing connection to its Hub.
 
 ```json
 {
   "version": 1,
-  "ownerWorkspaceId": "abcdef012345",
+  "hubId": "hub_550e8400-e29b-41d4-a716-446655440000",
+  "displayName": "My Hub",
+  "createdAt": "2026-10-18T08:00:00.000Z",
+  "legacyOwnerWorkspaceId": "abcdef012345"
+}
+```
+
+`hub-mappings/<legacyOwnerWorkspaceId>.json` records the one-to-one connection
+mapping and whether registry initialization completed:
+
+```json
+{
+  "version": 1,
+  "legacyOwnerWorkspaceId": "abcdef012345",
+  "hubId": "hub_550e8400-e29b-41d4-a716-446655440000",
+  "registryInitialized": true
+}
+```
+
+`workspace-registries/<hubId>.json` stores the Hub's read grants, separately from
+display names in `workspaces/`. `C2C_STATE_DIR` can override the state directory.
+No repository configuration is written. Hub IDs remain internal: CLI owner
+selection uses `-w`, and MCP selectors remain workspace aliases or IDs.
+
+```json
+{
+  "version": 2,
+  "hubId": "hub_550e8400-e29b-41d4-a716-446655440000",
   "workspaces": [
     { "workspaceId": "0123456789ab", "alias": "backend", "root": "/canonical/local/repo" }
   ]
 }
 ```
 
-The file's owner must match the bridge startup workspace ID. Only this owner-keyed
-format grants access. Registry writes use an exclusive owner-local `.lock` file
-and atomic replacement. For a leftover lock or inaccessible state directory,
-follow [troubleshooting](troubleshooting.md#local-process-and-tunnel-diagnostics).
+The registry's Hub ID must match the configured connection's Hub mapping.
+An owner-scoped `workspace-registries/<legacyOwnerWorkspaceId>.json` can be copied
+only if its ownership metadata matches that exact owner. Aliases and grants are
+preserved, and the source file is retained. Conflicting destination grants are
+rejected rather than merged or overwritten. Initialization is checkpointed so
+removed grants are not re-imported on later resolutions. An interrupted copy can
+resume only when the destination matches the verified source.
+
+Registries from other owners and the unowned `workspace-registry.json` are never
+adopted. Missing Hub targets, malformed state, duplicate owner claims and
+conflicting mappings deny access. Hub metadata and registration do not change
+OAuth scopes, auth/runtime/tunnel/endpoint storage keys or connector bindings.
+Resource cleanup remains keyed by the configured startup workspace.
+
+Registry writes use an exclusive Hub-local `.lock` file and atomic replacement;
+identity claims and adoption also hold `hub-mappings/.lock`. For leftover locks
+or inaccessible state, follow
+[troubleshooting](troubleshooting.md#local-process-and-tunnel-diagnostics).

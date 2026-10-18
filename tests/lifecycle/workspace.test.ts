@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveHub } from "../../src/hub/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
-import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { AuthStore } from "../../src/auth/store.js";
 import { acquireWorkspaceLock, destroyWorkspace, disconnectWorkspace, lifecycleFile } from "../../src/lifecycle/workspace.js";
 import { boundConnector, confirmConnectorBinding, connectorReconciliation, persistWorkspaceEndpoint, readLastEndpoint, writeLastEndpoint } from "../../src/config/endpoint.js";
@@ -80,11 +80,11 @@ describe("transactional connector reconciliation", () => {
 describe("disconnect and ownership-checked destroy", () => {
   it("disconnect revokes tokens but retains resource and session state", async () => {
     const ws = endpoint(); bind(ws); const { saved } = resources(ws);
-    const auth = new AuthStore(ws.id);
+    const auth = new AuthStore(resolveHub(ws).hubId);
     const issued = auth.issueTokens({ clientId: "test", scopes: ["workspace.read"] });
     write(state, `sessions/${ws.id}.json`, JSON.stringify({ url: "https://chatgpt.com/c/saved" }));
     await disconnectWorkspace(root);
-    expect(new AuthStore(ws.id).verifyAccessToken(issued.accessToken).ok).toBe(false);
+    expect(new AuthStore(resolveHub(ws).hubId).verifyAccessToken(issued.accessToken).ok).toBe(false);
     expect(readLastEndpoint(ws.id)).toMatchObject({ connectorName: "Original", disconnected: true });
     expect(readTunnelState(ws.id)).toEqual(saved);
     expect(fs.existsSync(path.join(state, "sessions", `${ws.id}.json`))).toBe(true);
@@ -168,14 +168,18 @@ describe("disconnect and ownership-checked destroy", () => {
 
 describe("owner registry cleanup during lifecycle", () => {
   function registries(ws: Workspace) {
-    const owner = new WorkspaceRegistry(ws.id);
-    owner.add(root, "owner");
+    // Destroy storage remains legacy-owner keyed, independently of Hub registries.
+    const entry = { workspaceId: ws.id, alias: "owner", root };
+    const owner = { file: write(state, `workspace-registries/${ws.id}.json`, JSON.stringify({
+      version: 1, ownerWorkspaceId: ws.id, workspaces: [entry],
+    })) };
     const otherRoot = makeTmpDir("lifecycle-other-owner");
     dirs.push(otherRoot);
-    const other = new WorkspaceRegistry(new Workspace(otherRoot).id);
-    // Another owner may independently register the same repo.
-    other.add(root, "shared-repo");
-    const legacy = write(state, "workspace-registry.json", JSON.stringify({ version: 1, workspaces: owner.list() }));
+    const otherId = new Workspace(otherRoot).id;
+    const other = { file: write(state, `workspace-registries/${otherId}.json`, JSON.stringify({
+      version: 1, ownerWorkspaceId: otherId, workspaces: [entry],
+    })) };
+    const legacy = write(state, "workspace-registry.json", JSON.stringify({ version: 1, workspaces: [entry] }));
     const snapshots = [owner.file, other.file, legacy].map((file) => ({ file, content: fs.readFileSync(file, "utf8") }));
     return {
       owner,

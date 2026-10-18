@@ -55,7 +55,7 @@ beforeAll(async () => {
   git(other, "add", "-f", ".env");
   fs.symlinkSync(root, path.join(other, "escape"), "junction");
   bridge = await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false });
-  registry = new WorkspaceRegistry(bridge.workspace.id);
+  registry = WorkspaceRegistry.forWorkspace(bridge.workspace);
   primary = registry.list()[0];
   client = await connect(["workspace.read", "workspace.search", "git.read"]);
 });

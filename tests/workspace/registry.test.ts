@@ -13,7 +13,7 @@ beforeEach(() => {
   state = isolateStateDir();
   root = makeTmpDir("registry-a");
   other = makeTmpDir("registry-b");
-  registry = new WorkspaceRegistry(new Workspace(root).id);
+  registry = WorkspaceRegistry.forWorkspace(new Workspace(root));
 });
 afterEach(() => {
   for (const dir of [state, root, other]) cleanup(dir);
@@ -28,14 +28,14 @@ describe("external workspace registry", () => {
     const before = fs.readFileSync(path.join(root, ".c2c.json"), "utf8");
     const entry = registry.add(link);
     expect(entry).toEqual({ workspaceId: new Workspace(root).id, alias: expect.stringMatching(/^registry-a-.*-[a-f0-9]{12}$/), root });
-    expect(new WorkspaceRegistry(new Workspace(root).id).add(root)).toEqual(entry);
+    expect(WorkspaceRegistry.forWorkspace(new Workspace(root)).add(root)).toEqual(entry);
     expect(registry.list()).toEqual([entry]);
     expect(registry.resolve().id).toBe(entry.workspaceId);
     expect(registry.resolve(entry.alias).name).toBe("Legacy display");
     expect(registry.resolve(entry.workspaceId).root).toBe(root);
     expect(fs.readdirSync(root)).toEqual([".c2c.json"]);
     expect(fs.readFileSync(path.join(root, ".c2c.json"), "utf8")).toBe(before);
-    expect(JSON.parse(fs.readFileSync(registry.file, "utf8"))).toEqual({ version: 1, ownerWorkspaceId: registry.ownerWorkspaceId, workspaces: [entry] });
+    expect(JSON.parse(fs.readFileSync(registry.file, "utf8"))).toEqual({ version: 2, hubId: registry.hubId, workspaces: [entry] });
     if (process.platform !== "win32") expect(fs.statSync(registry.file).mode & 0o777).toBe(0o600);
   });
 
@@ -81,7 +81,7 @@ describe("external workspace registry", () => {
 
   it("fails closed for corrupt registries and conflicting identities", () => {
     const a = registry.add(root, "alpha");
-    for (const value of ["{", JSON.stringify({ version: 2, workspaces: [] }), JSON.stringify({ version: 1, ownerWorkspaceId: registry.ownerWorkspaceId, workspaces: [a, a] })]) {
+    for (const value of ["{", JSON.stringify({ version: 2, workspaces: [] }), JSON.stringify({ version: 2, hubId: registry.hubId, workspaces: [a, a] })]) {
       fs.writeFileSync(registry.file, value);
       expect(() => registry.list()).toThrow(expect.objectContaining({ code: "WORKSPACE_REGISTRY_INVALID" }));
       expect(() => registry.add(other)).toThrow();
@@ -110,12 +110,12 @@ describe("external workspace registry", () => {
       { workspaceId: new Workspace(other).id, alias: "legacy", root: other },
     ] }));
     const legacy = fs.readFileSync(legacyFile, "utf8");
-    const anotherOwner = new WorkspaceRegistry(new Workspace(other).id);
+    const anotherOwner = WorkspaceRegistry.forWorkspace(new Workspace(other));
     expect(registry.list()).toEqual([]);
     expect(anotherOwner.list()).toEqual([]);
     const a = registry.add(root, "shared");
     const b = anotherOwner.add(other, "shared");
-    expect(registry.file).toBe(path.join(state, "workspace-registries", `${a.workspaceId}.json`));
+    expect(registry.file).toBe(path.join(state, "workspace-registries", `${registry.hubId}.json`));
     expect(registry.resolve("shared").root).toBe(root);
     expect(anotherOwner.resolve("shared").root).toBe(other);
     expect(() => registry.resolve(b.workspaceId)).toThrow(expect.objectContaining({ code: "WORKSPACE_NOT_FOUND" }));
@@ -128,7 +128,7 @@ describe("external workspace registry", () => {
       expect(() => new WorkspaceRegistry(owner)).toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE_OWNER" }));
     }
     registry.add(root);
-    const anotherOwner = new WorkspaceRegistry(new Workspace(other).id);
+    const anotherOwner = WorkspaceRegistry.forWorkspace(new Workspace(other));
     anotherOwner.add(other);
     fs.copyFileSync(anotherOwner.file, registry.file);
     expect(() => registry.resolve()).toThrow(expect.objectContaining({ code: "WORKSPACE_REGISTRY_INVALID" }));

@@ -19,7 +19,8 @@ the read-only data plane. Successful setup or reconnect ends at `MCP READY`.
 | `mcp/` | Read-only tools and stateless Streamable HTTP transport |
 | `auth/` | OAuth discovery, client registration, PKCE, token rotation/revocation and token hashes |
 | `pairing/` | Expiring one-time pairing codes, attempt limits and rate limiting |
-| `workspace/` | Owner-scoped registry, canonical containment, ignore rules, detection, reads, search and git |
+| `hub/` | Stable internal identity, checked legacy connection mappings and initialization checkpoints |
+| `workspace/` | Hub-scoped registry, canonical containment, ignore rules, detection, reads, search and git |
 | `tunnel/` | Quick/Named cloudflared processes, provisioning, naming and rollback |
 | `process/` | Daemon spawn/reuse and local admin requests |
 | `lifecycle/` | Workspace operation locks and connection lifecycle |
@@ -35,12 +36,16 @@ An MCP request passes bearer validation before its tool handler checks the
 required scope. Streamable HTTP uses a fresh server and transport per POST.
 
 Workspace selection is independent on every call. The handler resolves a
-registered alias or ID within the startup owner's registry, then applies the
+registered alias or ID within the configured Hub's registry, then applies the
 selected workspace's path and content policies. See [multi-repo access](multi-repo.md)
 for selectors and schemas, and [security](security.md) for authorization boundaries.
 
-The canonical startup root determines the bridge's `workspaceId`. Its resource
-identity is separate from display names and registered read targets. The listener
+A random, persistent `hubId` identifies the Hub independently of repositories.
+The startup root's `workspaceId` resolves that Hub through a checked local mapping.
+OAuth clients/tokens, pairing and runtime discovery use the Hub ID. A verified
+live legacy bridge is reused in place until it exits; its runtime is not copied.
+Tunnel/endpoint and resource lifecycle ownership still use the startup workspace
+key. Registry and auth adoption do not reprovision those resources. The listener
 prefers port 48765 and falls back to a free port on collision. Runtime discovery
 distinguishes a matching healthy bridge, a stopped process and uncertain state
 before automatic repair.

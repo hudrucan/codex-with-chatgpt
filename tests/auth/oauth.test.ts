@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import path from "node:path";
 import { filterScopes } from "../../src/auth/store.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
@@ -290,14 +290,15 @@ describe("token enforcement on /mcp", () => {
     expect(response.status).toBe(401);
   });
 
-  it("403 with a token bound to another workspace", async () => {
-    const foreign = bridge.authStore.issueTokens({
-      clientId: "test",
-      scopes: ["workspace.read"],
-      workspaceId: "deadbeef0000",
+  it("403 if bearer validation receives a record bound to another Hub", async () => {
+    const foreign = bridge.authStore.issueTokens({ clientId: "test", scopes: ["workspace.read"] });
+    const verdict = bridge.authStore.verifyAccessToken(foreign.accessToken);
+    if (!verdict.ok) throw new Error("Missing token fixture");
+    const verify = vi.spyOn(bridge.authStore, "verifyAccessToken").mockReturnValue({
+      ok: true, record: { ...verdict.record, hubId: "hub_550e8400-e29b-41d4-a716-446655440000" },
     });
-    const response = await mcpCall(foreign.accessToken);
-    expect(response.status).toBe(403);
+    try { expect((await mcpCall(foreign.accessToken)).status).toBe(403); }
+    finally { verify.mockRestore(); }
   });
 
   it("401 after revocation", async () => {

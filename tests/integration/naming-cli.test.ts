@@ -5,13 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Workspace } from "../../src/workspace/manager.js";
-import { AuthStore } from "../../src/auth/store.js";
+import { resolveHub } from "../../src/hub/store.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { readRuntimeState } from "../../src/bridge/runtime.js";
 import { readLastEndpoint, writeLastEndpoint, confirmConnectorBinding } from "../../src/config/endpoint.js";
 import { readTunnelState, writeTunnelState } from "../../src/tunnel/state.js";
 import type { TunnelProvider } from "../../src/tunnel/provider.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
+import { cleanup, isolateStateDir, makeTmpDir, write, legacyAuthFixture } from "../helpers.js";
 
 const execFileAsync = promisify(execFile);
 const cliEntry = fileURLToPath(new URL("../../src/cli/index.ts", import.meta.url));
@@ -58,10 +58,10 @@ describe("naming through setup and repair commands", () => {
       await execFileAsync(process.execPath, ["--import", "tsx", cliEntry, "stop", "-w", root], {
         env: { ...process.env, C2C_STATE_DIR: stateDir }, timeout: 10_000,
       });
-      for (let attempt = 0; attempt < 100 && readRuntimeState(workspace.id); attempt++) {
+      for (let attempt = 0; attempt < 100 && readRuntimeState(resolveHub(workspace).hubId); attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      expect(readRuntimeState(workspace.id)).toBeNull();
+      expect(readRuntimeState(resolveHub(workspace).hubId)).toBeNull();
     }
     for (const dir of dirs.splice(0)) cleanup(dir);
     if (originalStateDir === undefined) delete process.env.C2C_STATE_DIR;
@@ -71,27 +71,27 @@ describe("naming through setup and repair commands", () => {
   it("persists explicit names through setup reruns, doctor, restart, and display-name changes without revoking tokens", async () => {
     write(root, ".c2c.json", JSON.stringify({ name: "Original", maxIterations: 7 }));
     const workspace = new Workspace(root);
-    const token = new AuthStore(workspace.id).issueTokens({ clientId: "naming-test", scopes: ["workspace.read"] }).accessToken;
+    const token = legacyAuthFixture(stateDir, workspace.id).accessToken;
     ownsDaemon = true;
     const first = await runCli(["setup", "--no-tunnel", "--workspace-name", "Desk C2C Hub", "--connector-name", "Desk Connector"]);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
     expect(first.payload).toMatchObject({ workspaceId: workspace.id, workspaceName: "Desk C2C Hub", connectorName: "Desk Connector" });
-    const initialPid = readRuntimeState(workspace.id)!.pid;
+    const initialPid = readRuntimeState(resolveHub(workspace).hubId)!.pid;
 
     const rerun = await runCli(["setup", "--no-tunnel"]);
     expect(rerun.status).toBe(0);
     expect(rerun.payload.connectorName).toBe("Desk Connector");
-    expect(readRuntimeState(workspace.id)!.pid).toBe(initialPid);
+    expect(readRuntimeState(resolveHub(workspace).hubId)!.pid).toBe(initialPid);
     expect((await runCli(["doctor"])).payload.chatgptRepair.connectorName).toBe("Desk Connector");
 
     const renamed = await runCli(["setup", "--no-tunnel", "--workspace-name", "Renamed Workspace"]);
     expect(renamed.status).toBe(1);
     expect(renamed.payload.error).toContain("WORKSPACE_NAME_RESTART_REQUIRED");
-    expect(readRuntimeState(workspace.id)!.pid).toBe(initialPid);
+    expect(readRuntimeState(resolveHub(workspace).hubId)!.pid).toBe(initialPid);
     expect((await runCli(["status"])).payload).toMatchObject({ workspaceNameRestartRequired: true, configuredWorkspaceName: "Renamed Workspace" });
     const diagnosis = await runCli(["doctor"]);
     expect(diagnosis.payload.workspaceNameRestartRequired).toBe(true);
-    expect(readRuntimeState(workspace.id)!.pid).toBe(initialPid);
+    expect(readRuntimeState(resolveHub(workspace).hubId)!.pid).toBe(initialPid);
 
     const restarted = await runCli(["restart"]);
     expect(restarted.status, JSON.stringify(restarted.payload)).toBe(0);
@@ -100,7 +100,7 @@ describe("naming through setup and repair commands", () => {
     expect(readLastEndpoint(workspace.id)?.desiredConnectorName).toBe("Desk Connector");
     expect(JSON.parse(fs.readFileSync(path.join(root, ".c2c.json"), "utf8"))).toEqual({ name: "Original", maxIterations: 7 });
 
-    const runtime = readRuntimeState(workspace.id)!;
+    const runtime = readRuntimeState(resolveHub(workspace).hubId)!;
     const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, { headers: { authorization: `Bearer ${token}` } });
     expect(response.status).toBe(405); // Bearer guard accepted the original token.
     expect((await runCli(["setup", "--no-tunnel"])).payload.connectorName).toBe("Desk Connector");
@@ -112,9 +112,9 @@ describe("naming through setup and repair commands", () => {
     const id = setup.payload.workspaceId;
     const disconnected = await runCli(["disconnect"]);
     expect(disconnected.payload).toMatchObject({ ok: true, disconnected: true, resourcesRetained: true });
-    expect(readRuntimeState(id)).toBeNull();
+    expect(readRuntimeState(resolveHub(new Workspace(root)).hubId)).toBeNull();
     expect((await runCli(["doctor"])).payload.disconnected).toBe(true);
-    expect(readRuntimeState(id)).toBeNull();
+    expect(readRuntimeState(resolveHub(new Workspace(root)).hubId)).toBeNull();
     const reconnect = await runCli(["setup", "--no-tunnel"]);
     expect(reconnect.payload).toMatchObject({ workspaceName: "Local Name", connectorName: "Retained Connector" });
     expect(readLastEndpoint(id)?.disconnected).toBe(false);
@@ -190,18 +190,18 @@ if (args.includes("run")) {
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
     expect(fs.existsSync(path.join(root, ".c2c.json"))).toBe(false);
     expect(first.payload).toMatchObject({ workspaceName: "Desk C2C Hub", connectorName: "Desk Connector", tunnel: { name: "desk-c2c", hostname: "code.example.com" } });
-    const pid = readRuntimeState(first.payload.workspaceId)!.pid;
+    const pid = readRuntimeState(resolveHub(new Workspace(root)).hubId)!.pid;
     const rerun = await runCli(["setup", ...flags], env);
     expect(rerun.status, JSON.stringify(rerun.payload)).toBe(0);
     expect(rerun.payload.tunnel).toEqual(first.payload.tunnel);
     expect(rerun.payload.connectorName).toBe("Desk Connector");
-    expect(readRuntimeState(first.payload.workspaceId)!.pid).toBe(pid);
+    expect(readRuntimeState(resolveHub(new Workspace(root)).hubId)!.pid).toBe(pid);
     const saved = await runCli(["setup"], env);
     expect(saved.payload.tunnel).toEqual(first.payload.tunnel);
     expect(saved.payload.connectorName).toBe("Desk Connector");
     const choice = await runCli(["tunnel", "choose", "--mode", "named"], env);
     expect(choice.payload.state).toMatchObject({ tunnelName: "desk-c2c", hostname: "code.example.com" });
-    expect(readRuntimeState(first.payload.workspaceId)!.pid).toBe(pid);
+    expect(readRuntimeState(resolveHub(new Workspace(root)).hubId)!.pid).toBe(pid);
     const account = JSON.parse(fs.readFileSync(accountFile, "utf8"));
     expect(account.tunnels).toHaveLength(1);
     expect(account.routes).toEqual([{ tunnel: account.tunnels[0].id, hostname: "code.example.com" }]);

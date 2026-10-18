@@ -5,7 +5,7 @@ import type { Logger } from "../logger/index.js";
 
 export interface BearerAuthDeps {
   store: AuthStore;
-  workspaceId: string;
+  hubId: string;
   getBaseUrl: (req: Request) => string;
   logger: Logger;
 }
@@ -13,7 +13,7 @@ export interface BearerAuthDeps {
 /**
  * Bearer-token guard for /mcp.
  * - missing/invalid/expired token  -> 401 (+ WWW-Authenticate with resource metadata)
- * - valid token for another workspace -> 403
+ * - valid token for another Hub -> 403
  */
 export function bearerAuth(deps: BearerAuthDeps) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -39,11 +39,11 @@ export function bearerAuth(deps: BearerAuthDeps) {
         .json({ error: "unauthorized", error_description: `Token ${verdict.reason}` });
       return;
     }
-    if (verdict.record.workspaceId !== deps.workspaceId) {
-      deps.logger.warn("Rejected MCP request: token bound to a different workspace");
+    if (verdict.record.hubId !== deps.hubId) {
+      deps.logger.warn("Rejected MCP request: token bound to a different Hub");
       res.status(403).json({
         error: "forbidden",
-        error_description: "This token is not authorized for the connected workspace",
+        error_description: "This token is not authorized for the connected Hub",
       });
       return;
     }

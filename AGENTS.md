@@ -78,14 +78,10 @@
 
 ## Verification
 
-Before handoff for code changes, run relevant focused tests and normally run the full repository checks:
-
-```bash
-corepack pnpm test
-corepack pnpm build
-corepack pnpm typecheck
-git diff --check
-```
+- Prefer focused tests for changed files/features; do not rerun the full suite after each small sub-step.
+- Run full `corepack pnpm test` once near phase completion or before commit, unless broader coverage is specifically needed; honor explicit verification scope.
+- Run `typecheck`/`build` when relevant module/build boundaries change or during final phase verification.
+- Use `git diff --check` as the cheap default check. Do not repeat passing expensive checks without a concrete reason.
 
 - Report what passed, what was not run, and any remaining blocker.
 - Keep handoffs concise: changed files, behavior/invariants affected, compatibility notes, and verified results.

@@ -16,7 +16,7 @@ import { namedTunnelBinding, readTunnelState } from "../tunnel/state.js";
 import { Logger, nullLogger } from "../logger/index.js";
 import { DEFAULT_HOST, DEFAULT_PORT } from "../config/paths.js";
 import { SERVICE_NAME, VERSION } from "../version.js";
-import { writeRuntimeState, clearRuntimeState, type RuntimeState } from "./runtime.js";
+import { writeRuntimeState, clearRuntimeState, type HubRuntimeState } from "./runtime.js";
 
 function tunnelForWorkspace(workspaceId: string, logger: Logger): TunnelProvider {
   const binding = namedTunnelBinding(readTunnelState(workspaceId));
@@ -45,6 +45,7 @@ export interface BridgeOptions {
 
 export interface Bridge {
   workspace: Workspace;
+  readonly hubId: string;
   port: number;
   host: string;
   adminToken: string;
@@ -88,11 +89,12 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
     throw new Error("The bridge only binds to loopback addresses. Public exposure goes through the tunnel.");
   }
 
-  const registry = new WorkspaceRegistry(workspace.id);
+  const registry = WorkspaceRegistry.forWorkspace(workspace);
+  const hubId = registry.hubId;
   registry.add(workspace.root);
 
-  const authStore = new AuthStore(workspace.id, { file: opts.authStoreFile });
-  const pairing = new PairingManager(workspace.id, { ttlMs: opts.pairingTtlMs });
+  const authStore = new AuthStore(hubId, { file: opts.authStoreFile });
+  const pairing = new PairingManager(hubId, { ttlMs: opts.pairingTtlMs });
   const tunnel = opts.tunnelProvider ?? tunnelForWorkspace(workspace.id, logger);
   const adminToken = `c2c_admin_${randomBytes(24).toString("base64url")}`;
 
@@ -112,7 +114,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
   // ---- Health (public but minimal) ---------------------------------------
 
   app.get("/health", (_req, res) => {
-    res.json({ service: SERVICE_NAME, version: VERSION, workspaceId: workspace.id, status: "ok" });
+    res.json({ service: SERVICE_NAME, version: VERSION, hubId, workspaceId: workspace.id, status: "ok" });
   });
 
   // ---- OAuth + discovery ---------------------------------------------------
@@ -129,11 +131,11 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
 
   // ---- MCP endpoint (bearer-protected) --------------------------------------
 
-  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ workspace, logger, registry }), logger);
+  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ hubId, logger, registry }), logger);
   app.all(
     "/mcp",
     express.json({ limit: "8mb" }),
-    bearerAuth({ store: authStore, workspaceId: workspace.id, getBaseUrl, logger }),
+    bearerAuth({ store: authStore, hubId, getBaseUrl, logger }),
     (req: Request, res: Response) => {
       void mcpHandler(req, res);
     }
@@ -165,6 +167,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
     res.json({
       service: SERVICE_NAME,
       version: VERSION,
+      hubId,
       workspaceId: workspace.id,
       workspaceName: workspace.name,
       workspaceRoot: workspace.root,
@@ -220,7 +223,8 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
 
   const persistRuntime = (): void => {
     if (opts.persistRuntime === false) return;
-    const state: RuntimeState = {
+    const state: HubRuntimeState = {
+      stateVersion: 1, hubId,
       service: SERVICE_NAME,
       version: VERSION,
       workspaceId: workspace.id,
@@ -241,12 +245,13 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
     closed = true;
     await tunnel.stop().catch(() => undefined);
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    if (opts.persistRuntime !== false) clearRuntimeState(workspace.id);
+    if (opts.persistRuntime !== false) clearRuntimeState(hubId);
     logger.info("Bridge stopped");
   };
 
   return {
     workspace,
+    hubId,
     port,
     host,
     adminToken,

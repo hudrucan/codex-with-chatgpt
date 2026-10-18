@@ -7,7 +7,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 export interface PairingSession {
   id: string;
   codeHash: Buffer;
-  workspaceId: string;
+  hubId: string;
   createdAt: number;
   expiresAt: number;
   attemptsLeft: number;
@@ -73,7 +73,7 @@ export class PairingManager {
   private readonly ipRateWindowMs: number;
 
   constructor(
-    private readonly workspaceId: string,
+    readonly hubId: string,
     opts: PairingManagerOptions = {}
   ) {
     this.ttlMs = opts.ttlMs ?? 5 * 60_000;
@@ -89,7 +89,7 @@ export class PairingManager {
     const session: PairingSession = {
       id: randomBytes(16).toString("hex"),
       codeHash: hashCode(raw),
-      workspaceId: this.workspaceId,
+      hubId: this.hubId,
       createdAt: Date.now(),
       expiresAt: Date.now() + this.ttlMs,
       attemptsLeft: this.maxAttempts,

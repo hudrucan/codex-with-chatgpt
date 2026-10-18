@@ -209,7 +209,7 @@ describe("MCP tools over Streamable HTTP", () => {
 
   it("keeps a persisted legacy token usable for its core scopes", async () => {
     const legacy = bridge.authStore.issueTokens({ clientId: "legacy", scopes: ["workspace.read", "execution.read"] });
-    const reloaded = new AuthStore(bridge.workspace.id, { file: authFile });
+    const reloaded = new AuthStore(bridge.hubId, { file: authFile });
     expect(reloaded.verifyAccessToken(legacy.accessToken).ok).toBe(true);
     const legacyClient = new Client({ name: "legacy", version: "1.0.0" });
     try {

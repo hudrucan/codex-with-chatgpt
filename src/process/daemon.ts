@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureDir, getStateDir } from "../config/paths.js";
-import { findBridgeObservation, findLiveBridge, probeBridge, readRuntimeState, type RuntimeState } from "../bridge/runtime.js";
+import { findBridgeObservation, findLiveBridge, type RuntimeState } from "../bridge/runtime.js";
+import { resolveHub } from "../hub/store.js";
 import { Workspace } from "../workspace/manager.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,7 +32,8 @@ export interface EnsureBridgeResult {
  */
 export async function ensureBridge(workspaceRoot: string, opts: { port?: number } = {}): Promise<EnsureBridgeResult> {
   const workspace = new Workspace(workspaceRoot);
-  const observation = await findBridgeObservation(workspace.id);
+  const hub = resolveHub(workspace);
+  const observation = await findBridgeObservation(hub.hubId);
   if (observation.state === "healthy") return { runtime: observation.runtime, spawned: false };
   if (observation.state === "unknown") {
     throw new Error(
@@ -40,7 +42,7 @@ export async function ensureBridge(workspaceRoot: string, opts: { port?: number 
   }
 
   const logDir = ensureDir(path.join(getStateDir(), "logs"));
-  const logFile = path.join(logDir, `bridge-${workspace.id}.out.log`);
+  const logFile = path.join(logDir, `bridge-${hub.hubId}.out.log`);
   const out = fs.openSync(logFile, "a", 0o600);
   try {
     // Existing files may have been created with a permissive umask. Keep the
@@ -66,7 +68,7 @@ export async function ensureBridge(workspaceRoot: string, opts: { port?: number 
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 300));
-    const runtime = await findLiveBridge(workspace.id);
+    const runtime = await findLiveBridge(hub.hubId);
     if (runtime) return { runtime, spawned: true };
     if (child.exitCode !== null && child.exitCode !== 0) {
       throw new Error(`Bridge process exited with code ${child.exitCode}. See ${logFile}`);
@@ -101,21 +103,10 @@ export async function adminFetch<T = unknown>(
 
 export async function stopBridge(workspaceRoot: string): Promise<boolean> {
   const workspace = new Workspace(workspaceRoot);
-  const runtime = readRuntimeState(workspace.id);
-  if (!runtime) return false;
-  const healthy = await probeBridge(runtime.port);
-  if (healthy && healthy.workspaceId === workspace.id) {
-    try {
-      await adminFetch(runtime, "POST", "/admin/shutdown", 5000);
-      return true;
-    } catch {
-      // fall through to kill
-    }
-  }
-  try {
-    process.kill(runtime.pid, "SIGTERM");
-    return true;
-  } catch {
-    return false;
-  }
+  const hub = resolveHub(workspace);
+  const observation = await findBridgeObservation(hub.hubId);
+  if (observation.state === "stopped") return false;
+  if (observation.state === "unknown") throw new Error(`Bridge state is uncertain (${observation.reason}); refusing to stop an unverified process.`);
+  await adminFetch(observation.runtime, "POST", "/admin/shutdown", 5000);
+  return true;
 }

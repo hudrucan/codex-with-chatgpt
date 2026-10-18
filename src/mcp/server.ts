@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { Workspace, WorkspaceError } from "../workspace/manager.js";
+import { WorkspaceError } from "../workspace/manager.js";
 import { WorkspaceRegistry, WorkspaceRegistryError } from "../workspace/registry.js";
 import { searchWorkspace } from "../workspace/search.js";
 import { gitDiff, gitInfo, gitStatus, type DiffMode } from "../workspace/git.js";
@@ -157,17 +157,16 @@ const workspaceSelector = z.string().optional().describe(
 );
 
 export interface McpContext {
-  workspace: Workspace;
+  hubId: string;
   logger: Logger;
-  registry?: WorkspaceRegistry;
+  registry: WorkspaceRegistry;
 }
 
 export function createMcpServer(ctx: McpContext): McpServer {
-  const registry = ctx.registry ?? new WorkspaceRegistry(ctx.workspace.id);
-  if (registry.ownerWorkspaceId !== ctx.workspace.id) {
-    throw new WorkspaceRegistryError("INVALID_WORKSPACE_OWNER", "Registry owner must match the bridge startup workspace.");
+  const { registry } = ctx;
+  if (registry.hubId !== ctx.hubId) {
+    throw new WorkspaceRegistryError("INVALID_WORKSPACE_OWNER", "Registry owner must match the configured Hub.");
   }
-  if (!ctx.registry) registry.add(ctx.workspace.root);
   const server = new McpServer(
     { name: PRODUCT_NAME, version: VERSION },
     { capabilities: { tools: {} }, instructions: UNTRUSTED_NOTE }

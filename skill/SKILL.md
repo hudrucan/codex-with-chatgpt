@@ -13,9 +13,9 @@ ends at **MCP READY**, then STOP. Do not start a coding task or planning loop.
 
 ## Boundaries
 
-- Each bridge retains one canonical startup owner. It can read additional repos
-  explicitly registered to that owner in external
-  `workspace-registries/<ownerWorkspaceId>.json`; other owners' grants are isolated.
+- Each bridge retains one canonical startup owner, mapped to a stable local Hub.
+  It can read additional repos explicitly registered to that Hub in external
+  `workspace-registries/<hubId>.json`; other Hubs' grants are isolated.
   Setup auto-registers only the startup root; add other repos only when requested.
 - Keep `workspaceId` as the root-derived identity; display names are labels.
 - MCP has eight read-only tools: `list_workspaces`, `workspace_info`,

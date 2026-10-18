@@ -7,6 +7,7 @@ import { startBridge } from "../bridge/server.js";
 import { findBridgeObservation, findLiveBridge, type RuntimeState } from "../bridge/runtime.js";
 import { adminFetch, ensureBridge, stopBridge } from "../process/daemon.js";
 import { Workspace } from "../workspace/manager.js";
+import { resolveHub } from "../hub/store.js";
 import { WorkspaceRegistry } from "../workspace/registry.js";
 import { AuthStore } from "../auth/store.js";
 import { detectTunnelBinaries } from "../tunnel/detect.js";
@@ -108,6 +109,7 @@ interface PairingResponse {
 }
 
 interface AdminInfo {
+  hubId?: string;
   workspaceId: string;
   workspaceName: string;
   workspaceRoot: string;
@@ -261,7 +263,7 @@ async function configureSetupNames(root: string, opts: SetupOptions): Promise<vo
   });
   if (!result.ok || result.fallback) throw new Error(result.error ?? "Named tunnel provisioning failed.");
   if (previous.preference !== result.state.preference || previous.tunnelName !== result.state.tunnelName || previous.hostname !== result.state.hostname) {
-    if (await findLiveBridge(workspace.id)) {
+    if (await findLiveBridge(resolveHub(workspace).hubId)) {
       await stopBridge(root);
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
@@ -409,7 +411,7 @@ program
   .action(async (opts: { workspace?: string; json: boolean }) => {
     const root = resolveWorkspace(opts.workspace);
     const workspace = new Workspace(root);
-    const observation = await findBridgeObservation(workspace.id);
+    const observation = await findBridgeObservation(resolveHub(workspace).hubId);
     if (observation.state === "unknown") {
       if (opts.json) {
         say(JSON.stringify({ ok: false, running: null, state: "unknown", reason: observation.reason }));
@@ -502,7 +504,7 @@ program
     let bridgeUnknown = false;
     let workspaceNameRestartRequired = false;
     if (workspace) {
-      const observation = await findBridgeObservation(workspace.id);
+      const observation = await findBridgeObservation(resolveHub(workspace).hubId);
       if (observation.state === "healthy") {
         runtime = observation.runtime;
       } else if (observation.state === "unknown") {
@@ -799,12 +801,13 @@ program
   .action(async (opts: { workspace?: string }) => {
     const root = resolveWorkspace(opts.workspace);
     const workspace = new Workspace(root);
-    const runtime = await findLiveBridge(workspace.id);
-    if (runtime) {
-      await adminFetch(runtime, "POST", "/admin/revoke-all");
+    const observation = await findBridgeObservation(resolveHub(workspace).hubId);
+    if (observation.state === "unknown") throw new Error("LIFECYCLE_BUSY: Cannot verify the bridge before revoking access.");
+    if (observation.state === "healthy") {
+      await adminFetch(observation.runtime, "POST", "/admin/revoke-all");
     } else {
       // bridge not running: revoke directly in the persisted store
-      new AuthStore(workspace.id).revokeAll();
+      new AuthStore(resolveHub(workspace).hubId).revokeAll();
     }
     check("Revoked ChatGPT access to this project (all tokens revoked)");
   });
@@ -848,6 +851,7 @@ program
     const workspace = new Workspace(resolveWorkspace(opts.workspace));
     const candidates = [
       path.join(getStateDir(), "logs", "bridge.log"),
+      path.join(getStateDir(), "logs", `bridge-${resolveHub(workspace).hubId}.out.log`),
       path.join(getStateDir(), "logs", `bridge-${workspace.id}.out.log`),
     ];
     let shown = false;
@@ -881,7 +885,7 @@ const workspaceCmd = program
 
 function ownerRegistry(option?: string): WorkspaceRegistry {
   const owner = new Workspace(resolveWorkspace(option ?? workspaceCmd.opts().workspace));
-  return new WorkspaceRegistry(owner.id);
+  return WorkspaceRegistry.forWorkspace(owner);
 }
 
 workspaceCmd.command("list")
@@ -1122,7 +1126,7 @@ tunnelCmd
           throw new Error("NAMING_CONFLICT: A Quick Tunnel cannot use a custom tunnel name or hostname.");
         }
         const state = chooseQuickTunnel(workspace.id);
-        if (await findLiveBridge(workspace.id)) {
+        if (await findLiveBridge(resolveHub(workspace).hubId)) {
           if (previous.preference === "named") await stopBridge(root);
         }
         const payload = { ...tunnelChoicePayload(workspace), state };
@@ -1161,7 +1165,7 @@ tunnelCmd
         return;
       }
       const changed = previous.preference !== result.state.preference || previous.tunnelName !== result.state.tunnelName || previous.hostname !== result.state.hostname;
-      if (changed && await findLiveBridge(workspace.id)) await stopBridge(root);
+      if (changed && await findLiveBridge(resolveHub(workspace).hubId)) await stopBridge(root);
       const payload = {
         ...tunnelChoicePayload(workspace),
         ok: result.ok,

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveHub } from "../hub/store.js";
 import { Workspace } from "../workspace/manager.js";
 import { AuthStore } from "../auth/store.js";
 import { adminFetch } from "../process/daemon.js";
@@ -26,7 +27,8 @@ export function acquireWorkspaceLock(id: string): () => void {
 
 export async function disconnectWorkspace(root: string, opts: { remember?: boolean } = {}): Promise<void> {
   const workspace = new Workspace(root);
-  const observed = await findBridgeObservation(workspace.id);
+  const hub = resolveHub(workspace);
+  const observed = await findBridgeObservation(hub.hubId);
   const endpoint = readLastEndpoint(workspace.id);
   if (endpoint && endpoint.workspaceId !== workspace.id) throw new Error("OWNERSHIP_CONFLICT: Endpoint belongs to another workspace.");
   const disconnected = endpoint ?? {
@@ -43,12 +45,12 @@ export async function disconnectWorkspace(root: string, opts: { remember?: boole
     if (opts.remember !== false) writeLastEndpoint({ ...disconnected, disconnected: true });
     await adminFetch(observed.runtime, "POST", "/admin/shutdown", 5000);
     for (let n = 0; n < 50; n++) {
-      if ((await findBridgeObservation(workspace.id)).state === "stopped") return;
+      if ((await findBridgeObservation(hub.hubId)).state === "stopped") return;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     throw new Error("LIFECYCLE_BUSY: Bridge shutdown is not confirmed; no resources were deleted.");
   }
-  new AuthStore(workspace.id).revokeAll();
+  new AuthStore(hub.hubId).revokeAll();
   if (opts.remember !== false) writeLastEndpoint({ ...disconnected, disconnected: true });
 }
 

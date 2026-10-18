@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { resolveHub } from "../../src/hub/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, isolateStateDir, makeTmpDir } from "../helpers.js";
 
@@ -37,8 +38,8 @@ it("preserves bare workspace -w and supports owner-scoped list/add/remove by ali
   expect(json(["list", "-w", root])).toEqual({ workspaces: [] });
   expect(fs.readdirSync(root)).toEqual([]);
   expect(fs.readdirSync(other)).toEqual([]);
-  expect(fs.readdirSync(state)).toEqual(["workspace-registries"]);
-  expect(fs.readdirSync(path.join(state, "workspace-registries"))).toEqual([`${id}.json`]);
+  expect(fs.readdirSync(state)).toEqual(["hub-mappings", "hubs", "workspace-registries"]);
+  expect(fs.readdirSync(path.join(state, "workspace-registries"))).toEqual([`${resolveHub(new Workspace(root)).hubId}.json`]);
 });
 
 it("resolves the owner from -w before/after the subcommand or defaults to cwd", () => {
