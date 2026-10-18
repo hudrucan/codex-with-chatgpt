@@ -213,7 +213,7 @@ describe("runtime naming", () => {
     const root = makeTmpDir("legacy-display"); dirs.push(root);
     write(root, ".c2c.json", JSON.stringify({ name: "Legacy", maxIterations: 9 }));
     expect(new Workspace(root).name).toBe("Legacy");
-    expect(new Workspace(root).projectConfig.maxIterations).toBe(9);
+    expect(new Workspace(root).projectConfig).toEqual({ name: "Legacy" });
   });
 
   it("stores the display name outside the repo, preserving canonical-root identity and legacy config", () => {

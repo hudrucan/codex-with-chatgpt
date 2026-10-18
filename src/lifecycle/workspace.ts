@@ -111,11 +111,12 @@ export async function destroyWorkspace(root: string, opts: {
     await account.deleteTunnel({ id: plan.tunnel.id, name: plan.tunnel.name! });
   }
   // Remove only workspace-scoped state. Shared settings, account credentials,
-  // global logs, Project collections, and repository configuration are retained.
+  // global logs, ChatGPT history, and repository configuration are retained.
   const stateDir = fs.realpathSync(getStateDir());
   const entries = [
     ["workspaces", `${workspace.id}.json`], ["auth", `${workspace.id}.json`], ["endpoints", `${workspace.id}.json`],
     ["tunnels", `${workspace.id}.json`], ["runtime", `${workspace.id}.json`],
+    // Cleanup-only compatibility: legacy workflow data is never read by the bridge.
     ["sessions", `${workspace.id}.json`], ["executions", `${workspace.id}.jsonl`],
     ["execution-outputs", workspace.id], ["logs", `bridge-${workspace.id}.out.log`],
   ];

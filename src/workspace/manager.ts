@@ -58,7 +58,6 @@ export interface ListDirectoryResult {
 
 export interface ProjectConfig {
   name?: string;
-  maxIterations?: number;
 }
 
 function parseProjectConfig(value: unknown): ProjectConfig {
@@ -66,7 +65,6 @@ function parseProjectConfig(value: unknown): ProjectConfig {
   const raw = value as Record<string, unknown>;
   const config: ProjectConfig = {};
   if (typeof raw.name === "string") config.name = raw.name;
-  if (typeof raw.maxIterations === "number") config.maxIterations = raw.maxIterations;
   return config;
 }
 

@@ -68,14 +68,14 @@ c2c connector bind -w <workspace> --name "<desired-name>" --mcp-url "<desired-ur
 
 The acknowledgement checks the current desired name/URL/workspace. It is a
 trusted local agent receipt of observed ChatGPT results, not independent browser
-attestation. Never fabricate it. Session metadata cannot bind a pending name.
-Update session/Project name references after bind succeeds.
+attestation. Never fabricate it. After bind and a healthy doctor check, report
+`MCP READY` and stop; no Project/session metadata is managed.
 
 ## Disconnect and destroy
 
 `c2c unpair` retains its original token-revocation-only behavior.
 `c2c disconnect` revokes access, confirms bridge shutdown, and retains connector,
-DNS, tunnel, naming and session state. Doctor respects `disconnected`; explicit
+DNS, tunnel and naming state. Doctor respects `disconnected`; explicit
 setup/start/restart reconnects. Stopping/revoking never deprovisions resources.
 
 `c2c destroy --json` produces a read-only plan with ownership checks. The Skill
@@ -97,8 +97,9 @@ prove a browser deletion. The Skill must enforce those ownership checks.
 
 Destroy retains a receipt before revoke/stop, then rechecks/removes owned DNS,
 deletes the exact UUID/name without forcing active connections, and finally
-removes only that workspace's auth/runtime/endpoint/tunnel/session/registration,
-execution records/output and daemon log. Failure retains state and receipt;
+removes only that workspace's auth/runtime/endpoint/tunnel/registration and
+daemon log. For upgrades, it also cleans obsolete workspace-keyed session and
+execution files; no active feature reads or writes them. Failure retains state and receipt;
 retry `destroy --confirm`. Other setup commands are blocked during destroy.
 Shared credentials, global prefs/logs, other workspaces, repository configuration
 and ChatGPT Project/chat history are not removed.

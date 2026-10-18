@@ -7,7 +7,6 @@ export const SUPPORTED_SCOPES = [
   "workspace.read",
   "workspace.search",
   "git.read",
-  "execution.read",
   "offline_access",
 ] as const;
 
@@ -274,5 +273,6 @@ export function filterScopes(requested: string | undefined): string[] {
   if (!requested || requested.trim() === "") return [...SUPPORTED_SCOPES];
   const asked = requested.split(/[\s+]+/).filter(Boolean);
   const granted = asked.filter((scope) => (SUPPORTED_SCOPES as readonly string[]).includes(scope));
-  return granted.length > 0 ? granted : [...SUPPORTED_SCOPES];
+  // An explicit retired/unknown scope must not expand into all core permissions.
+  return granted;
 }

@@ -1,4 +1,4 @@
-import { Command, InvalidArgumentError } from "commander";
+import { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -34,6 +34,7 @@ import { saveWorkspaceDisplayName, userFacingName } from "../config/naming.js";
 import { ensureSandboxAllowlist, getCodexConfigPath, isStateDirAllowlisted } from "../config/sandbox-allow.js";
 import { mergeUiPrefs, readUiPrefs, SETUP_MODES, type SetupMode } from "../config/ui-prefs.js";
 import {
+  DEFAULT_CONNECTOR_NAME,
   CHATGPT_CREATE_CONNECTOR_URL,
   CHATGPT_DEVELOPER_MODE_URL,
   CHATGPT_PLUGINS_URL,
@@ -50,21 +51,6 @@ import {
 import { pullFork, verifyForkOrigin } from "../config/update.js";
 import { acquireWorkspaceLock, destroyWorkspace, disconnectWorkspace, lifecycleFile } from "../lifecycle/workspace.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
-import {
-  clearChatPointer,
-  mergeSession,
-  readSession,
-  resolveConversation,
-  writeSession,
-  PROTOCOL_STATES,
-  WAITING_FOR,
-  type ConversationMode,
-  type ProtocolState,
-  type WaitingFor,
-} from "../session/state.js";
-import { appendExecutionRecord } from "../execution/records.js";
-import { saveExecutionOutput } from "../execution/output.js";
-import { importMediaAsset } from "../media/import.js";
 
 const program = new Command();
 
@@ -76,48 +62,6 @@ const cross = (msg: string): void => say(`✗ ${msg}`);
 
 function resolveWorkspace(option?: string): string {
   return path.resolve(option ?? process.cwd());
-}
-
-function parseInteger(value: string): number {
-  const normalized = value.trim();
-  if (!/^-?\d+$/.test(normalized)) {
-    throw new InvalidArgumentError("must be an integer");
-  }
-  const parsed = Number(normalized);
-  if (!Number.isSafeInteger(parsed)) throw new InvalidArgumentError("must be a safe integer");
-  return parsed;
-}
-
-function parseNonNegativeInteger(value: string): number {
-  const parsed = parseInteger(value);
-  if (parsed < 0) throw new InvalidArgumentError("must be a non-negative integer");
-  return parsed;
-}
-
-function parseChangedFiles(value: string): string[] | number {
-  const normalized = value.trim();
-  if (/^-?\d+$/.test(normalized)) {
-    const count = parseInteger(normalized);
-    if (count < 0) {
-      throw new InvalidArgumentError("changed-files count must be a non-negative safe integer");
-    }
-    return count;
-  }
-  return value.split(",").map((file) => file.trim()).filter(Boolean);
-}
-
-/** Local harness output only. Never pasted into ChatGPT. */
-const MAX_RECORD_OUTPUT_READ = 256 * 1024;
-
-function readCappedUtf8(filePath: string, maxBytes: number): string {
-  const fd = fs.openSync(filePath, "r");
-  try {
-    const buf = Buffer.alloc(maxBytes);
-    const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    return buf.subarray(0, n).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 function tunnelChoicePayload(workspace: Workspace, zoneHint?: string): Record<string, unknown> {
@@ -205,7 +149,7 @@ async function ensureBridgeAndTunnel(
 
 program
   .name("c2c")
-  .description(`${PRODUCT_NAME} — ChatGPT thinks. Codex works.`)
+  .description(`${PRODUCT_NAME} — Secure read-only workspace access for ChatGPT.`)
   .version(VERSION, "-v, --version")
   .configureHelp({ sortSubcommands: true });
 
@@ -270,7 +214,7 @@ program
         say(JSON.stringify({ ok: true, port: runtime.port, workspaceId: info.workspaceId, mcpUrl, connectorName }));
         return;
       }
-      check(`Project detected(${info.workspaceName})`);
+      check(`Workspace detected(${info.workspaceName})`);
       check("Workspace Bridge started");
       if (mcpUrl) check("Secure connection established");
     } catch (error) {
@@ -378,7 +322,7 @@ program
         );
         return;
       }
-      check(`Project detected(${info.workspaceName})`);
+      check(`Workspace detected(${info.workspaceName})`);
       check("Workspace Bridge started");
       if (mcpUrl) check("Secure connection established");
       say("");
@@ -600,7 +544,7 @@ program
           previousName: lastEndpoint?.desiredConnectorName ?? lastEndpoint?.connectorName,
           hadEndpointBefore: Boolean(lastEndpoint),
         })
-      : "Codex with ChatGPT";
+      : DEFAULT_CONNECTOR_NAME;
     const tunnelState = workspace ? readTunnelState(workspace.id) : null;
     const namedReady = tunnelState ? isNamedTunnelReady(tunnelState) : false;
     const namedCredential = namedReady ? inspectNamedTunnelCredentials(tunnelState?.tunnelId) : null;
@@ -890,7 +834,7 @@ program.command("destroy")
     } catch (error) { handleCliError(error, opts.json); }
   });
 
-// ---------------------------------------------------------------- logs / workspace / record
+// ---------------------------------------------------------------- logs / workspace
 
 program
   .command("logs")
@@ -1032,167 +976,7 @@ acceptUnusedWorkspaceOption(program.command("update").description("Explicitly fa
     } catch (error) { handleCliError(error, opts.json); }
   });
 
-// ---------------------------------------------------------------- session (ChatGPT conversation / Project memory)
-
-const session = program
-  .command("session")
-  .description("Remember the ChatGPT Project and conversation for this workspace");
-
-session
-  .command("get", { isDefault: true })
-  .description("Show the saved ChatGPT conversation / Project for this workspace")
-  .option("-w, --workspace <path>")
-  .option("--json", "machine-readable output", false)
-  .action((opts: { workspace?: string; json: boolean }) => {
-    const workspace = new Workspace(resolveWorkspace(opts.workspace));
-    const saved = readSession(workspace.id);
-    const conversation = resolveConversation(saved);
-    if (opts.json) say(JSON.stringify({ ok: true, session: saved, conversation }));
-    else if (!saved) {
-      say("No ChatGPT session saved. New workspaces default to a Project collection.");
-    } else {
-      say(`Mode: ${conversation.mode === "project" ? "Project collection" : "long-chat"}`);
-      if (conversation.projectUrl) say(`Collection: ${conversation.projectUrl}`);
-      if (saved.title) say(`Session: ${saved.title}`);
-      if (saved.url) say(`Chat: ${saved.url}`);
-      if (saved.connectorName) say(`Connector: ${saved.connectorName}`);
-      if (saved.taskId) say(`Task: ${saved.taskId}(iteration ${saved.iteration ?? 0}, ${saved.lastState ?? "?"})`);
-      if (saved.checkpoint) {
-        say(
-          `Checkpoint: ${saved.checkpoint.protocolState} / waiting for ${saved.checkpoint.waitingFor}(iteration ${saved.checkpoint.iteration})`
-        );
-      }
-    }
-  });
-
-// ---------------------------------------------------------------- generated media handoff
-
-const assetCmd = program
-  .command("asset")
-  .description("Safely hand downloaded media into the current workspace");
-
-assetCmd
-  .command("import", { isDefault: true })
-  .description("Validate and copy a downloaded image or video into the workspace")
-  .requiredOption("--from <path>", "downloaded source file")
-  .requiredOption("--to <path>", "new workspace-relative destination")
-  .option("-w, --workspace <path>")
-  .option("--json", "machine-readable output", false)
-  .action(async (opts: { from: string; to: string; workspace?: string; json: boolean }) => {
-    try {
-      const result = await importMediaAsset({
-        workspaceRoot: resolveWorkspace(opts.workspace),
-        sourcePath: opts.from,
-        destinationPath: opts.to,
-      });
-      if (opts.json) say(JSON.stringify({ ok: true, ...result }));
-      else check(`Media imported: ${result.destinationPath}`);
-    } catch (error) {
-      handleCliError(error, opts.json);
-    }
-  });
-
-session
-  .command("set")
-  .description("Save the ChatGPT Project and/or conversation for this workspace")
-  .option("-w, --workspace <path>")
-  .option("--url <url>", "ChatGPT conversation URL from the address bar")
-  .option("--title <title>")
-  .option("--task <id>")
-  .option("--iteration <n>")
-  .option("--state <state>", "last protocol state, e.g. EXECUTED")
-  .option("--mode <mode>", "long-chat or project")
-  .option("--project-url <url>", "ChatGPT Project collection URL (…/g/g-p-…/project)")
-  .option("--connector-name <name>", "exact connector title for this workspace")
-  .option("--protocol-state <state>", "checkpoint protocol state, e.g. EXECUTED_SENT")
-  .option("--waiting-for <who>", "none | GPT_PLAN | GPT_REVIEW | USER")
-  .option("--goal <text>", "original task goal for resume / HANDOFF")
-  .option("--completed-subtasks <text>")
-  .option("--known-issues <text>")
-  .option("--next-step <text>")
-  .option("--clear-checkpoint", "drop the active checkpoint (task DONE)", false)
-  .action(
-    (opts: {
-      workspace?: string;
-      url?: string;
-      title?: string;
-      task?: string;
-      iteration?: string;
-      state?: string;
-      mode?: string;
-      projectUrl?: string;
-      connectorName?: string;
-      protocolState?: string;
-      waitingFor?: string;
-      goal?: string;
-      completedSubtasks?: string;
-      knownIssues?: string;
-      nextStep?: string;
-      clearCheckpoint: boolean;
-    }) => {
-      const workspace = new Workspace(resolveWorkspace(opts.workspace));
-      const modeRaw = opts.mode?.trim().toLowerCase();
-      if (modeRaw && modeRaw !== "long-chat" && modeRaw !== "project") {
-        throw new Error("mode must be long-chat or project");
-      }
-      const protocolRaw = opts.protocolState?.trim().toUpperCase();
-      if (protocolRaw && !PROTOCOL_STATES.includes(protocolRaw as ProtocolState)) {
-        throw new Error(`protocol-state must be one of ${PROTOCOL_STATES.join(", ")}`);
-      }
-      const waitingRaw = opts.waitingFor?.trim();
-      const waitingNorm = waitingRaw
-        ? waitingRaw.toLowerCase() === "none"
-          ? "none"
-          : waitingRaw.toUpperCase()
-        : undefined;
-      if (waitingNorm && !WAITING_FOR.includes(waitingNorm as WaitingFor)) {
-        throw new Error(`waiting-for must be one of ${WAITING_FOR.join(", ")}`);
-      }
-      if (opts.connectorName !== undefined) {
-        const bound = boundConnector(readLastEndpoint(workspace.id));
-        if (!bound || bound.name !== opts.connectorName) throw new Error("CONNECTOR_BINDING_PENDING: Reconcile ChatGPT and run c2c connector bind before saving its name in session metadata.");
-      }
-      const saved = mergeSession(readSession(workspace.id), {
-        url: opts.url,
-        title: opts.title,
-        taskId: opts.task,
-        iteration: opts.iteration ? parseInt(opts.iteration, 10) : undefined,
-        lastState: opts.state,
-        conversationMode: modeRaw as ConversationMode | undefined,
-        projectUrl: opts.projectUrl,
-        connectorName: opts.connectorName,
-        clearCheckpoint: opts.clearCheckpoint,
-        checkpoint: protocolRaw
-          ? {
-              protocolState: protocolRaw as ProtocolState,
-              waitingFor: (waitingNorm as WaitingFor | undefined) ?? undefined,
-              originalGoal: opts.goal,
-              completedSubtasks: opts.completedSubtasks,
-              knownIssues: opts.knownIssues,
-              nextExpectedStep: opts.nextStep,
-            }
-          : undefined,
-      });
-      writeSession(workspace.id, saved);
-      if (saved.projectUrl && saved.conversationMode === "project") {
-        check("Saved the ChatGPT collection; future chats start or resume from its page");
-      } else {
-        check("Saved the ChatGPT session for future tasks");
-      }
-    }
-  );
-
-session
-  .command("clear")
-  .description("Forget the current ChatGPT chat (Project binding is kept)")
-  .option("-w, --workspace <path>")
-  .action((opts: { workspace?: string }) => {
-    const workspace = new Workspace(resolveWorkspace(opts.workspace));
-    const result = clearChatPointer(workspace.id);
-    if (!result.cleared) say("No ChatGPT session saved.");
-    else if (result.keptProject) check("Cleared the current chat; the collection binding is preserved");
-    else check("Cleared the session; the next task will create a ChatGPT chat");
-  });
+// ---------------------------------------------------------------- setup preferences
 
 const prefsCmd = program
   .command("prefs")
@@ -1248,73 +1032,6 @@ acceptUnusedWorkspaceOption(
       handleCliError(error, opts.json);
     }
   });
-
-program
-  .command("record", { hidden: true })
-  .description("Record an execution summary (used by the Skill)")
-  .option("-w, --workspace <path>")
-  .requiredOption("--task <id>")
-  .requiredOption("--iteration <n>", "non-negative execution iteration", parseNonNegativeInteger)
-  .option("--changed-files <filesOrCount>", "comma-separated files or a count", "0")
-  .option("--tests <summary>", "e.g. '27 passed'")
-  .option("--exit-status <status>", "ok | failed | blocked", "ok")
-  .option("--executor <id>", "id of the executor that ran this iteration, e.g. codex")
-  .option("--notes <text>")
-  .option("--command <text>", "command whose output may be offered to ChatGPT")
-  .option("--output <text>", "command output (prefer --output-file for long logs)")
-  .option("--output-file <path>", "read command output from a local file")
-  .option("--exit-code <n>", "numeric exit code of that command", parseInteger)
-  .action(
-    (opts: {
-      workspace?: string;
-      task: string;
-      iteration: number;
-      changedFiles: string;
-      tests?: string;
-      exitStatus: string;
-      executor?: string;
-      notes?: string;
-      command?: string;
-      output?: string;
-      outputFile?: string;
-      exitCode?: number;
-    }) => {
-      const workspace = new Workspace(resolveWorkspace(opts.workspace));
-      const changed = parseChangedFiles(opts.changedFiles);
-      let outputId: number | undefined;
-      let outputAvailable = false;
-      const rawOutput =
-        opts.outputFile !== undefined
-          ? readCappedUtf8(path.resolve(opts.outputFile), MAX_RECORD_OUTPUT_READ)
-          : opts.output;
-      if (opts.command && rawOutput !== undefined) {
-        const savedOutput = saveExecutionOutput(workspace.id, {
-          command: opts.command,
-          raw: rawOutput,
-          exitCode: opts.exitCode ?? null,
-          taskId: opts.task,
-          iteration: opts.iteration,
-        });
-        outputId = savedOutput.id;
-        outputAvailable = savedOutput.allowed;
-      }
-      appendExecutionRecord(workspace.id, {
-        taskId: opts.task,
-        iteration: opts.iteration,
-        changedFiles: changed,
-        tests: opts.tests ?? null,
-        exitStatus: opts.exitStatus,
-        timestamp: new Date().toISOString(),
-        executor: opts.executor?.slice(0, 80),
-        notes: opts.notes?.slice(0, 400),
-        outputId,
-        outputAvailable,
-      });
-      if (outputId !== undefined && !outputAvailable) check("Recorded execution summary (output not released to ChatGPT)");
-      else if (outputId !== undefined) check("Recorded execution summary and output");
-      else check("Recorded execution summary");
-    }
-  );
 
 const tunnelCmd = program.command("tunnel").description("Choose or inspect the public connection for this workspace");
 

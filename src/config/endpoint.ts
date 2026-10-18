@@ -5,9 +5,10 @@ import { userFacingName } from "./naming.js";
 export const CHATGPT_DEVELOPER_MODE_URL = "https://chatgpt.com/#settings/Security";
 export const CHATGPT_PLUGINS_URL = "https://chatgpt.com/plugins";
 export const CHATGPT_CREATE_CONNECTOR_URL =
-  "https://chatgpt.com/plugins#settings/Connectors?create-connector=true&redirectAfter=%2Fplugins";
+  "https://chatgpt.com/settings/plugins-settings";
 
-export const DEFAULT_CONNECTOR_NAME = "Codex with ChatGPT";
+export const DEFAULT_CONNECTOR_NAME = "Desk C2C Hub";
+export const LEGACY_CONNECTOR_NAME = "Codex with ChatGPT";
 
 export interface LastEndpoint {
   workspaceId: string;
@@ -80,7 +81,7 @@ export function connectorNameFor(opts: {
 }): string {
   if (opts.explicitName !== undefined) return userFacingName(opts.explicitName, "Connector name");
   if (opts.previousName?.trim()) return opts.previousName.trim();
-  if (opts.hadEndpointBefore) return DEFAULT_CONNECTOR_NAME;
+  if (opts.hadEndpointBefore) return LEGACY_CONNECTOR_NAME;
   return `${DEFAULT_CONNECTOR_NAME} · ${sanitizeConnectorLabel(opts.workspaceName, opts.workspaceId)}`;
 }
 
@@ -126,12 +127,12 @@ export function boundConnector(endpoint: LastEndpoint | null): { name: string; m
   if (!endpoint) return null;
   const url = endpoint.bindingVersion === 1 ? endpoint.boundMcpUrl : endpoint.mcpUrl;
   if (!url) return null;
-  return { name: endpoint.connectorName ?? DEFAULT_CONNECTOR_NAME, mcpUrl: url, id: endpoint.connectorId };
+  return { name: endpoint.connectorName ?? LEGACY_CONNECTOR_NAME, mcpUrl: url, id: endpoint.connectorId };
 }
 
 export function connectorReconciliation(endpoint: LastEndpoint | null) {
   const bound = boundConnector(endpoint);
-  const name = endpoint?.desiredConnectorName ?? endpoint?.connectorName ?? DEFAULT_CONNECTOR_NAME;
+  const name = endpoint?.desiredConnectorName ?? endpoint?.connectorName ?? (endpoint ? LEGACY_CONNECTOR_NAME : DEFAULT_CONNECTOR_NAME);
   const action = connectorAction(bound?.mcpUrl, endpoint?.mcpUrl);
   const renamed = Boolean(bound && bound.name !== name);
   return {
@@ -150,7 +151,7 @@ export function connectorReconciliation(endpoint: LastEndpoint | null) {
 export function confirmConnectorBinding(workspaceId: string, opts: { name: string; mcpUrl: string; connectorId: string }): LastEndpoint {
   const endpoint = readLastEndpoint(workspaceId);
   if (!endpoint || endpoint.workspaceId !== workspaceId ||
-      opts.name !== (endpoint.desiredConnectorName ?? endpoint.connectorName ?? DEFAULT_CONNECTOR_NAME) ||
+      opts.name !== (endpoint.desiredConnectorName ?? endpoint.connectorName ?? LEGACY_CONNECTOR_NAME) ||
       !endpoint.mcpUrl || normalizePublicUrl(opts.mcpUrl) !== normalizePublicUrl(endpoint.mcpUrl)) {
     throw new Error("CONNECTOR_BINDING_CONFLICT: Verification does not match the current desired name and endpoint.");
   }

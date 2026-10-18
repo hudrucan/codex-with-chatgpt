@@ -3,6 +3,7 @@ import {
   connectorAction,
   connectorNameFor,
   DEFAULT_CONNECTOR_NAME,
+  LEGACY_CONNECTOR_NAME,
   mcpUrlFromPublic,
   normalizePublicUrl,
   reclaimUserMessage,
@@ -37,7 +38,7 @@ describe("connectorNameFor", () => {
         previousName: "Codex with ChatGPT",
         hadEndpointBefore: true,
       })
-    ).toBe(DEFAULT_CONNECTOR_NAME);
+    ).toBe(LEGACY_CONNECTOR_NAME);
   });
 
   it("keeps the legacy title when this workspace was used before the name field existed", () => {
@@ -47,7 +48,7 @@ describe("connectorNameFor", () => {
         workspaceId: "abc123abc123",
         hadEndpointBefore: true,
       })
-    ).toBe(DEFAULT_CONNECTOR_NAME);
+    ).toBe(LEGACY_CONNECTOR_NAME);
   });
 
   it("gives a new workspace its own connector title", () => {
@@ -57,7 +58,7 @@ describe("connectorNameFor", () => {
         workspaceId: "def456def456",
         hadEndpointBefore: false,
       })
-    ).toBe("Codex with ChatGPT · Landing");
+    ).toBe(`${DEFAULT_CONNECTOR_NAME} · Landing`);
   });
 });
 

@@ -3,9 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { AuthStore } from "../src/auth/store.js";
 import { startBridge, type Bridge } from "../src/bridge/server.js";
-import { appendExecutionRecord } from "../src/execution/records.js";
-import { saveExecutionOutput } from "../src/execution/output.js";
 import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir } from "./helpers.js";
 
 let root: string;
@@ -13,6 +12,7 @@ let bridge: Bridge;
 let client: Client;
 let accessToken: string;
 let stateDir: string;
+let authFile: string;
 
 function textOf(result: { content?: unknown }): string {
   const content = result.content as { type: string; text: string }[];
@@ -51,15 +51,16 @@ beforeAll(async () => {
   // an uncommitted change so git_diff has content
   write(root, "src/index.ts", "export const answer = 43; // changed\n");
 
+  authFile = path.join(makeTmpDir("auth"), "store.json");
   bridge = await startBridge({
     workspaceRoot: root,
     port: 0,
     persistRuntime: false,
-    authStoreFile: path.join(makeTmpDir("auth"), "store.json"),
+    authStoreFile: authFile,
   });
   const tokens = bridge.authStore.issueTokens({
     clientId: "it-client",
-    scopes: ["workspace.read", "workspace.search", "git.read", "execution.read"],
+    scopes: ["workspace.read", "workspace.search", "git.read"],
   });
   accessToken = tokens.accessToken;
 
@@ -74,22 +75,21 @@ afterAll(async () => {
   await client.close();
   await bridge.close();
   cleanup(root);
+  cleanup(stateDir);
+  cleanup(path.dirname(authFile));
 });
 
 describe("MCP tools over Streamable HTTP", () => {
-  it("lists all ten read-only tools", async () => {
+  it("lists exactly seven read-only bridge tools", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
-      "execution_output",
-      "execution_summary",
       "git_diff",
       "git_status",
       "list_directory",
       "read_file",
       "read_image",
       "search_workspace",
-      "test_status",
       "workspace_info",
     ]);
     // no write tools in V1
@@ -104,9 +104,6 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "search_workspace", ["matches", "matchCount", "truncated", "engine"]);
     expectToolOutputSchema(tools, "git_status", ["isRepo", "branch", "staged", "unstaged", "untracked", "hidden"]);
     expectToolOutputSchema(tools, "git_diff", ["isRepo", "mode", "diff", "hasMore", "nextOffset"]);
-    expectToolOutputSchema(tools, "test_status", ["available", "tests", "outputAvailable", "outputId"]);
-    expectToolOutputSchema(tools, "execution_summary", ["records"]);
-    expectToolOutputSchema(tools, "execution_output", ["action", "items", "text"]);
   });
 
   it("documents git_diff pagination with its output field names", async () => {
@@ -203,108 +200,24 @@ describe("MCP tools over Streamable HTTP", () => {
     git(root, "reset", "big-change.txt");
   });
 
-  it("execution_summary and test_status read harness records", async () => {
-    appendExecutionRecord(bridge.workspace.id, {
-      taskId: "c2c_test1",
-      iteration: 1,
-      changedFiles: ["src/index.ts"],
-      tests: "27 passed",
-      exitStatus: "ok",
-      timestamp: new Date().toISOString(),
-    });
-    const summary = structuredJsonOf<{ records: { taskId: string }[] }>(
-      await client.callTool({ name: "execution_summary", arguments: {} })
-    );
-    expect(summary.records[0].taskId).toBe("c2c_test1");
-
-    const status = structuredJsonOf<{ available: boolean; tests: string; outputAvailable: boolean; outputId: number | null }>(
-      await client.callTool({ name: "test_status", arguments: {} })
-    );
-    expect(status.available).toBe(true);
-    expect(status.tests).toBe("27 passed");
-    expect(status.outputAvailable).toBe(false);
-    expect(status.outputId).toBeNull();
+  it.each(["test_status", "execution_summary", "execution_output"])("does not expose the removed %s tool", async (name) => {
+    const result = await client.callTool({ name, arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/not found|unknown tool/i);
   });
 
-  it("skips invalid persisted records when reporting execution status", async () => {
-    appendExecutionRecord(bridge.workspace.id, {
-      taskId: "c2c_valid_before_invalid",
-      iteration: 2,
-      changedFiles: 0,
-      tests: "31 passed",
-      exitStatus: "ok",
-      timestamp: new Date().toISOString(),
-    });
-    fs.appendFileSync(
-      path.join(stateDir, "executions", `${bridge.workspace.id}.jsonl`),
-      JSON.stringify({
-        taskId: "c2c_invalid",
-        iteration: null,
-        changedFiles: 0,
-        tests: null,
-        exitStatus: "ok",
-        timestamp: new Date().toISOString(),
-      }) + "\n"
-    );
-
-    const statusResult = await client.callTool({ name: "test_status", arguments: {} });
-    expect(statusResult.isError ?? false).toBe(false);
-    const status = structuredJsonOf<{ taskId: string; iteration: number }>(statusResult);
-    expect(status.taskId).toBe("c2c_valid_before_invalid");
-    expect(status.iteration).toBe(2);
-
-    const summaryResult = await client.callTool({ name: "execution_summary", arguments: { limit: 1 } });
-    expect(summaryResult.isError ?? false).toBe(false);
-    const summary = structuredJsonOf<{ records: { taskId: string }[] }>(summaryResult);
-    expect(summary.records.map((record) => record.taskId)).toEqual(["c2c_valid_before_invalid"]);
-  });
-
-  it("execution_output lists readable items and refuses restricted bodies", async () => {
-    const readable = saveExecutionOutput(bridge.workspace.id, {
-      command: "pnpm test",
-      raw: "FAIL src/a.test.ts\nAssertionError: expected true",
-      exitCode: 1,
-    });
-    const hidden = saveExecutionOutput(bridge.workspace.id, {
-      command: "print-key",
-      raw: "-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----",
-      exitCode: 0,
-    });
-    const listResult = await client.callTool({
-      name: "execution_output",
-      arguments: { action: "list" },
-    });
-    const list = structuredJsonOf<{
-      action: "list";
-      items: { id: number; status: string; command: string; text?: string }[];
-    }>(listResult);
-    expect(list.action).toBe("list");
-    expect(list.items.some((item) => item.id === readable.id && item.status === "readable")).toBe(true);
-    expect(list.items.some((item) => item.id === hidden.id && item.status === "restricted")).toBe(true);
-    expect(list.items.every((item) => item.text === undefined)).toBe(true);
-
-    const readResult = await client.callTool({
-      name: "execution_output",
-      arguments: { action: "read", id: readable.id },
-    });
-    const body = structuredJsonOf<{ action: "read"; text: string }>(readResult);
-    expect(body.action).toBe("read");
-    expect(body.text).toContain("AssertionError");
-
-    const denied = await client.callTool({
-      name: "execution_output",
-      arguments: { action: "read", id: hidden.id },
-    });
-    expect(denied.isError).toBe(true);
-    expect(textOf(denied)).toContain("OUTPUT_RESTRICTED");
-    expect(textOf(denied)).not.toContain("BEGIN RSA");
-
-    const missing = await client.callTool({
-      name: "execution_output",
-      arguments: { action: "read", id: 999999 },
-    });
-    expect(missing.isError).toBe(true);
-    expect(textOf(missing)).toContain("NOT_FOUND");
+  it("keeps a persisted legacy token usable for its core scopes", async () => {
+    const legacy = bridge.authStore.issueTokens({ clientId: "legacy", scopes: ["workspace.read", "execution.read"] });
+    const reloaded = new AuthStore(bridge.workspace.id, { file: authFile });
+    expect(reloaded.verifyAccessToken(legacy.accessToken).ok).toBe(true);
+    const legacyClient = new Client({ name: "legacy", version: "1.0.0" });
+    try {
+      await legacyClient.connect(new StreamableHTTPClientTransport(new URL(`${bridge.localBaseUrl()}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${legacy.accessToken}` } },
+      }));
+      const result = await legacyClient.callTool({ name: "workspace_info", arguments: {} });
+      expect(jsonOf<{ workspaceId: string }>(result).workspaceId).toBe(bridge.workspace.id);
+    } finally { await legacyClient.close(); }
   });
 
   it("enforces scopes per tool", async () => {
@@ -317,12 +230,9 @@ describe("MCP tools over Streamable HTTP", () => {
     const denied = await limitedClient.callTool({ name: "git_diff", arguments: {} });
     expect(denied.isError).toBe(true);
     expect(textOf(denied)).toContain("INSUFFICIENT_SCOPE");
-    const outputDenied = await limitedClient.callTool({
-      name: "execution_output",
-      arguments: { action: "list" },
-    });
-    expect(outputDenied.isError).toBe(true);
-    expect(textOf(outputDenied)).toContain("INSUFFICIENT_SCOPE");
+    const searchDenied = await limitedClient.callTool({ name: "search_workspace", arguments: { query: "hello" } });
+    expect(searchDenied.isError).toBe(true);
+    expect(textOf(searchDenied)).toContain("INSUFFICIENT_SCOPE");
     const allowed = await limitedClient.callTool({ name: "read_file", arguments: { path: "hello.txt" } });
     expect(allowed.isError ?? false).toBe(false);
     await limitedClient.close();

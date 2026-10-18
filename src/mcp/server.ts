@@ -4,8 +4,6 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { Workspace, WorkspaceError } from "../workspace/manager.js";
 import { searchWorkspace } from "../workspace/search.js";
 import { gitDiff, gitInfo, gitStatus, type DiffMode } from "../workspace/git.js";
-import { executionRecordSchema, latestExecutionRecord, readExecutionRecords } from "../execution/records.js";
-import { listExecutionOutputs, readExecutionOutput } from "../execution/output.js";
 import type { Logger } from "../logger/index.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
 import { readWorkspaceImage } from "../workspace/media.js";
@@ -144,47 +142,6 @@ const gitDiffOutputSchema = {
   hasMore: z.boolean(),
   nextOffset: z.number().int().nonnegative().nullable(),
   diff: z.string(),
-};
-
-const testStatusOutputSchema = {
-  available: z.boolean(),
-  message: z.string().optional(),
-  taskId: z.string().optional(),
-  iteration: z.number().int().nonnegative().optional(),
-  tests: z.string().nullable().optional(),
-  exitStatus: z.string().optional(),
-  timestamp: z.string().optional(),
-  executor: z.string().optional(),
-  outputAvailable: z.boolean().optional(),
-  outputId: z.number().int().positive().nullable().optional(),
-};
-
-const executionSummaryOutputSchema = {
-  records: z.array(executionRecordSchema),
-};
-
-const executionOutputItemOutputSchema = z.object({
-  id: z.number().int().positive(),
-  command: z.string(),
-  exitCode: z.number().int().nullable(),
-  timestamp: z.string(),
-  taskId: z.string().nullable(),
-  iteration: z.number().int().nullable(),
-  readable: z.boolean(),
-  status: z.enum(["readable", "restricted"]),
-  truncated: z.boolean(),
-  sizeBytes: z.number().int().nonnegative(),
-});
-
-const executionOutputOutputSchema = {
-  action: z.enum(["list", "read"]).describe("The operation represented by this result"),
-  items: z.array(executionOutputItemOutputSchema).optional().describe("Recorded output metadata returned by the list operation"),
-  id: z.number().int().positive().optional(),
-  command: z.string().optional(),
-  exitCode: z.number().int().nullable().optional(),
-  timestamp: z.string().optional(),
-  truncated: z.boolean().optional(),
-  text: z.string().optional().describe("Sanitized command output returned by the read operation"),
 };
 
 export interface McpContext {
@@ -400,113 +357,6 @@ export function createMcpServer(ctx: McpContext): McpServer {
       } catch (error) {
         return mapError(error);
       }
-    }
-  );
-
-  server.registerTool(
-    "test_status",
-    {
-      title: "Test status",
-      description:
-        `Summary of the most recent test run reported by the harness. This does NOT run ` +
-        `tests; it reads the latest execution record. ${UNTRUSTED_NOTE}`,
-      inputSchema: {},
-      outputSchema: testStatusOutputSchema,
-      annotations: { readOnlyHint: true },
-    },
-    async (_args, extra) => {
-      const denied = requireScope(extra.authInfo, "execution.read");
-      if (denied) return denied;
-      const latest = latestExecutionRecord(workspace.id);
-      if (!latest) {
-        return okStructured({ available: false, message: "No execution records yet for this workspace." });
-      }
-      return okStructured({
-        available: true,
-        taskId: latest.taskId,
-        iteration: latest.iteration,
-        tests: latest.tests,
-        exitStatus: latest.exitStatus,
-        timestamp: latest.timestamp,
-        executor: latest.executor,
-        outputAvailable: Boolean(latest.outputAvailable),
-        outputId: latest.outputId ?? null,
-      });
-    }
-  );
-
-  server.registerTool(
-    "execution_summary",
-    {
-      title: "Execution summary",
-      description:
-        `Recent execution records for this workspace: task id, iteration, executor, changed ` +
-        `files, tests and exit status. Use it after an EXECUTED message. ${UNTRUSTED_NOTE}`,
-      inputSchema: {
-        limit: z.number().int().min(1).max(50).default(5),
-      },
-      outputSchema: executionSummaryOutputSchema,
-      annotations: { readOnlyHint: true },
-    },
-    async (args, extra) => {
-      const denied = requireScope(extra.authInfo, "execution.read");
-      if (denied) return denied;
-      return okStructured({ records: readExecutionRecords(workspace.id, args.limit) });
-    }
-  );
-
-  server.registerTool(
-    "execution_output",
-    {
-      title: "Execution output",
-      description:
-        `List or read command output the harness chose to record after a test/build/lint/typecheck ` +
-        `run. Call with action=list first, then action=read and an id. Restricted items have no ` +
-        `body. This does not run commands. ${UNTRUSTED_NOTE}`,
-      inputSchema: {
-        action: z.enum(["list", "read"]).default("list"),
-        id: z.number().int().positive().optional(),
-        limit: z.number().int().min(1).max(50).default(20),
-      },
-      outputSchema: executionOutputOutputSchema,
-      annotations: { readOnlyHint: true },
-    },
-    async (args, extra) => {
-      const denied = requireScope(extra.authInfo, "execution.read");
-      if (denied) return denied;
-      const action = args.action ?? "list";
-      if (action === "list") {
-        const items = listExecutionOutputs(workspace.id, args.limit).map((item) => ({
-          id: item.id,
-          command: item.command,
-          exitCode: item.exitCode,
-          timestamp: item.timestamp,
-          taskId: item.taskId ?? null,
-          iteration: item.iteration ?? null,
-          readable: item.allowed,
-          status: item.allowed ? "readable" : "restricted",
-          truncated: item.truncated,
-          sizeBytes: item.sizeBytes,
-        }));
-        return okStructured({ action: "list", items });
-      }
-      if (args.id === undefined) return fail("INVALID_ARGUMENTS", "read requires id");
-      const result = readExecutionOutput(workspace.id, args.id);
-      if (!result.ok) {
-        if (result.error === "OUTPUT_RESTRICTED") {
-          return fail("OUTPUT_RESTRICTED", "This output was not released for ChatGPT to read.");
-        }
-        return fail("NOT_FOUND", `No execution output with id ${args.id}.`);
-      }
-      return okStructured({
-        action: "read",
-        id: result.meta.id,
-        command: result.meta.command,
-        exitCode: result.meta.exitCode,
-        timestamp: result.meta.timestamp,
-        truncated: result.meta.truncated,
-        text: result.text,
-      });
     }
   );
 

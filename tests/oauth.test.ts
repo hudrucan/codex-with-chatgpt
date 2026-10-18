@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import path from "node:path";
+import { filterScopes } from "../src/auth/store.js";
 import { startBridge, type Bridge } from "../src/bridge/server.js";
 import { makeTmpDir, cleanup, write, isolateStateDir, pkceVerifierAndChallenge } from "./helpers.js";
 
@@ -42,7 +43,8 @@ async function authorizeWithPairing(
   clientId: string,
   challenge: string,
   pairingCode: string,
-  state = "st-123"
+  state = "st-123",
+  scope = "workspace.read workspace.search git.read offline_access"
 ): Promise<{ code: string | null; location: string | null; page?: string; status?: number }> {
   const authorizeUrl = new URL(`${base}/oauth/authorize`);
   authorizeUrl.searchParams.set("client_id", clientId);
@@ -51,7 +53,7 @@ async function authorizeWithPairing(
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("code_challenge", challenge);
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
-  authorizeUrl.searchParams.set("scope", "workspace.read workspace.search git.read execution.read offline_access");
+  authorizeUrl.searchParams.set("scope", scope);
 
   const pageResponse = await fetch(authorizeUrl, { redirect: "manual" });
   const html = await pageResponse.text();
@@ -329,5 +331,37 @@ describe("refresh token rotation", () => {
 
     const replayed = await refresh(initial.body.refresh_token);
     expect(replayed.status).toBe(400);
+  });
+});
+
+
+describe("bridge-only OAuth scopes", () => {
+  it("does not broaden retired execution-only or unknown-only requests", () => {
+    expect(filterScopes("execution.read")).toEqual([]);
+    expect(filterScopes("unknown.scope")).toEqual([]);
+    expect(filterScopes("execution.read workspace.read")).toEqual(["workspace.read"]);
+    expect(filterScopes(undefined)).toEqual(["workspace.read", "workspace.search", "git.read", "offline_access"]);
+  });
+
+  it("does not grant core access to an execution-only OAuth authorization", async () => {
+    const clientId = await registerClient();
+    const { verifier, challenge } = pkceVerifierAndChallenge();
+    const pairing = bridge.pairing.create();
+    const authorization = await authorizeWithPairing(clientId, challenge, pairing.code, "legacy-scope", "execution.read");
+    expect(authorization.status).toBe(302);
+    const token = await exchangeToken(clientId, authorization.code!, verifier);
+    expect(token.status).toBe(200);
+    expect(token.body.scope).toBe("");
+    const verified = bridge.authStore.verifyAccessToken(token.body.access_token);
+    expect(verified.ok).toBe(true);
+    if (verified.ok) expect(verified.record.scopes).toEqual([]);
+  });
+
+  it("advertises only the remaining bridge scopes", async () => {
+    const metadata = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
+    expect(metadata.scopes_supported).toEqual(["workspace.read", "workspace.search", "git.read", "offline_access"]);
+    const resource = await (await fetch(`${base}/.well-known/oauth-protected-resource/mcp`)).json();
+    expect(resource.resource_name).toBe("Desk C2C Hub");
+    expect(resource.scopes_supported).toEqual(metadata.scopes_supported);
   });
 });

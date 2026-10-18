@@ -185,7 +185,7 @@ describe("workspace identity", () => {
     );
     const namedWs = new Workspace(named);
     expect(namedWs.name).toBe("Remi");
-    expect(namedWs.projectConfig.maxIterations).toBe(12);
+    expect(namedWs.projectConfig).toEqual({ name: "Remi" }); // legacy loop settings are ignored
     cleanup(named);
   });
 

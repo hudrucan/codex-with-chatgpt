@@ -75,7 +75,6 @@ function pairingPage(opts: {
     "workspace.read": "Read files in this workspace",
     "workspace.search": "Search this workspace",
     "git.read": "Read git status and diffs",
-    "execution.read": "Read Codex execution summaries",
     offline_access: "Stay connected between sessions",
   };
   const scopeList = opts.scopes
