@@ -2,6 +2,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import type { Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { Workspace } from "../workspace/manager.js";
+import { WorkspaceRegistry } from "../workspace/registry.js";
 import { AuthStore } from "../auth/store.js";
 import { createOAuthRouter } from "../auth/oauth.js";
 import { bearerAuth } from "../auth/middleware.js";
@@ -87,6 +88,9 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
     throw new Error("The bridge only binds to loopback addresses. Public exposure goes through the tunnel.");
   }
 
+  const registry = new WorkspaceRegistry(workspace.id);
+  registry.add(workspace.root);
+
   const authStore = new AuthStore(workspace.id, { file: opts.authStoreFile });
   const pairing = new PairingManager(workspace.id, { ttlMs: opts.pairingTtlMs });
   const tunnel = opts.tunnelProvider ?? tunnelForWorkspace(workspace.id, logger);
@@ -125,7 +129,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
 
   // ---- MCP endpoint (bearer-protected) --------------------------------------
 
-  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ workspace, logger }), logger);
+  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ workspace, logger, registry }), logger);
   app.all(
     "/mcp",
     express.json({ limit: "8mb" }),

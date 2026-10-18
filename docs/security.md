@@ -2,12 +2,15 @@
 
 ## Trust boundaries
 
-1. **Workspace root** is the smallest authorization boundary. One bridge serves
-   exactly one workspace; every token is bound to `workspace_id`; a token for
-   project A returns 403 on project B's bridge.
+1. **Bridge startup identity** owns the read grants. Every token remains bound
+   to that owner's `workspace_id`. A bridge reads only canonical roots explicitly
+   registered in `workspace-registries/<ownerWorkspaceId>.json`; another bridge
+   in the same state directory cannot use or discover those grants. The registry
+   file's owner ID must match the bridge startup identity. The unowned legacy
+   `workspace-registry.json` is ignored, never automatically migrated.
 2. **Workspace content is untrusted.** README, comments, diffs may contain
-   prompt injection. Every MCP tool description carries an explicit warning and
-   tools never grant capabilities based on file content.
+   prompt injection. Workspace-content tool descriptions carry an explicit warning
+   and tools never grant capabilities based on file content.
 3. **The model never sees long-lived credentials.** Browser automation only ever
    handles the one-time pairing code. Access/refresh tokens travel only inside
    the OAuth redirect/token endpoints between ChatGPT's client and the bridge.
@@ -21,6 +24,7 @@
 | OAuth CSRF | `state` round-tripped verbatim; authorization requests are server-side records keyed by random ids |
 | Code interception | PKCE S256 mandatory (plain rejected); authorization codes are one-time, 5-minute TTL, bound to client + redirect URI |
 | Token theft | Opaque high-entropy tokens; stored only as SHA-256 hashes; access tokens live 1 h; refresh tokens rotate on every use (replay of the old one fails); revocation endpoint + `c2c unpair` |
+| Cross-owner repo access | Registries and alias namespaces are keyed by the bridge startup workspace ID; MCP accepts no owner override and resolves registered aliases/IDs independently on every tool call |
 | Workspace traversal | `realpath` canonicalization of the deepest existing ancestor; containment check against the canonical root; case-insensitive comparison on macOS/Windows; rejects `..`, absolute escapes, backslash tricks, null bytes |
 | Symlink escape | Canonicalization resolves symlinks before the containment check (file and directory symlinks both covered by tests) |
 | Sensitive files | Deny-by-default patterns (.env*, keys, SSH, cloud creds, keychains…) enforced at resolve time — reads, listings, and search all pass through the same gate; `git diff` adds pathspec excludes; `.env.example` allowed |
@@ -45,12 +49,24 @@ State lives under the OS-convention app dir
 (`~/Library/Application Support/codex-with-chatgpt` on macOS), directories 0700,
 files 0600. Named-hostname preference and tunnel metadata live there too
 (`tunnels/<workspaceId>.json`) — never in the project. Only SHA-256 hashes of
-tokens are persisted — a stolen state file does not yield usable bearer tokens.
+tokens are persisted — a stolen token-hash file does not yield usable bearer tokens.
+Read grants live in `workspace-registries/<ownerWorkspaceId>.json`, with matching
+`ownerWorkspaceId` metadata and canonical roots. Registry updates use an exclusive
+owner-local lock and atomic replacement; no repository configuration is written.
 
 **Storage limitation**: client registrations and token hashes are file-based rather
 than OS-keychain-based. Raw tokens are never written anywhere. Keychain integration is not implemented.
 
 ## MCP capability boundary
+
+Eight read-only tools are exposed. `list_workspaces` requires `workspace.read`
+and returns only aliases and IDs from this connection owner's registry, without
+local roots. The seven workspace tools accept an optional `workspace` alias/ID,
+never an arbitrary root path. Omission selects the sole registration; multiple
+registrations return `WORKSPACE_REQUIRED` with the same safe alias/ID list.
+Canonical containment, sensitive-file and git policies apply within each selected
+root. No call changes a current/open workspace. Removing a grant takes effect on
+the next call; startup auto-registers only the bridge owner's root.
 
 Write files, delete files, run shell commands, commit, install packages —
 these tools do not exist on the server, so no prompt injection, scope bug, or

@@ -80,13 +80,14 @@ afterAll(async () => {
 });
 
 describe("MCP tools over Streamable HTTP", () => {
-  it("lists exactly seven read-only bridge tools", async () => {
+  it("lists eight read-only bridge tools", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
       "git_diff",
       "git_status",
       "list_directory",
+      "list_workspaces",
       "read_file",
       "read_image",
       "search_workspace",

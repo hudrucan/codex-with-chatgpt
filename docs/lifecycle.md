@@ -1,8 +1,10 @@
 # Naming and resource lifecycle
 
 The canonical workspace root determines `workspaceId`. Display names never key
-OAuth tokens, runtime state, or Cloudflare tunnel UUIDs. This remains one bridge,
-one workspace and one connector; MCP remains read-only.
+OAuth tokens, runtime state, or Cloudflare tunnel UUIDs. Each bridge and connector
+retains its startup workspace as resource owner. Its owner-scoped registry can
+grant read access to additional repos without transferring lifecycle ownership;
+MCP remains read-only.
 
 ## Local display names
 
@@ -75,7 +77,8 @@ attestation. Never fabricate it. After bind and a healthy doctor check, report
 
 `c2c unpair` retains its original token-revocation-only behavior.
 `c2c disconnect` revokes access, confirms bridge shutdown, and retains connector,
-DNS, tunnel and naming state. Doctor respects `disconnected`; explicit
+DNS, tunnel, naming state and the owner's workspace registry. Doctor respects
+`disconnected`; explicit
 setup/start/restart reconnects. Stopping/revoking never deprovisions resources.
 
 `c2c destroy --json` produces a read-only plan with ownership checks. The Skill
@@ -99,8 +102,13 @@ Destroy retains a receipt before revoke/stop, then rechecks/removes owned DNS,
 deletes the exact UUID/name without forcing active connections, and finally
 removes only that workspace's auth/runtime/endpoint/tunnel/registration and
 daemon log. For upgrades, it also cleans obsolete workspace-keyed session and
-execution files; no active feature reads or writes them. Failure retains state and receipt;
-retry `destroy --confirm`. Other setup commands are blocked during destroy.
+execution files; no active feature reads or writes them. The final local cleanup
+removes only `workspace-registries/<ownerWorkspaceId>.json`, after all other local
+state and receipt cleanup succeeds. A failure before that step retains the
+registry; a registry-removal failure restores the receipt for recovery. Partial
+or failed destroy retains the registry; retry `destroy --confirm`. The unowned
+`workspace-registry.json` and every other owner's registry remain untouched.
+Other setup commands are blocked during destroy.
 Shared credentials, global prefs/logs, other workspaces, repository configuration
 and ChatGPT Project/chat history are not removed.
 

@@ -5,7 +5,8 @@ A secure read-only MCP bridge from ChatGPT to a local repository.
 Codex handles setup and connection lifecycle. ChatGPT reads the connected
 workspace through MCP. Successful setup or reconnect ends at **MCP READY**;
 there is no automatic coding, planning/review loop or ChatGPT Project management.
-One bridge serves one canonical workspace. Multi-repo is not implemented.
+Each bridge retains one canonical startup owner and can read additional local
+repos explicitly registered to that owner.
 
 This is [hudrucan/desk-c2c-hub](https://github.com/hudrucan/desk-c2c-hub), based on
 [XiaoDuoYa/codex-with-chatgpt](https://github.com/XiaoDuoYa/codex-with-chatgpt).
@@ -102,12 +103,89 @@ wrong-origin checkouts. It does not stash/reset. After an explicit pull, install
 with the frozen lockfile, build and reinstall the complete Skill directory.
 Restart and verify an active connection; leave disconnected workspaces stopped.
 
+## Registered workspaces (phase 1)
+
+One existing MCP connection can read multiple explicitly registered local repos:
+
+```bash
+c2c workspace list -w /path/to/hub-root --json
+c2c workspace add /path/to/repo -w /path/to/hub-root --alias backend
+c2c workspace add /path/to/another-repo -w /path/to/hub-root
+c2c workspace remove backend -w /path/to/hub-root
+c2c workspace remove <workspaceId> -w /path/to/hub-root
+```
+
+The bridge automatically registers its canonical startup root. Adding a repo
+only grants read access; it does not start another bridge or provision resources.
+For these subcommands, `-w` selects the canonical bridge startup root (the owner);
+the repo to add is a separate positional path. If `-w` is omitted, the current
+directory selects the owner. Each owner's registrations are isolated even when
+multiple bridges use the same local C2C state directory. Aliases are unique
+within an owner's registry, and can be reused by different owners.
+Removing a registration takes effect on the next tool call, including removal
+of the startup root. Starting that bridge again registers its root again.
+The existing `c2c workspace -w <path> [--json]` command still shows local identity
+and project info without registering the path.
+
+`workspace-registries/<ownerWorkspaceId>.json` lives in the external C2C state
+directory (overridden by `C2C_STATE_DIR`), separately from saved display names
+in `workspaces/`. Its owner must match the bridge's startup workspace ID:
+
+```json
+{
+  "version": 1,
+  "ownerWorkspaceId": "abcdef012345",
+  "workspaces": [
+    { "workspaceId": "0123456789ab", "alias": "backend", "root": "/canonical/local/repo" }
+  ]
+}
+```
+
+The earlier unowned `workspace-registry.json` is ignored, left intact and never
+automatically migrated: its grants cannot be safely attributed to a bridge owner.
+Existing single-repo connectors therefore gain no access to another owner's repos.
+
+No repository configuration is written. IDs retain the existing canonical-root
+hash. Default aliases are `<directory-slug>-<workspaceId>`, independent of add
+order, including repos with identical directory names. Explicit aliases use
+lowercase letters/digits separated by hyphens, at most 100 characters, and cannot
+be a 12-digit hexadecimal workspace ID. Conflicts fail without modifying grants.
+Re-adding a root preserves its alias unless `--alias` explicitly changes it.
+Local registry writes use an exclusive `.lock` file and atomic replacement.
+If a writer crashes leaving a lock, verify no registry writer is running before
+removing only that owner's `workspace-registries/<ownerWorkspaceId>.json.lock`.
+
+MCP `list_workspaces` takes `{}` and returns
+`{ "workspaces": [{ "workspaceId": "0123456789ab", "alias": "backend" }] }`.
+All seven existing workspace tools accept an optional string `workspace` input,
+with their existing arguments and success outputs unchanged. For example:
+`read_file({ "workspace": "backend", "path": "src/index.ts" })`.
+The selector accepts only a registered alias or ID, never a local path.
+
+Each tool call independently reloads the registry and constructs the selected
+Workspace and its policies. With one registration, omission selects that repo.
+With multiple registrations, omission returns `WORKSPACE_REQUIRED` and a safe
+`workspaces` alias/ID list. Unknown selectors or an empty registry return
+`WORKSPACE_NOT_FOUND`; missing/replaced canonical roots return
+`WORKSPACE_UNAVAILABLE`. No call establishes an open/current workspace.
+
+OAuth scopes, token ownership, tunnel/runtime ownership, connector binding and
+Skill setup remain unchanged in this phase. Existing
+credentials on the connection authorize the applicable read scopes across the
+explicit grants in that connection owner's registry. Registry removal only
+revokes that read grant; connection/resource lifecycle commands still operate
+on the original workspace. Disconnect retains the registry. Destroy removes only
+that owner's registry at the final successful local cleanup; partial or failed
+destroy retains it for recovery. Other owners' registries and the unowned legacy
+registry remain untouched.
+
 ## MCP surface
 
-Exactly seven tools are exposed:
+Eight read-only tools are exposed:
 
 | Tool | Read-only responsibility |
 | --- | --- |
+| `list_workspaces` | Registered aliases and workspace IDs, without local roots |
 | `workspace_info` | Canonical identity, display name, project detection and git overview |
 | `list_directory` | Paginated workspace tree |
 | `read_file` | Bounded, paginated text reads |
@@ -123,7 +201,7 @@ The Skill does not create Projects, save chat pointers or orchestrate work after
 ## Security
 
 - `/mcp` requires OAuth, PKCE and one-time pairing; knowing its URL grants no access.
-- Tokens are bound to one canonical workspace; display-name changes do not replace identity.
+- Tokens remain bound to the bridge startup identity; applicable read scopes cover only workspaces explicitly registered to that owner. Display-name changes do not replace identity.
 - Canonical path containment and sensitive-file rules apply to reads/search/git.
 - Workspace content is untrusted data and never grants permissions.
 - The bridge listens on loopback; public access goes through the tunnel.

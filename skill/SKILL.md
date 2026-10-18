@@ -13,10 +13,16 @@ ends at **MCP READY**, then STOP. Do not start a coding task or planning loop.
 
 ## Boundaries
 
-- One bridge serves one canonical workspace. Do not add multi-repo configuration.
+- Each bridge retains one canonical startup owner. It can read additional repos
+  explicitly registered to that owner in external
+  `workspace-registries/<ownerWorkspaceId>.json`; other owners' grants are isolated.
+  Setup auto-registers only the startup root; add other repos only when requested.
 - Keep `workspaceId` as the root-derived identity; display names are labels.
-- MCP is read-only: `workspace_info`, `list_directory`, `read_file`, `read_image`,
-  `search_workspace`, `git_status`, `git_diff`. Do not add write or shell tools.
+- MCP has eight read-only tools: `list_workspaces`, `workspace_info`,
+  `list_directory`, `read_file`, `read_image`, `search_workspace`, `git_status`,
+  `git_diff`. Do not add write or shell tools. Workspace tools accept a registered
+  alias or ID as `workspace`; selection is independent on every call. When setup
+  verification requires selection, use the startup workspace ID.
 - ChatGPT obtains repo content through MCP. Never paste source, diffs or logs
   into the browser to simulate a working connection.
 - The one-time pairing code is the only credential to type in a browser.
@@ -41,6 +47,12 @@ ends at **MCP READY**, then STOP. Do not start a coding task or planning loop.
 - Pass `-w <workspace-root>` to workspace commands, including setup, doctor,
   connector bind, start/restart/stop/status, pair/unpair, disconnect/destroy,
   logs, workspace, and tunnel status/choose.
+- Registry commands select the owner via `-w <hub-root>` (default: current
+  directory): `c2c workspace list -w <hub-root>`,
+  `c2c workspace add <repo-path> -w <hub-root> [--alias <alias>]`, and
+  `c2c workspace remove <alias-or-id> -w <hub-root>`. Bare `workspace -w <root>`
+  still shows identity without granting access. Ignore the unowned legacy
+  `workspace-registry.json`; never migrate its grants automatically.
 - `prefs`, `sandbox-allow`, `update`, `update-check`, and `tunnel login` are
   machine-wide. Prefer `--json` where supported; stop/unpair use text output.
 - Reuse the existing OS C2C state directory (`codex-with-chatgpt`) so auth,

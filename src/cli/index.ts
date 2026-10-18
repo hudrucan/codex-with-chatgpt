@@ -7,6 +7,7 @@ import { startBridge } from "../bridge/server.js";
 import { findBridgeObservation, findLiveBridge, type RuntimeState } from "../bridge/runtime.js";
 import { adminFetch, ensureBridge, stopBridge } from "../process/daemon.js";
 import { Workspace } from "../workspace/manager.js";
+import { WorkspaceRegistry } from "../workspace/registry.js";
 import { AuthStore } from "../auth/store.js";
 import { detectTunnelBinaries } from "../tunnel/detect.js";
 import {
@@ -52,7 +53,8 @@ import { pullFork, verifyForkOrigin } from "../config/update.js";
 import { acquireWorkspaceLock, destroyWorkspace, disconnectWorkspace, lifecycleFile } from "../lifecycle/workspace.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
 
-const program = new Command();
+// Leave child options with their subcommand (workspace and workspace add share -w).
+const program = new Command().enablePositionalOptions();
 
 const say = (msg: string): void => {
   process.stdout.write(msg + "\n");
@@ -859,9 +861,10 @@ program
     if (!shown) say("No logs yet.");
   });
 
-program
+const workspaceCmd = program
   .command("workspace")
-  .description("Show workspace identity and project info")
+  .enablePositionalOptions()
+  .description("Show workspace identity or manage the external read-access registry")
   .option("-w, --workspace <path>")
   .option("--json", "machine-readable output", false)
   .action((opts: { workspace?: string; json: boolean }) => {
@@ -874,6 +877,48 @@ program
       say(`Type: ${data.projectType}  Languages: ${data.languages.join(", ") || "-"}`);
       say(`Path: ${data.root}`);
     }
+  });
+
+function ownerRegistry(option?: string): WorkspaceRegistry {
+  const owner = new Workspace(resolveWorkspace(option ?? workspaceCmd.opts().workspace));
+  return new WorkspaceRegistry(owner.id);
+}
+
+workspaceCmd.command("list")
+  .description("List local workspaces registered to this bridge owner")
+  .option("-w, --workspace <path>", "bridge owner root (defaults to current directory)")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const workspaces = ownerRegistry(opts.workspace).list();
+      if (opts.json) say(JSON.stringify({ workspaces }));
+      else for (const entry of workspaces) say(`${entry.alias} (${entry.workspaceId}) ${entry.root}`);
+    } catch (error) { handleCliError(error, opts.json); }
+  });
+
+workspaceCmd.command("add <path>")
+  .description("Grant this bridge owner read access to a canonical local workspace")
+  .option("-w, --workspace <path>", "bridge owner root (defaults to current directory)")
+  .option("--alias <alias>", "unique lowercase alias; defaults to directory name plus workspace ID")
+  .option("--json", "machine-readable output", false)
+  .action((repoPath: string, opts: { workspace?: string; alias?: string; json: boolean }) => {
+    try {
+      const entry = ownerRegistry(opts.workspace).add(resolveWorkspace(repoPath), opts.alias);
+      if (opts.json) say(JSON.stringify({ ok: true, ...entry }));
+      else check(`Registered ${entry.alias} (${entry.workspaceId}): ${entry.root}`);
+    } catch (error) { handleCliError(error, opts.json); }
+  });
+
+workspaceCmd.command("remove <alias-or-id>")
+  .description("Remove workspace read access without changing connection resources")
+  .option("-w, --workspace <path>", "bridge owner root (defaults to current directory)")
+  .option("--json", "machine-readable output", false)
+  .action((selector: string, opts: { workspace?: string; json: boolean }) => {
+    try {
+      const entry = ownerRegistry(opts.workspace).remove(selector);
+      if (opts.json) say(JSON.stringify({ ok: true, ...entry }));
+      else check(`Removed ${entry.alias} (${entry.workspaceId})`);
+    } catch (error) { handleCliError(error, opts.json); }
   });
 
 // ---------------------------------------------------------------- sandbox-allow (Codex writable_roots, macOS + Windows)

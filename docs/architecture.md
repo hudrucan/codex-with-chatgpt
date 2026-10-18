@@ -1,7 +1,7 @@
 # Desk C2C Hub architecture
 
 ```text
-ChatGPT MCP client → HTTPS tunnel → loopback bridge → one canonical workspace
+ChatGPT MCP client → HTTPS tunnel → loopback bridge → owner's registered repos
                                      │
                               OAuth / pairing
                                      │
@@ -18,7 +18,7 @@ management, execution recording or automatic planning/review protocol.
 | Module | Responsibility |
 | --- | --- |
 | `bridge/` | Express assembly, loopback listener, port fallback, runtime discovery, local admin API |
-| `mcp/` | Seven read-only tools and stateless Streamable HTTP transport |
+| `mcp/` | Eight read-only tools and stateless Streamable HTTP transport |
 | `auth/` | OAuth discovery, client registration, PKCE S256, token rotation/revocation; opaque tokens stored as hashes |
 | `pairing/` | Expiring one-time pairing codes, attempt limits and rate limiting |
 | `workspace/` | Canonical containment, sensitive-file/ignore rules, project detection, read/list/image/search/git |
@@ -32,8 +32,11 @@ management, execution recording or automatic planning/review protocol.
 ## Requests and identity
 
 An MCP request passes bearer validation before the tool handler. Each tool
-checks its scope, resolves paths within the connected canonical root and
-applies bounds/ignore rules before returning data. `read_image` returns bounded
+checks its scope, independently resolves a registered alias/ID within the startup
+owner's `workspace-registries/<ownerWorkspaceId>.json`, then resolves paths within
+that canonical root and applies bounds/ignore rules before returning data.
+`list_workspaces` returns only that owner's aliases and IDs; there is no mutable
+current workspace or cross-owner registry fallback. `read_image` returns bounded
 validated image content; it never imports or writes media.
 
 Authorization follows protected-resource discovery, OAuth server discovery,

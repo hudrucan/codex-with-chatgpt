@@ -120,12 +120,21 @@ export async function destroyWorkspace(root: string, opts: {
     ["sessions", `${workspace.id}.json`], ["executions", `${workspace.id}.jsonl`],
     ["execution-outputs", workspace.id], ["logs", `bridge-${workspace.id}.out.log`],
   ];
+  const registryEntry = ["workspace-registries", `${workspace.id}.json`];
   // Validate every parent before removing anything locally.
-  for (const [dir] of entries) {
+  for (const [dir] of [...entries, registryEntry]) {
     const parent = path.join(stateDir, dir);
     if (fs.existsSync(parent) && fs.realpathSync(parent) !== parent) throw new Error("OWNERSHIP_CONFLICT: Refusing cleanup through a state-directory symlink.");
   }
   for (const entry of entries) fs.rmSync(path.join(stateDir, ...entry), { recursive: true, force: true });
   fs.rmSync(lifecycleFile(workspace.id), { force: true });
+  // Remove this owner's read grants last, only after all other local cleanup
+  // succeeds. A registry removal failure retains the grants and recovery plan.
+  try {
+    fs.rmSync(path.join(stateDir, ...registryEntry), { force: true });
+  } catch (error) {
+    writeSecureJson(lifecycleFile(workspace.id), plan);
+    throw error;
+  }
   return { ok: true, destroyed: true, plan };
 }

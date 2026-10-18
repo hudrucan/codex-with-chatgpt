@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Workspace } from "../src/workspace/manager.js";
+import { WorkspaceRegistry } from "../src/workspace/registry.js";
 import { AuthStore } from "../src/auth/store.js";
 import { acquireWorkspaceLock, destroyWorkspace, disconnectWorkspace, lifecycleFile } from "../src/lifecycle/workspace.js";
 import { boundConnector, confirmConnectorBinding, connectorReconciliation, persistWorkspaceEndpoint, readLastEndpoint, writeLastEndpoint } from "../src/config/endpoint.js";
@@ -17,6 +18,7 @@ let root: string;
 let state: string;
 beforeEach(() => { state = isolateStateDir(); root = makeTmpDir("lifecycle"); dirs = [root, state]; });
 afterEach(async () => {
+  vi.restoreAllMocks();
   dirs.forEach(cleanup);
   if (originalStateDir === undefined) delete process.env.C2C_STATE_DIR; else process.env.C2C_STATE_DIR = originalStateDir;
   if (originalApiToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN; else process.env.CLOUDFLARE_API_TOKEN = originalApiToken;
@@ -162,6 +164,92 @@ describe("disconnect and ownership-checked destroy", () => {
     release();
     acquireWorkspaceLock(ws.id)();
   });
+});
+
+describe("owner registry cleanup during lifecycle", () => {
+  function registries(ws: Workspace) {
+    const owner = new WorkspaceRegistry(ws.id);
+    owner.add(root, "owner");
+    const otherRoot = makeTmpDir("lifecycle-other-owner");
+    dirs.push(otherRoot);
+    const other = new WorkspaceRegistry(new Workspace(otherRoot).id);
+    // Another owner may independently register the same repo.
+    other.add(root, "shared-repo");
+    const legacy = write(state, "workspace-registry.json", JSON.stringify({ version: 1, workspaces: owner.list() }));
+    const snapshots = [owner.file, other.file, legacy].map((file) => ({ file, content: fs.readFileSync(file, "utf8") }));
+    return {
+      owner,
+      expectRetained() {
+        for (const { file, content } of snapshots) expect(fs.readFileSync(file, "utf8")).toBe(content);
+      },
+      expectOnlyOwnerRemoved() {
+        expect(fs.existsSync(owner.file)).toBe(false);
+        for (const { file, content } of snapshots.slice(1)) expect(fs.readFileSync(file, "utf8")).toBe(content);
+      },
+    };
+  }
+
+  it("retains all registries on disconnect", async () => {
+    const ws = endpoint(); bind(ws); resources(ws);
+    const saved = registries(ws);
+    await disconnectWorkspace(root);
+    saved.expectRetained();
+    expect(readLastEndpoint(ws.id)?.disconnected).toBe(true);
+  });
+
+  it("retains all registries for a destroy plan and a rejected destroy", async () => {
+    const ws = endpoint(); bind(ws); const { account } = resources(ws);
+    const saved = registries(ws);
+    expect((await destroyWorkspace(root, { account })).destroyed).toBe(false);
+    saved.expectRetained();
+    await expect(destroyWorkspace(root, { account, confirm: true, connectorRemoved: "wrong-plugin" }))
+      .rejects.toThrow(/CONNECTOR_REMOVAL_REQUIRED/);
+    saved.expectRetained();
+    expect(account.deleteDns).not.toHaveBeenCalled();
+  });
+
+  it("retains all registries after partial remote deletion and removes only the owner's on successful retry", async () => {
+    const ws = endpoint(); bind(ws); const { account } = resources(ws);
+    const saved = registries(ws);
+    account.deleteTunnel.mockRejectedValueOnce(new Error("tunnel cleanup failed"));
+    await expect(destroyWorkspace(root, { account, confirm: true, connectorRemoved: "plugin_owned" }))
+      .rejects.toThrow(/tunnel cleanup failed/);
+    expect(account.deleteDns).toHaveBeenCalled();
+    expect(fs.existsSync(lifecycleFile(ws.id))).toBe(true);
+    saved.expectRetained();
+    account.deleteTunnel.mockImplementationOnce(async () => { saved.expectRetained(); });
+    expect((await destroyWorkspace(root, { account, confirm: true })).destroyed).toBe(true);
+    saved.expectOnlyOwnerRemoved();
+    expect(fs.existsSync(lifecycleFile(ws.id))).toBe(false);
+  });
+
+  it.each(["local state", "recovery receipt", "owner registry"])(
+    "retains registries and a recovery receipt when deleting %s fails, then finishes on retry",
+    async (stage) => {
+      const ws = endpoint(); bind(ws); const { account } = resources(ws);
+      const saved = registries(ws);
+      const localFile = write(state, `sessions/${ws.id}.json`, "{}");
+      const blockedFile = stage === "local state" ? localFile : stage === "recovery receipt" ? lifecycleFile(ws.id) : saved.owner.file;
+      const remove = fs.rmSync;
+      const removal = vi.spyOn(fs, "rmSync").mockImplementation((file, options) => {
+        if (String(file) === blockedFile) throw new Error(`Cannot remove ${stage}`);
+        return remove(file, options);
+      });
+      await expect(destroyWorkspace(root, { account, confirm: true, connectorRemoved: "plugin_owned" }))
+        .rejects.toThrow(`Cannot remove ${stage}`);
+      saved.expectRetained();
+      expect(fs.existsSync(lifecycleFile(ws.id))).toBe(true);
+      // These failures occur after earlier local state was already removed.
+      expect(readLastEndpoint(ws.id)).toBeNull();
+      if (stage !== "owner registry") {
+        expect(removal.mock.calls.some(([file]) => String(file) === saved.owner.file)).toBe(false);
+      }
+      removal.mockRestore();
+      expect((await destroyWorkspace(root, { account, confirm: true })).destroyed).toBe(true);
+      saved.expectOnlyOwnerRemoved();
+      expect(fs.existsSync(lifecycleFile(ws.id))).toBe(false);
+    }
+  );
 });
 
 describe("Cloudflare cleanup API", () => {
