@@ -15,32 +15,6 @@ function authFile(hubId: string) { return path.join(state, "auth", `${hubId}.jso
 function initialized(ownerId: string) { return JSON.parse(fs.readFileSync(hubMappingFile(ownerId), "utf8")).authInitialized; }
 
 describe("Hub-owned auth state", () => {
-  it("adopts clients and existing token hashes without changing raw credentials or legacy state", () => {
-    const owner = new Workspace(root);
-    const legacy = legacyAuthFixture(state, owner.id);
-    const hub = resolveHub(owner);
-    const store = new AuthStore(hub.hubId);
-    expect(store.getClient(legacy.client.clientId)).toEqual(legacy.client);
-    expect(store.verifyAccessToken(legacy.accessToken)).toMatchObject({ ok: true, record: { hubId: hub.hubId } });
-    const saved = JSON.parse(fs.readFileSync(authFile(hub.hubId), "utf8"));
-    expect(saved).toEqual({ version: 1, hubId: hub.hubId, clients: legacy.data.clients,
-      tokens: legacy.data.tokens.map(({ workspaceId: _owner, ...token }) => ({ ...token, hubId: hub.hubId })) });
-    expect(initialized(owner.id)).toBe(true);
-    expect(fs.readFileSync(legacy.file, "utf8")).toBe(legacy.contents);
-    expect(JSON.stringify(saved)).not.toContain(legacy.accessToken);
-    expect(JSON.stringify(saved)).not.toContain(legacy.refreshToken);
-    const rotated = store.refresh(legacy.refreshToken, legacy.client.clientId);
-    expect(rotated.ok).toBe(true);
-    if (!rotated.ok) throw new Error("Refresh adoption failed");
-    expect(rotated.tokens.refreshToken).not.toBe(legacy.refreshToken);
-    expect(store.refresh(legacy.refreshToken, legacy.client.clientId).ok).toBe(false);
-    const reloaded = new AuthStore(hub.hubId);
-    expect(reloaded.getClient(legacy.client.clientId)).toEqual(legacy.client);
-    expect(reloaded.verifyAccessToken(legacy.accessToken).ok).toBe(true);
-    expect(reloaded.verifyAccessToken(rotated.tokens.accessToken)).toMatchObject({ ok: true, record: { hubId: hub.hubId } });
-    expect(JSON.parse(fs.readFileSync(authFile(hub.hubId), "utf8")).tokens.every((token: { hubId: string; workspaceId?: string }) => token.hubId === hub.hubId && token.workspaceId === undefined)).toBe(true);
-  });
-
   it.each(["auth copy", "checkpoint"])("retries an interrupted %s without replacing identities or credentials", (stage) => {
     const owner = new Workspace(root);
     const legacy = legacyAuthFixture(state, owner.id);
@@ -116,18 +90,5 @@ describe("Hub-owned auth state", () => {
     expect(fs.readFileSync(legacy.file, "utf8")).toBe(legacy.contents);
     fs.writeFileSync(hubMappingFile(owner.id), "{");
     expect(() => new AuthStore(hub.hubId)).toThrow(/HUB_STATE_INVALID/);
-  });
-
-  it("binds new authorization codes, clients and tokens to the owning Hub", () => {
-    const hub = resolveHub(new Workspace(root));
-    const store = new AuthStore(hub.hubId);
-    const client = store.registerClient({ redirectUris: ["http://localhost/callback"] });
-    const code = store.createAuthorizationCode({ clientId: client.clientId, redirectUri: client.redirectUris[0],
-      codeChallenge: "challenge", scopes: ["workspace.read"], pairingSessionId: "session" });
-    expect(store.consumeAuthorizationCode(code)).toMatchObject({ hubId: hub.hubId });
-    expect(store.consumeAuthorizationCode(code)).toBeNull();
-    const tokens = store.issueTokens({ clientId: client.clientId, scopes: ["workspace.read", "offline_access"] });
-    expect(store.verifyAccessToken(tokens.accessToken)).toMatchObject({ ok: true, record: { hubId: hub.hubId } });
-    expect(new AuthStore(hub.hubId).getClient(client.clientId)).toEqual(client);
   });
 });

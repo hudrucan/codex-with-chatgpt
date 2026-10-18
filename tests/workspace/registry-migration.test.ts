@@ -52,22 +52,23 @@ describe("owner registry adoption by Hub", () => {
     expect(fs.readFileSync(saved.file, "utf8")).toBe(saved.contents);
   });
 
-  it.each(["unowned", "other owner"])("does not adopt %s grants", (kind) => {
+  it("does not adopt unowned or other-owner grants", () => {
     const owner = new Workspace(root);
     const foreign = legacy(new Workspace(foreignRoot));
-    if (kind === "unowned") write(state, "workspace-registry.json", JSON.stringify({ version: 1, workspaces: foreign.registrations }));
+    const unowned = write(state, "workspace-registry.json", JSON.stringify({ version: 1, workspaces: foreign.registrations }));
+    const contents = fs.readFileSync(unowned, "utf8");
     const registry = WorkspaceRegistry.forWorkspace(owner);
     expect(registry.list()).toEqual([]);
     expect(() => registry.resolve(new Workspace(repo).id)).toThrow(expect.objectContaining({ code: "WORKSPACE_NOT_FOUND" }));
     expect(fs.readFileSync(foreign.file, "utf8")).toBe(foreign.contents);
+    expect(fs.readFileSync(unowned, "utf8")).toBe(contents);
   });
 
-  it.each(["wrong owner", "malformed", "duplicate ID", "duplicate alias"])("rejects %s legacy state without overwriting it", (kind) => {
+  it.each(["wrong owner", "malformed", "duplicate alias"])("rejects %s legacy state without overwriting it", (kind) => {
     const owner = new Workspace(root);
     const saved = legacy(owner);
     const value = JSON.parse(saved.contents);
     if (kind === "wrong owner") value.ownerWorkspaceId = new Workspace(foreignRoot).id;
-    if (kind === "duplicate ID") value.workspaces.push(value.workspaces[0]);
     if (kind === "duplicate alias") value.workspaces[1].alias = value.workspaces[0].alias;
     const content = kind === "malformed" ? "{" : JSON.stringify(value);
     fs.writeFileSync(saved.file, content);

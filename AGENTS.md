@@ -78,6 +78,9 @@
 
 ## Verification
 
+- Prefer behavior/invariant tests for public behavior, security/ownership boundaries, migration safety, and regressions.
+- Avoid equivalent coverage across unit and integration layers; use table-driven cases for equivalent edge inputs.
+- Do not add tests merely for new private helpers; keep the smallest set that strongly protects the changed boundary.
 - Prefer focused tests for changed files/features; do not rerun the full suite after each small sub-step.
 - Run full `corepack pnpm test` once near phase completion or before commit, unless broader coverage is specifically needed; honor explicit verification scope.
 - Run `typecheck`/`build` when relevant module/build boundaries change or during final phase verification.

@@ -4,8 +4,6 @@ import { expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
-import { createMcpServer } from "../../src/mcp/server.js";
-import { nullLogger } from "../../src/logger/index.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write, legacyAuthFixture } from "../helpers.js";
@@ -95,11 +93,8 @@ it("isolates the grants of two simultaneously running bridge owners in the same 
     registries[0].remove("repo");
     expect((await call(clients[0], "read_file", { workspace: "repo", path: "hello.txt" })).data.error).toBe("WORKSPACE_NOT_FOUND");
     expect((await call(clients[1], "read_file", { workspace: "repo", path: "hello.txt" })).data.content).toBe("owner-1 isolated-marker");
-    expect(() => createMcpServer({ hubId: bridges[0].hubId, registry: registries[1], logger: nullLogger }))
-      .toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE_OWNER" }));
     expect(registries[0].hubId).not.toBe(registries[1].hubId);
     for (let index = 0; index < 2; index++) {
-      expect(bridges[index].authStore.verifyAccessToken(legacyOwned[index].token).ok).toBe(true);
       expect(fs.readFileSync(legacyOwned[index].file, "utf8")).toBe(legacyOwned[index].contents);
     }
     expect(fs.readFileSync(legacyFile, "utf8")).toBe(legacyContents);

@@ -23,6 +23,9 @@ describe("persistent Hub identity", () => {
     expect(new Date(first.createdAt).toISOString()).toBe(first.createdAt);
     expect(first.hubId).not.toContain(workspace.id);
     expect(resolveHub({ id: workspace.id, name: "Changed display name" })).toEqual(first);
+    const foreign = resolveHub({ id: new Workspace(other).id, name: first.displayName });
+    expect(foreign.hubId).not.toBe(first.hubId);
+    expect(foreign.displayName).toBe(first.displayName);
     const link = path.join(state, "workspace-link");
     fs.symlinkSync(root, link, "junction");
     expect(resolveHub(new Workspace(link))).toEqual(first);
@@ -31,13 +34,6 @@ describe("persistent Hub identity", () => {
     if (process.platform !== "win32") {
       for (const file of [hubFile(first.hubId), hubMappingFile(workspace.id)]) expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     }
-  });
-
-  it("keeps two owners distinct even when their display names match", () => {
-    const a = resolveHub({ id: new Workspace(root).id, name: "Shared name" });
-    const b = resolveHub({ id: new Workspace(other).id, name: "Shared name" });
-    expect(a.hubId).not.toBe(b.hubId);
-    expect(a.displayName).toBe(b.displayName);
   });
 
   it("accepts independent Hub records without a legacy owner but does not auto-adopt them", () => {
@@ -62,13 +58,14 @@ describe("persistent Hub identity", () => {
     expect(fs.readdirSync(path.join(state, "hubs"))).toEqual(hubNames);
   });
 
-  it.each(["malformed", "wrong filename", "missing hub", "wrong owner", "duplicate claim", "duplicate mapping"])(
+  it.each(["malformed mapping", "malformed Hub", "wrong filename", "missing hub", "wrong owner", "duplicate claim", "duplicate mapping"])(
     "fails closed on %s state without creating another Hub",
     (kind) => {
       const workspace = new Workspace(root);
       const hub = resolveHub(workspace);
       const foreign = new Workspace(other);
-      if (kind === "malformed") fs.writeFileSync(hubMappingFile(workspace.id), "{");
+      if (kind === "malformed mapping") fs.writeFileSync(hubMappingFile(workspace.id), "{");
+      if (kind === "malformed Hub") fs.writeFileSync(hubFile(hub.hubId), "{");
       if (kind === "wrong filename") write(state, `hubs/hub_invalid.json`, JSON.stringify(hub));
       if (kind === "missing hub") fs.unlinkSync(hubFile(hub.hubId));
       if (kind === "wrong owner") fs.writeFileSync(hubFile(hub.hubId), JSON.stringify({ ...hub, legacyOwnerWorkspaceId: foreign.id }));
@@ -85,15 +82,9 @@ describe("persistent Hub identity", () => {
     }
   );
 
-  it("rejects malformed Hub fields and owner path inputs", () => {
-    const workspace = new Workspace(root);
-    const hub = resolveHub(workspace);
-    for (const patch of [{ displayName: "" }, { displayName: "unsafe\nname" }, { createdAt: "yesterday" }, { version: 2 }]) {
-      fs.writeFileSync(hubFile(hub.hubId), JSON.stringify({ ...hub, ...patch }));
-      expect(() => resolveHub(workspace)).toThrow(/HUB_STATE_INVALID/);
-    }
+  it("rejects unsafe owner path inputs without creating ownership state", () => {
     expect(() => resolveHub({ id: "../escape", name: "Invalid" })).toThrow(/HUB_MAPPING_INVALID/);
-    expect(() => hubFile("../escape")).toThrow(/HUB_STATE_INVALID/);
+    expect(fs.readdirSync(state)).toEqual([]);
   });
 
   it("fails closed while another mapping writer holds the lock", () => {

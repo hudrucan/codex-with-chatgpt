@@ -91,25 +91,14 @@ describe("MCP uses the Hub resolved at startup", () => {
     expect(fs.readdirSync(state)).toEqual([]);
   });
 
-  it("serves discovery and all workspace tools while the mapping lock is held after startup", async () => {
+  it.each(["locked", "malformed"])("serves all tools without scanning or mutating %s Hub mappings", async (kind) => {
     await start();
-    write(state, "hub-mappings/.lock", "control-plane-operation");
+    if (kind === "locked") write(state, "hub-mappings/.lock", "control-plane-operation");
+    if (kind === "malformed") write(state, "hub-mappings/unrelated.json", "{malformed control-plane state");
     const before = ownershipSnapshot();
     await connect();
     await expectWorkspaceReads();
     expect(ownershipSnapshot()).toEqual(before);
-    expect(fs.readFileSync(path.join(state, "hub-mappings/.lock"), "utf8")).toBe("control-plane-operation");
-  });
-
-  it("does not scan, rewrite or recover Hub mappings during normal MCP calls", async () => {
-    await start();
-    // A running bridge keeps its startup identity even if control-plane state is unavailable.
-    write(state, "hub-mappings/unrelated.json", "{malformed control-plane state");
-    const before = ownershipSnapshot();
-    await connect();
-    await expectWorkspaceReads();
-    expect(ownershipSnapshot()).toEqual(before);
-    expect(bridge!.hubId).toBe(JSON.parse(fs.readFileSync(path.join(state, `hub-mappings/${bridge!.workspace.id}.json`), "utf8")).hubId);
   });
 
   it("does not recreate missing Hub, mapping or registry ownership state", async () => {
