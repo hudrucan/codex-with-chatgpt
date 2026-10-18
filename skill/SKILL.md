@@ -189,24 +189,12 @@ retaining connector, DNS, tunnel, names and external workspace state for reuse.
 Do not delete resources on a disconnect request. `unpair` remains the compatible
 revocation-only command; `stop` only stops the bridge. Report the result and stop.
 
-## Destroy / deprovision (explicit request only)
+## Destroy / deprovision (experimental)
 
-1. Run `c2c destroy -w <ws> --json` for the read-only ownership-checked plan.
-   Do not proceed on incomplete legacy bindings, pending rollback or conflicts.
-2. In ChatGPT verify `plan.connector` by exact ID/name/Server URL, then remove
-   only that plugin (or verify that exact ID is already absent). Legacy bindings
-   without a plugin ID need verified `connector bind` before deletion.
-3. If `plan.desired.needed` has a URL, verify the pending desired plugin is
-   absent or remove only its matching owned partial plugin. Never delete a
-   title collision with another Server URL.
-4. Run `c2c destroy -w <ws> --confirm --connector-removed <bound-id> --json`.
-   Omit the bound-ID flag when no bound plugin exists. Include
-   `--desired-connector-absent` only after step 3. Flags are receipts of observed
-   UI actions, not proof the runtime independently obtained; never fabricate them.
-5. Runtime rechecks ownership, revokes/stops, removes recorded DNS/tunnel, then
-   this workspace's local state. A failure retains its receipt/state for retry.
-   Shared credentials, other workspaces and repository files stay intact.
-   Report the result and stop. For partial cleanup read the recovery reference.
+Only for an explicit request to delete/deprovision this workspace's connection,
+read [deprovisioning](references/deprovision.md) before taking action. It contains
+the ownership checks, deletion flow, interrupted-cleanup recovery and completion
+checks. Setup, doctor and repair must not invoke destroy as a recovery shortcut.
 
 ## Explicit update
 

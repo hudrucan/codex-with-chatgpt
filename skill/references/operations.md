@@ -39,22 +39,11 @@ A lost create response before its UUID is known cannot safely be adopted or
 deleted automatically. Report the requested name and need to verify Cloudflare
 ownership manually, preserving the journal.
 
-## Locks and interrupted destroy
+## Locks
 
 CLI lifecycle operations serialize per workspace. A crash can leave a lock;
 verify the recorded process is gone before removing that specific lock. Do not
 auto-remove locks by age or kill an unverified PID.
-
-Destroy checks UUID/name and exact DNS target. It preserves a receipt before
-remote cleanup, and keeps local state if cleanup fails. After resolving the
-failure, retry `c2c destroy -w <ws> --confirm --json`; do not reconfigure a
-workspace with a pending destroy receipt. Missing API access is a credential
-blocker, not permission to forget resources.
-
-Destroy only knows recorded resources. Other historical tunnels or manually
-added DNS aliases need separate ownership review. External dashboard changes
-can race API checks; stop on conflicts instead of forcing deletion.
-Shared Cloudflare credentials and ChatGPT chat history are never deprovisioned.
 
 ## ChatGPT UI recovery
 
