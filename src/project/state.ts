@@ -6,6 +6,7 @@ import { stateFile } from "../config/state-files.js";
 import { ensureDir } from "../config/paths.js";
 
 export const workspaceIdSchema = z.string().regex(/^[a-f0-9]{12}$/);
+const projectIdSchema = z.string().regex(/^g-p-[a-f0-9]{32}$/);
 
 /** Only a Project landing URL; never a chat, invite, GPT or settings URL. */
 export function isProjectUrl(value: string): boolean {
@@ -18,18 +19,19 @@ export function isProjectUrl(value: string): boolean {
 }
 
 export const bindingSchema = z.object({
-  version: z.literal(1), hubId: hubIdSchema, workspaceId: workspaceIdSchema,
+  version: z.literal(2), hubId: hubIdSchema, projectId: projectIdSchema,
+  workspaceIds: z.array(workspaceIdSchema).refine(ids => new Set(ids).size === ids.length),
   projectUrl: z.string().refine(isProjectUrl),
   instructionVersion: z.number().int().positive(),
   appliedInstructionHash: z.string().regex(/^[a-f0-9]{64}$/), updatedAt: z.string().datetime(),
-}).strict();
+}).strict().refine(binding => projectIdentity(binding.projectUrl) === binding.projectId);
 export type ProjectBinding = z.infer<typeof bindingSchema>;
 
-export function bindingFile(hubId: string, workspaceId: string): string {
+export function bindingFile(hubId: string, projectId: string): string {
   hubIdSchema.parse(hubId);
-  workspaceIdSchema.parse(workspaceId);
+  projectIdSchema.parse(projectId);
   const directory = stateFile("project-bindings", hubId);
-  const file = path.join(directory, `${workspaceId}.json`);
+  const file = path.join(directory, `${projectId}.json`);
   try {
     const info = fs.lstatSync(file);
     if (info.isSymbolicLink()) throw new Error("PROJECT_BINDING_INVALID: Refusing a binding symlink.");
@@ -38,8 +40,8 @@ export function bindingFile(hubId: string, workspaceId: string): string {
   return file;
 }
 
-export function readBinding(hubId: string, workspaceId: string): ProjectBinding | null {
-  const file = bindingFile(hubId, workspaceId);
+export function readBinding(hubId: string, projectId: string): ProjectBinding | null {
+  const file = bindingFile(hubId, projectId);
   let raw: string;
   try { raw = fs.readFileSync(file, "utf8"); }
   catch (error) {
@@ -48,7 +50,7 @@ export function readBinding(hubId: string, workspaceId: string): ProjectBinding 
   }
   try {
     const binding = bindingSchema.parse(JSON.parse(raw));
-    if (binding.hubId !== hubId || binding.workspaceId !== workspaceId) throw new Error();
+    if (binding.hubId !== hubId || binding.projectId !== projectId) throw new Error();
     return binding;
   } catch { throw new Error("PROJECT_BINDING_INVALID: Malformed or foreign Project binding; access denied."); }
 }
@@ -81,32 +83,32 @@ export function inspectProjectBindings(hubId: string) {
   const directory = stateFile("project-bindings", hubId);
   const names = directoryEntries(directory);
   const files = (names ?? []).map(name => {
-    if (!/^[a-f0-9]{12}\.json$/.test(name))
+    if (!/^g-p-[a-f0-9]{32}\.json$/.test(name))
       throw new Error("PROJECT_BINDING_INVALID: Unexpected file in Hub Project state.");
-    const workspaceId = name.slice(0, -5), file = bindingFile(hubId, workspaceId);
-    const binding = readBinding(hubId, workspaceId);
+    const projectId = name.slice(0, -5), file = bindingFile(hubId, projectId);
+    const binding = readBinding(hubId, projectId);
     if (!binding) throw new Error("PROJECT_BINDING_INVALID: Project binding changed during inspection.");
     return { file, binding };
   });
   return { directory, exists: names !== null, files };
 }
 
-function projectIdentity(projectUrl: string): string {
+export function projectIdentity(projectUrl: string): string {
   if (!isProjectUrl(projectUrl)) throw new Error("INVALID_PROJECT_URL");
   return new URL(projectUrl).pathname.match(/^\/g\/(g-p-[a-f0-9]{32})/)![1];
 }
 
 /** Caller holds the global Project lock through the subsequent atomic write. */
-export function assertProjectAvailable(candidate: ProjectBinding): void {
+export function assertProjectAvailable(hubId: string, projectUrl: string): void {
+  const id = projectIdentity(projectUrl);
   const directory = path.dirname(stateFile("project-bindings", ".lock"));
   for (const name of directoryEntries(directory) ?? []) {
     if (name === ".lock") continue;
     if (!hubIdSchema.safeParse(name).success)
       throw new Error("PROJECT_BINDING_INVALID: Unexpected owner in Project state.");
     for (const { binding } of inspectProjectBindings(name).files) {
-      if (projectIdentity(binding.projectUrl) === projectIdentity(candidate.projectUrl) &&
-          (binding.hubId !== candidate.hubId || binding.workspaceId !== candidate.workspaceId)) {
-        throw new Error("PROJECT_BINDING_CONFLICT: This ChatGPT Project is already bound to another Hub/workspace. Explicitly unbind it before reassignment.");
+      if (projectIdentity(binding.projectUrl) === id && binding.hubId !== hubId) {
+        throw new Error("PROJECT_BINDING_CONFLICT: This ChatGPT Project belongs to another Hub; a Project cannot span Hubs.");
       }
     }
   }
@@ -118,7 +120,7 @@ export function removeProjectBindings(hubId: string): void {
     const inspected = inspectProjectBindings(hubId);
     for (const { file, binding } of inspected.files) {
       // Recheck ownership/containment immediately before each exact-file deletion.
-      const current = readBinding(hubId, binding.workspaceId);
+      const current = readBinding(hubId, binding.projectId);
       if (!current || JSON.stringify(current) !== JSON.stringify(binding))
         throw new Error("PROJECT_BINDING_INVALID: Project binding changed during cleanup.");
       fs.unlinkSync(file);

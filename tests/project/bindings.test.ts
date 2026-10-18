@@ -10,12 +10,19 @@ import { bindProject, projectInstructions, projectStatus, unbindProject } from "
 import { destroyHub, lifecycleFile } from "../../src/lifecycle/hub.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
-const projectUrl = "https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-desk-home/project";
-let state: string, root: string, hubId: string, workspaceId: string, registry: WorkspaceRegistry;
+const a = "https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-project-a/project";
+const b = "https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-project-b/project";
+const c = "https://chatgpt.com/g/g-p-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-project-c/project";
+const projectId = (url: string) => url.match(/g-p-[a-f0-9]{32}/)![0];
+let state: string, root: string, hubId: string, registry: WorkspaceRegistry;
+let frontend: string, backend: string, infra: string;
 beforeEach(() => {
-  state = isolateStateDir(); root = makeTmpDir("project-repo");
-  hubId = createHub("Desk").hubId; registry = new WorkspaceRegistry(hubId);
-  workspaceId = registry.add(root, "backend").workspaceId;
+  state = isolateStateDir(); root = makeTmpDir("project-repos"); hubId = createHub("Desk").hubId;
+  registry = new WorkspaceRegistry(hubId);
+  [frontend, backend, infra] = ["frontend", "backend", "infra"].map(name => {
+    const dir = path.join(root, name); fs.mkdirSync(dir);
+    return registry.add(dir, `${name}-generated-0123456789ab`).workspaceId;
+  });
   verifiedEndpoint(hubId);
 });
 afterEach(() => { [state, root].forEach(cleanup); delete process.env.C2C_STATE_DIR; });
@@ -24,146 +31,166 @@ function verifiedEndpoint(id: string) {
     desiredConnectorName: "Desk C2C Hub · Foundation", connectorName: "Desk C2C Hub · Foundation",
     boundMcpUrl: "https://code.example.com/mcp", bindingVersion: 1, connectorId: "connector_verified" });
 }
-function file(id = hubId) { return path.join(state, "project-bindings", id, `${workspaceId}.json`); }
-function acknowledge() { return bindProject(hubId, "backend", projectUrl, projectInstructions(hubId, workspaceId).instructionHash); }
+function file(url = a, id = hubId) { return path.join(state, "project-bindings", id, `${projectId(url)}.json`); }
+function acknowledge(url = a, workspace?: string) {
+  return bindProject(hubId, url, projectInstructions(hubId, url, workspace).instructionHash, workspace);
+}
 
-it("generates deterministic instructions and acknowledges only the current verified hash", () => {
-  expect(projectStatus(hubId, "backend")).toMatchObject({ status: "unbound", binding: null, projectVerification: "not_checked" });
+it("supports a single-repo Project with explicit routing, deterministic hash and Project-keyed persistence", () => {
+  expect(projectStatus(hubId, a)).toMatchObject({ status: "unbound", binding: null, projectVerification: "not_checked" });
+  const preview = projectInstructions(hubId, a, frontend);
   expect(fs.existsSync(path.dirname(file()))).toBe(false);
-  const intended = projectInstructions(hubId, "backend");
-  expect(projectInstructions(hubId, workspaceId)).toEqual(intended);
-  expect(intended.instructionHash).toBe(createHash("sha256").update(intended.instructions).digest("hex"));
-  expect(intended.instructions.split("\n")[0]).toBe("--- BEGIN DESK C2C HUB WORKSPACE BINDING ---");
-  expect(intended.instructions.split("\n").at(-1)).toBe("--- END DESK C2C HUB WORKSPACE BINDING ---");
-  expect(intended.instructions).toContain(`workspace_info(workspace="${workspaceId}")`);
-  expect(intended.instructions).toContain('For every workspace-scoped MCP tool, use workspace="' + workspaceId + '".');
-  expect(() => bindProject(hubId, "backend", projectUrl, "0".repeat(64))).toThrow("PROJECT_INSTRUCTIONS_CHANGED");
+  expect(preview.instructionHash).toBe(createHash("sha256").update(preview.instructions).digest("hex"));
+  expect(preview.instructions).toContain(`- frontend -> workspace="${frontend}"`);
+  expect(preview.instructions.startsWith("[desk-c2c]\n")).toBe(true); expect(preview.instructions.endsWith("\n[/desk-c2c]")).toBe(true);
+  for (const hidden of ["connector_verified", "https://code.example.com", "Instruction version:", "frontend-generated-"]) expect(preview.instructions).not.toContain(hidden);
+  expect(() => bindProject(hubId, a, "0".repeat(64), frontend)).toThrow("PROJECT_INSTRUCTIONS_CHANGED");
   expect(fs.existsSync(file())).toBe(false);
-  const binding = acknowledge();
+  const binding = acknowledge(a, frontend);
+  expect(binding).toMatchObject({ version: 2, hubId, projectId: projectId(a), workspaceIds: [frontend] });
   expect(JSON.parse(fs.readFileSync(file(), "utf8"))).toEqual(binding);
-  expect(Object.keys(binding).sort()).toEqual(["version", "hubId", "workspaceId", "projectUrl", "instructionVersion", "appliedInstructionHash", "updatedAt"].sort());
-  expect(projectStatus(hubId, "backend")).toMatchObject({ status: "current", binding, projectVerification: "not_checked" });
-  expect(bindProject(hubId, workspaceId, projectUrl.replace("desk-home", "renamed-project"), intended.instructionHash))
-    .toMatchObject({ hubId, workspaceId, appliedInstructionHash: intended.instructionHash });
-  unbindProject(hubId, "backend");
-  expect(projectStatus(hubId, workspaceId).status).toBe("unbound");
+  expect(Object.keys(binding).sort()).toEqual(["version", "hubId", "projectId", "projectUrl", "workspaceIds", "instructionVersion", "appliedInstructionHash", "updatedAt"].sort());
+  expect(projectStatus(hubId, a).status).toBe("current");
+  acknowledge(a.replace("project-a", "renamed"), frontend);
+  expect(fs.readdirSync(path.dirname(file()))).toEqual([`${projectId(a)}.json`]);
 });
 
-it.each(["same Hub", "another Hub"])("refuses assigning the same Project identity to a second workspace in %s", scope => {
-  const original = acknowledge(), before = fs.readFileSync(file());
-  const targetHub = scope === "same Hub" ? hubId : createHub("Other").hubId;
-  if (targetHub !== hubId) verifiedEndpoint(targetHub);
-  const extra = path.join(root, "another-repo"); fs.mkdirSync(extra);
-  const target = new WorkspaceRegistry(targetHub).add(extra, "other");
-  const hash = projectInstructions(targetHub, target.workspaceId).instructionHash;
-  for (const url of [projectUrl, projectUrl.replace("desk-home", "different-title-and-slug")]) {
-    expect(() => bindProject(targetHub, target.workspaceId, url, hash)).toThrow("PROJECT_BINDING_CONFLICT");
+it("supports many-to-many memberships and removes only the selected Project's membership", () => {
+  acknowledge(a, frontend); acknowledge(a, backend);
+  acknowledge(b, backend); acknowledge(b, infra); acknowledge(c, frontend);
+  expect(projectInstructions(hubId, a).repositories.map(repo => repo.name)).toEqual(["backend", "frontend"]);
+  expect(projectInstructions(hubId, b).repositories.map(repo => repo.name)).toEqual(["backend", "infra"]);
+  expect(projectInstructions(hubId, c).repositories.map(repo => repo.name)).toEqual(["frontend"]);
+  const preserved = [b, c].map(url => ({ url, bytes: fs.readFileSync(file(url)) }));
+  unbindProject(hubId, a, backend);
+  expect(projectInstructions(hubId, a).repositories.map(repo => repo.workspaceId)).toEqual([frontend]);
+  expect(projectStatus(hubId, a).status).toBe("sync_required");
+  for (const other of preserved) {
+    expect(fs.readFileSync(file(other.url))).toEqual(other.bytes);
+    expect(projectStatus(hubId, other.url).status).toBe("current");
+  }
+  acknowledge(a);
+  expect(projectStatus(hubId, a).status).toBe("current");
+  expect(() => unbindProject(hubId, a, backend)).toThrow("PROJECT_MEMBERSHIP_NOT_FOUND");
+});
+
+it("previews additions without writing and orders aggregate routing independently of membership insertion or Project ID", () => {
+  acknowledge(a, frontend);
+  const before = fs.readFileSync(file()), preview = projectInstructions(hubId, a, backend);
+  expect(fs.readFileSync(file())).toEqual(before);
+  expect(projectInstructions(hubId, a).repositories).toHaveLength(1);
+  acknowledge(a, backend); acknowledge(b, backend); acknowledge(b, frontend);
+  expect(projectInstructions(hubId, a).instructions).toBe(preview.instructions);
+  expect(projectInstructions(hubId, b).instructionHash).toBe(preview.instructionHash);
+  expect(projectInstructions(hubId, a, backend).instructionHash).toBe(preview.instructionHash);
+  for (const policy of ["Never omit workspace and never use list_workspaces() to choose a repository.",
+    "Choose repositories from the user's request and conversation context.",
+    "For cross-repository work, inspect every relevant repository.",
+    "If the target repository is ambiguous, ask before reading.", 'workspace_info(workspace="<id>")']) expect(preview.instructions).toContain(policy);
+});
+
+it("rejects a Project spanning Hubs without preventing the same workspace from joining other Projects", () => {
+  acknowledge(a, frontend);
+  const other = createHub("Other").hubId; verifiedEndpoint(other);
+  new WorkspaceRegistry(other).add(registry.resolve(frontend).root, "frontend");
+  const before = fs.readFileSync(file());
+  for (const url of [a, a.replace("project-a", "another-slug")]) {
+    expect(() => projectInstructions(other, url, frontend)).toThrow("PROJECT_BINDING_CONFLICT");
+    expect(() => bindProject(other, url, "0".repeat(64), frontend)).toThrow("PROJECT_BINDING_CONFLICT");
+    expect(() => projectStatus(other, url)).toThrow("PROJECT_BINDING_CONFLICT");
   }
   expect(fs.readFileSync(file())).toEqual(before);
-  expect(projectStatus(targetHub, target.workspaceId).status).toBe("unbound");
-  expect(projectStatus(hubId, workspaceId).binding).toEqual(original);
+  const preview = projectInstructions(other, b, frontend);
+  bindProject(other, b, preview.instructionHash, frontend);
+  expect(projectStatus(other, b).status).toBe("current");
+  expect(projectStatus(hubId, a).status).toBe("current");
 });
 
-it("blocks direct mutation during pending destroy while keeping diagnostics available", async () => {
-  const binding = acknowledge(), before = fs.readFileSync(file());
-  const { plan } = await destroyHub(hubId);
+it("drops unregistered workspaces from routing while retaining explicit stale membership metadata", () => {
+  acknowledge(a, frontend); acknowledge(a, backend); acknowledge(b, backend);
+  const other = fs.readFileSync(file(b)); registry.remove(backend);
+  const preview = projectInstructions(hubId, a);
+  expect(preview.repositories.map(repo => repo.workspaceId)).toEqual([frontend]); expect(preview.instructions).not.toContain(backend);
+  expect(projectStatus(hubId, a)).toMatchObject({ status: "sync_required", staleWorkspaceIds: [backend] });
+  expect(() => projectInstructions(hubId, a, backend)).toThrow("WORKSPACE_NOT_FOUND");
+  unbindProject(hubId, a, backend); acknowledge(a);
+  expect(projectStatus(hubId, a).status).toBe("current");
+  expect(fs.readFileSync(file(b))).toEqual(other);
+  expect(projectStatus(hubId, b)).toMatchObject({ status: "sync_required", staleWorkspaceIds: [backend] });
+  acknowledge(b);
+  expect(projectStatus(hubId, b)).toMatchObject({ status: "stale", reason: "WORKSPACE_NOT_REGISTERED", staleWorkspaceIds: [backend] });
+});
+
+it("keeps an empty Project record available for syncing after its final membership is removed", () => {
+  acknowledge(a, frontend); unbindProject(hubId, a, frontend);
+  expect(projectInstructions(hubId, a).repositories).toEqual([]);
+  expect(projectStatus(hubId, a)).toMatchObject({ status: "sync_required", binding: { workspaceIds: [] } });
+  acknowledge(a); expect(projectStatus(hubId, a).status).toBe("current");
+});
+
+it("does not change semantic instructions on alias, connector identity/URL/name, PID or port changes", () => {
+  acknowledge(a, frontend); const before = projectInstructions(hubId, a);
+  registry.add(registry.resolve(frontend).root, "renamed-alias");
+  const endpoint = readLastEndpoint(hubId)!;
+  writeLastEndpoint({ ...endpoint, connectorId: "another_verified_connector", connectorName: "Renamed", desiredConnectorName: "Renamed",
+    port: 55555, publicUrl: "https://changed.example.com", mcpUrl: "https://changed.example.com/mcp", boundMcpUrl: "https://changed.example.com/mcp" });
+  write(state, `runtime/${hubId}.json`, JSON.stringify({ hubId, pid: 1234, port: 55555 }));
+  const after = projectInstructions(hubId, a);
+  expect(after.instructions).toBe(before.instructions); expect(after.instructionHash).toBe(before.instructionHash);
+  expect(after.connector).not.toEqual(before.connector); expect(projectStatus(hubId, a).status).toBe("current");
+});
+
+it("requires sync for repository label changes and rejects stale acknowledgement hashes", () => {
+  const original = acknowledge(a, frontend);
+  saveWorkspaceDisplayName(registry.resolve(frontend), "Chosen frontend");
+  expect(projectStatus(hubId, a).status).toBe("sync_required");
+  expect(() => bindProject(hubId, a, original.appliedInstructionHash)).toThrow("PROJECT_INSTRUCTIONS_CHANGED");
+  acknowledge(a); expect(projectStatus(hubId, a).status).toBe("current");
+});
+
+it("blocks direct Project mutation during pending destroy while retaining diagnostics", async () => {
+  const binding = acknowledge(a, frontend), before = fs.readFileSync(file()), { plan } = await destroyHub(hubId);
   write(state, `lifecycle/${hubId}.json`, JSON.stringify({ version: 1, hubId, plan,
     accessStopped: false, connectorRemoved: true, desiredConnectorAbsent: false, dnsRemoved: false, tunnelRemoved: false, localCleanup: false }));
-  expect(() => bindProject(hubId, workspaceId, projectUrl, binding.appliedInstructionHash)).toThrow("DESTROY_PENDING");
-  expect(() => unbindProject(hubId, workspaceId)).toThrow("DESTROY_PENDING");
-  expect(projectStatus(hubId, workspaceId).status).toBe("current");
-  expect(projectInstructions(hubId, workspaceId).instructionHash).toBe(binding.appliedInstructionHash);
+  expect(() => bindProject(hubId, a, binding.appliedInstructionHash, backend)).toThrow("DESTROY_PENDING");
+  expect(() => unbindProject(hubId, a, frontend)).toThrow("DESTROY_PENDING");
+  expect(projectStatus(hubId, a).status).toBe("current");
+  expect(projectInstructions(hubId, a).instructionHash).toBe(binding.appliedInstructionHash);
+  expect(fs.readFileSync(file())).toEqual(before); expect(fs.existsSync(lifecycleFile(hubId))).toBe(true);
+});
+
+it("rejects malformed/foreign Project records and unregistered workspace additions without writing", () => {
+  const original = acknowledge(a, frontend);
+  expect(() => projectInstructions(hubId, b, "0123456789ab")).toThrow("WORKSPACE_NOT_FOUND");
+  expect(() => projectInstructions(hubId, b, registry.resolve(frontend).root)).toThrow("WORKSPACE_NOT_FOUND");
+  for (const raw of ["{", JSON.stringify({ ...original, hubId: createHub("Foreign").hubId }),
+    JSON.stringify({ ...original, projectId: projectId(b) }), JSON.stringify({ ...original, workspaceIds: [frontend, frontend] })]) {
+    fs.writeFileSync(file(), raw);
+    expect(() => projectStatus(hubId, a)).toThrow("PROJECT_BINDING_INVALID");
+    expect(() => bindProject(hubId, a, original.appliedInstructionHash, backend)).toThrow("PROJECT_BINDING_INVALID");
+    expect(() => unbindProject(hubId, a, frontend)).toThrow("PROJECT_BINDING_INVALID");
+    expect(fs.readFileSync(file(), "utf8")).toBe(raw);
+  }
+});
+
+it("fails closed on unavailable member roots or unverified connector state", () => {
+  acknowledge(a, frontend); const endpoint = readLastEndpoint(hubId)!;
+  writeLastEndpoint({ ...endpoint, desiredConnectorName: "Unverified rename" });
+  expect(projectStatus(hubId, a)).toMatchObject({ status: "stale", reason: "PROJECT_CONNECTOR_UNVERIFIED" });
+  expect(() => projectInstructions(hubId, a)).toThrow("PROJECT_CONNECTOR_UNVERIFIED");
+  writeLastEndpoint(endpoint); cleanup(registry.resolve(frontend).root);
+  expect(projectStatus(hubId, a)).toMatchObject({ status: "stale", reason: "WORKSPACE_UNAVAILABLE" });
+});
+
+it("rejects invalid Project URLs and symlinked binding paths before mutation", () => {
+  const binding = acknowledge(a, frontend), before = fs.readFileSync(file());
+  for (const url of [a.replace("https:", "http:"), a.replace("/project", "/c/chat"), a + "?secret=none", a + "#chat", a.replace("chatgpt.com", "chatgpt.com.evil.example")]) {
+    expect(() => bindProject(hubId, url, binding.appliedInstructionHash, frontend)).toThrow("INVALID_PROJECT_URL");
+  }
   expect(fs.readFileSync(file())).toEqual(before);
-  expect(fs.existsSync(lifecycleFile(hubId))).toBe(true);
-});
-
-it("keeps instructions current through runtime restarts, port changes and restoration of the same MCP URL", () => {
-  acknowledge();
-  const before = projectInstructions(hubId, workspaceId);
-  write(state, `runtime/${hubId}.json`, JSON.stringify({ hubId, pid: 12345, port: 1234, startedAt: new Date().toISOString() }));
-  writeLastEndpoint({ ...readLastEndpoint(hubId)!, port: 54321, savedAt: new Date().toISOString(), publicUrl: "https://code.example.com",
-    mcpUrl: "https://CODE.example.com/mcp/", boundMcpUrl: "https://CODE.example.com/mcp/" });
-  expect(projectInstructions(hubId, workspaceId)).toEqual(before);
-  expect(projectStatus(hubId, workspaceId).status).toBe("current");
-});
-
-it.each(["alias", "display name", "connector name", "connector ID", "MCP URL", "instruction version"])("requires explicit sync when %s changes", change => {
-  const binding = acknowledge();
-  if (change === "alias") registry.add(root, "api");
-  else if (change === "display name") saveWorkspaceDisplayName(registry.resolve(workspaceId), "Backend API");
-  else if (change === "instruction version") {
-    write(state, `project-bindings/${hubId}/${workspaceId}.json`, JSON.stringify({ ...binding, instructionVersion: 2 }));
-  } else {
-    const endpoint = readLastEndpoint(hubId)!;
-    writeLastEndpoint({ ...endpoint,
-      ...(change === "connector name" ? { connectorName: "Renamed connector", desiredConnectorName: "Renamed connector" } : {}),
-      ...(change === "connector ID" ? { connectorId: "connector_other_verified" } : {}),
-      ...(change === "MCP URL" ? { mcpUrl: "https://new.example.com/mcp", boundMcpUrl: "https://new.example.com/mcp", publicUrl: "https://new.example.com" } : {}),
-    });
-  }
-  expect(projectStatus(hubId, workspaceId).status).toBe("sync_required");
-  if (change !== "instruction version") {
-    expect(() => bindProject(hubId, workspaceId, projectUrl, binding.appliedInstructionHash)).toThrow("PROJECT_INSTRUCTIONS_CHANGED");
-  }
-  bindProject(hubId, workspaceId, projectUrl, projectInstructions(hubId, workspaceId).instructionHash);
-  expect(projectStatus(hubId, workspaceId).status).toBe("current");
-});
-
-it("reports missing/unregistered roots as stale and permits explicit local unbind by ID", () => {
-  acknowledge(); cleanup(root);
-  expect(projectStatus(hubId, workspaceId)).toMatchObject({ status: "stale", reason: "WORKSPACE_UNAVAILABLE" });
-  registry.remove(workspaceId);
-  expect(projectStatus(hubId, workspaceId)).toMatchObject({ status: "stale", reason: "WORKSPACE_NOT_REGISTERED", binding: { projectUrl } });
-  expect(() => projectInstructions(hubId, workspaceId)).toThrow("PROJECT_BINDING_STALE");
-  expect(() => bindProject(hubId, workspaceId, projectUrl, "0".repeat(64))).toThrow("PROJECT_BINDING_STALE");
-  expect(fs.existsSync(file())).toBe(true);
-  expect(unbindProject(hubId, workspaceId).unbound).toBe(true);
-  expect(fs.existsSync(file())).toBe(false);
-});
-
-it("isolates Hubs and rejects foreign ownership, unknown grants and malformed binding state", () => {
-  const binding = acknowledge(), other = createHub("Other").hubId;
-  verifiedEndpoint(other);
-  for (const operation of [projectStatus, projectInstructions]) expect(() => operation(other, workspaceId)).toThrow("WORKSPACE_NOT_FOUND");
-  new WorkspaceRegistry(other).add(root, "backend");
-  expect(projectStatus(other, workspaceId).status).toBe("unbound");
-  for (const invalid of [{ ...binding }, { ...binding, hubId: other, workspaceId: "0123456789ab" }, { ...binding, hubId: other, session: "forbidden" }]) {
-    write(state, `project-bindings/${other}/${workspaceId}.json`, JSON.stringify(invalid));
-    expect(() => projectStatus(other, workspaceId)).toThrow("PROJECT_BINDING_INVALID");
-    expect(() => bindProject(other, workspaceId, projectUrl, binding.appliedInstructionHash)).toThrow("PROJECT_BINDING_INVALID");
-    expect(() => unbindProject(other, workspaceId)).toThrow("PROJECT_BINDING_INVALID");
-    expect(() => bindProject(hubId, workspaceId, projectUrl, binding.appliedInstructionHash)).toThrow("PROJECT_BINDING_INVALID");
-  }
-  expect(projectStatus(hubId, workspaceId)).toMatchObject({ status: "current", binding });
-  expect(() => projectStatus("hub-550e8400-e29b-41d4-a716-446655440000", workspaceId)).toThrow("HUB_NOT_CONFIGURED");
-});
-
-it("fails closed until the Hub connector's exact binding is verified", () => {
-  acknowledge();
-  const endpoint = readLastEndpoint(hubId)!;
-  for (const patch of [{ desiredConnectorName: "Unverified rename" }, { mcpUrl: "https://changed.example.com/mcp" }, { connectorId: undefined }, { mcpUrl: null }]) {
-    writeLastEndpoint({ ...endpoint, ...patch });
-    expect(projectStatus(hubId, workspaceId)).toMatchObject({ status: "stale", reason: "PROJECT_CONNECTOR_UNVERIFIED" });
-    expect(() => projectInstructions(hubId, workspaceId)).toThrow("PROJECT_CONNECTOR_UNVERIFIED");
-  }
-});
-
-it("rejects non-Project URLs without overwriting an acknowledged binding", () => {
-  const binding = acknowledge();
-  for (const url of ["http://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-desk-home/project", "https://chatgpt.com/c/chat", projectUrl.replace("/project", "/c/chat"),
-    projectUrl.replace("chatgpt.com", "chatgpt.com.evil.example"), projectUrl + "?token=secret", projectUrl + "#chat", projectUrl.replace("https://", "https://user@"), "https://chatgpt.com/g/example/project"]) {
-    expect(() => bindProject(hubId, workspaceId, url, binding.appliedInstructionHash)).toThrow("INVALID_PROJECT_URL");
-  }
-  expect(projectStatus(hubId, workspaceId).binding).toEqual(binding);
-});
-
-it("refuses symlinks at either binding path level before reading, replacing or deleting", () => {
-  const binding = acknowledge(), target = write(state, "outside.json", JSON.stringify(binding));
-  fs.rmSync(file()); fs.symlinkSync(target, file());
-  expect(() => projectStatus(hubId, workspaceId)).toThrow(/symlink/);
-  expect(() => unbindProject(hubId, workspaceId)).toThrow(/symlink/);
-  fs.rmSync(file()); fs.rmdirSync(path.dirname(file()));
-  fs.symlinkSync(root, path.dirname(file()), "dir");
-  expect(() => bindProject(hubId, workspaceId, projectUrl, binding.appliedInstructionHash)).toThrow(/symlink/);
+  const target = write(state, "retained.json", JSON.stringify(binding)); fs.unlinkSync(file()); fs.symlinkSync(target, file());
+  expect(() => unbindProject(hubId, a, frontend)).toThrow(/symlink/);
+  fs.unlinkSync(file()); fs.rmdirSync(path.dirname(file())); fs.symlinkSync(root, path.dirname(file()), "dir");
+  expect(() => bindProject(hubId, a, binding.appliedInstructionHash, frontend)).toThrow(/symlink/);
   expect(fs.readFileSync(target, "utf8")).toBe(JSON.stringify(binding));
 });

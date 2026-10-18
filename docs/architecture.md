@@ -21,7 +21,7 @@ the read-only data plane. Successful setup or reconnect ends at `MCP READY`.
 | `pairing/` | Expiring one-time pairing codes, attempt limits and rate limiting |
 | `hub/` | Independent identity, deterministic discovery and explicit selection |
 | `workspace/` | Hub-scoped registry, canonical containment, ignore rules, detection, reads, search and git |
-| `project/` | Optional Hub/workspace-scoped ChatGPT Project acknowledgements and deterministic instructions |
+| `project/` | Optional Hub-scoped Project memberships, many-to-many workspace routing and deterministic instructions |
 | `tunnel/` | Quick/Named cloudflared processes, provisioning, naming and rollback |
 | `process/` | Daemon spawn/reuse and local admin requests |
 | `lifecycle/` | Hub operation locks, resource receipts and connection lifecycle |

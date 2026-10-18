@@ -36,7 +36,7 @@ describe("transactional connector reconciliation",()=>{
 describe("Hub lifecycle",()=>{
  function projectBinding(id=hub.hubId,url="https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-desk-home/project"){
   const workspaceId=new WorkspaceRegistry(id).list()[0].workspaceId;
-  return bindProject(id,workspaceId,url,projectInstructions(id,workspaceId).instructionHash);
+  return bindProject(id,url,projectInstructions(id,url,workspaceId).instructionHash,workspaceId);
  }
  it.each(["file","directory"])("retains a recovery receipt on Project %s cleanup failure, then removes only this Hub's acknowledgements",async(stage)=>{
   endpoint();bind();const {account}=resources(),binding=projectBinding(),other=createHub("Other");
@@ -45,8 +45,8 @@ describe("Hub lifecycle",()=>{
   const name=readLastEndpoint(other.hubId)!.desiredConnectorName!;
   confirmConnectorBinding(other.hubId,{name,mcpUrl:"https://other.example.com/mcp",connectorId:"other_connector"});
   const foreign=projectBinding(other.hubId,"https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/project");
-  const directory=path.join(state,"project-bindings",hub.hubId),file=path.join(directory,`${binding.workspaceId}.json`);
-  const otherFile=path.join(state,"project-bindings",other.hubId,`${foreign.workspaceId}.json`),retained=fs.readFileSync(otherFile);
+  const directory=path.join(state,"project-bindings",hub.hubId),file=path.join(directory,`${binding.projectId}.json`);
+  const otherFile=path.join(state,"project-bindings",other.hubId,`${foreign.projectId}.json`),retained=fs.readFileSync(otherFile);
   const unlink=fs.unlinkSync,rmdir=fs.rmdirSync;
   const failure=stage==="file"?vi.spyOn(fs,"unlinkSync").mockImplementation(p=>{if(String(p)===file)throw new Error("Project cleanup interrupted");return unlink(p);}):
    vi.spyOn(fs,"rmdirSync").mockImplementation((p,opts)=>{if(String(p)===directory)throw new Error("Project cleanup interrupted");return rmdir(p,opts);});
@@ -59,10 +59,10 @@ describe("Hub lifecycle",()=>{
  });
  it.each(["malformed","foreign owner","wrong filename","directory symlink","file symlink","unexpected file"])("blocks destroy before remote deletion for %s Project state",async(kind)=>{
   endpoint();bind();const {account}=resources(),binding=projectBinding();
-  const directory=path.join(state,"project-bindings",hub.hubId),file=path.join(directory,`${binding.workspaceId}.json`);
+  const directory=path.join(state,"project-bindings",hub.hubId),file=path.join(directory,`${binding.projectId}.json`);
   if(kind==="malformed")fs.writeFileSync(file,"{");
   if(kind==="foreign owner")fs.writeFileSync(file,JSON.stringify({...binding,hubId:createHub("Foreign").hubId}));
-  if(kind==="wrong filename")fs.renameSync(file,path.join(directory,"0123456789ab.json"));
+  if(kind==="wrong filename")fs.renameSync(file,path.join(directory,"g-p-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json"));
   if(kind==="directory symlink"){fs.rmSync(directory,{recursive:true});fs.symlinkSync(root,directory,"dir");}
   if(kind==="file symlink"){fs.unlinkSync(file);fs.symlinkSync(write(state,"retained-binding.json",JSON.stringify(binding)),file);}
   if(kind==="unexpected file")fs.writeFileSync(path.join(directory,"notes.txt"),"retain");

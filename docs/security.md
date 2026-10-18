@@ -54,16 +54,17 @@ Hub ID. Updates use exclusive local locks and atomic replacement. Missing or
 foreign authoritative state fails closed. Connector binding requires the observed
 connector ID/name/URL and actual MCP evidence from a registered workspace.
 
-Optional `project-bindings/<hubId>/<workspaceId>.json` records only the Project
-URL, matching identities, instruction version/hash and acknowledgement timestamp.
+Optional `project-bindings/<hubId>/<projectId>.json` records the Project URL,
+matching identities, workspace membership IDs, instruction version/hash and acknowledgement timestamp.
 It stores no chat URL, credentials, repo contents or task/session state. Binding
 requires a currently registered workspace and the current generated instruction
 hash. Local metadata never proves Project access or MCP verification: the Skill
 must confirm exact instructions and the Hub connector/workspace through visible
-ChatGPT UI. Unregistering a workspace retains its binding as stale; unbind only
-removes local metadata. Project bindings confer no additional MCP grants.
-Project ID uniqueness is enforced across Hubs under an exclusive local lock;
-URL slugs do not change Project identity. Pending destroy blocks binding mutations.
+ChatGPT UI. Unregistering a workspace excludes it from generated routing and
+reports its stale membership IDs. Project memberships confer no additional MCP grants.
+A Project is scoped to one Hub under an exclusive local lock; its workspaces may
+also belong to other Projects. URL slugs do not change Project identity. Removing
+a membership edits only its Project record. Pending destroy blocks binding mutations.
 Destroy rejects unsafe Project state before remote deletion and only removes
 validated local acknowledgements, never the ChatGPT Project or its Instructions.
 

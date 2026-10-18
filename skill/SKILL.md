@@ -9,8 +9,9 @@ description: >
 # Desk C2C Hub
 
 Use the existing Hub whenever possible. Successful setup or verification ends
-at **MCP READY**, then STOP. Optional ChatGPT Projects hold durable workspace
-instructions and reuse the Hub connector. Do not persist chat URLs, start a
+at **MCP READY**, then STOP. Optional ChatGPT Projects hold durable multi-repo
+routing instructions and reuse the Hub connector. Workspaces may belong to
+multiple Projects; each Project references only one Hub. Do not persist chat URLs, start a
 coding/planning loop, or use INIT/PLAN/EXECUTED/REVIEW or session/checkpoint orchestration.
 
 ## Boundaries
@@ -51,11 +52,11 @@ With one healthy Hub:
 2. Run `c2c workspace add <current-repo> --json`, using the chosen Hub selector
    only if multiple Hubs exist. This changes grants without restarting or
    touching OAuth, tunnel or connector state.
-3. Select the same connector in ChatGPT. Call `list_workspaces`, then
-   `workspace_info` with the new registration's alias/ID. Require actual MCP
-   results matching the canonical local workspace ID.
-4. Inspect `c2c project status --workspace <workspaceId> --json`, then follow
-   [Project binding](references/projects.md) to reuse/select the Project and
+3. Select the same connector in ChatGPT. Verify the known registration ID with
+   `workspace_info(workspace="<workspaceId>")`; require that exact ID. Never use
+   `list_workspaces()` to decide which repository a task should read.
+4. Follow [Project membership](references/projects.md) to select the intended
+   Project, inspect `c2c project status --project-url <url> --json`, and
    verify within it. Report **MCP READY** and stop. No tunnel setup, OAuth setup
    or connector creation is needed for an already connected healthy Hub.
 
@@ -91,7 +92,7 @@ names and binding. Unknown runtime state is a blocker, not permission to spawn.
 
 Inspect the exact connector ID, name and Server URL. A title or local health
 check is not binding evidence. Select the connector in a normal ChatGPT chat,
-call `list_workspaces` and `workspace_info` with a registered alias/ID; if needed,
+call `workspace_info` with the explicit registered workspace ID; if needed,
 read a small existing file through `read_file` without supplying its contents.
 
 For a stale catalog, use the existing connector's **Manage → Refresh tools**,
