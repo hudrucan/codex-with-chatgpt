@@ -50,8 +50,9 @@ auto-remove locks by age or kill an unverified PID.
 For a stale tool surface, open the exact existing connector in Manage and use
 Refresh tools. Then select that connector and verify all eight tools and the
 optional workspace selector in a new ordinary chat
-in the same IAB tab and verify there. Do not create a Project, persist a chat
-pointer, send a task handoff or repeatedly message a stale conversation.
+in the same IAB tab and verify there. Tool refresh does not create a Project;
+reuse an existing Project binding when applicable. Do not persist a chat pointer,
+send a task handoff or repeatedly message a stale conversation.
 
 Use visible settings navigation if a legacy deep link redirects without opening
 the add form. Start at Plugins → Manage → Add → Add custom MCP server when

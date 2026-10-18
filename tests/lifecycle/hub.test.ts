@@ -7,6 +7,7 @@ import {acquireHubLock,destroyHub,disconnectHub,lifecycleFile} from "../../src/l
 import {boundConnector,confirmConnectorBinding,connectorReconciliation,persistHubEndpoint,readLastEndpoint,writeLastEndpoint} from "../../src/config/endpoint.js";
 import {readTunnelState,writeTunnelState} from "../../src/tunnel/state.js";
 import {WorkspaceRegistry} from "../../src/workspace/registry.js";
+import {bindProject,projectInstructions} from "../../src/project/bindings.js";
 import {CloudflareApi} from "../../src/tunnel/cloudflare-api.js";
 import {verifyForkOrigin} from "../../src/config/update.js";
 import {cleanup,isolateStateDir,makeTmpDir,write} from "../helpers.js";
@@ -38,6 +39,42 @@ describe("transactional connector reconciliation",()=>{
  });
 });
 describe("Hub lifecycle",()=>{
+ function projectBinding(id=hub.hubId,url="https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-desk-home/project"){
+  const workspaceId=new WorkspaceRegistry(id).list()[0].workspaceId;
+  return bindProject(id,workspaceId,url,projectInstructions(id,workspaceId).instructionHash);
+ }
+ it.each(["file","directory"])("retains a recovery receipt on Project %s cleanup failure, then removes only this Hub's acknowledgements",async(stage)=>{
+  endpoint();bind();const {account}=resources(),binding=projectBinding(),other=createHub("Other");
+  new WorkspaceRegistry(other.hubId).add(root);
+  persistHubEndpoint({hubId:other.hubId,hubName:"Other",port:1,publicUrl:"https://other.example.com",mcpUrl:"https://other.example.com/mcp"});
+  const name=readLastEndpoint(other.hubId)!.desiredConnectorName!;
+  confirmConnectorBinding(other.hubId,{name,mcpUrl:"https://other.example.com/mcp",connectorId:"other_connector"});
+  const foreign=projectBinding(other.hubId,"https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/project");
+  const directory=path.join(state,"project-bindings",hub.hubId),file=path.join(directory,`${binding.workspaceId}.json`);
+  const otherFile=path.join(state,"project-bindings",other.hubId,`${foreign.workspaceId}.json`),retained=fs.readFileSync(otherFile);
+  const unlink=fs.unlinkSync,rmdir=fs.rmdirSync;
+  const failure=stage==="file"?vi.spyOn(fs,"unlinkSync").mockImplementation(p=>{if(String(p)===file)throw new Error("Project cleanup interrupted");return unlink(p);}):
+   vi.spyOn(fs,"rmdirSync").mockImplementation((p,opts)=>{if(String(p)===directory)throw new Error("Project cleanup interrupted");return rmdir(p,opts);});
+  await expect(destroyHub(hub.hubId,{account,confirm:true,connectorRemoved:"plugin_owned"})).rejects.toThrow("Project cleanup interrupted");
+  expect(JSON.parse(fs.readFileSync(lifecycleFile(hub.hubId),"utf8"))).toMatchObject({localCleanup:true,tunnelRemoved:true});
+  expect(fs.existsSync(hubFile(hub.hubId))).toBe(true);expect(fs.readFileSync(otherFile)).toEqual(retained);
+  failure.mockRestore();expect((await destroyHub(hub.hubId,{account,confirm:true})).destroyed).toBe(true);
+  expect(fs.existsSync(directory)).toBe(false);expect(fs.readFileSync(otherFile)).toEqual(retained);
+  expect(account.deleteDns).toHaveBeenCalledTimes(1);expect(account.deleteTunnel).toHaveBeenCalledTimes(1);
+ });
+ it.each(["malformed","foreign owner","wrong filename","directory symlink","file symlink","unexpected file"])("blocks destroy before remote deletion for %s Project state",async(kind)=>{
+  endpoint();bind();const {account}=resources(),binding=projectBinding();
+  const directory=path.join(state,"project-bindings",hub.hubId),file=path.join(directory,`${binding.workspaceId}.json`);
+  if(kind==="malformed")fs.writeFileSync(file,"{");
+  if(kind==="foreign owner")fs.writeFileSync(file,JSON.stringify({...binding,hubId:createHub("Foreign").hubId}));
+  if(kind==="wrong filename")fs.renameSync(file,path.join(directory,"0123456789ab.json"));
+  if(kind==="directory symlink"){fs.rmSync(directory,{recursive:true});fs.symlinkSync(root,directory,"dir");}
+  if(kind==="file symlink"){fs.unlinkSync(file);fs.symlinkSync(write(state,"retained-binding.json",JSON.stringify(binding)),file);}
+  if(kind==="unexpected file")fs.writeFileSync(path.join(directory,"notes.txt"),"retain");
+  await expect(destroyHub(hub.hubId,{account,confirm:true,connectorRemoved:"plugin_owned"})).rejects.toThrow(/PROJECT_BINDING_INVALID|STATE_PATH_INVALID/);
+  expect(account.deleteDns).not.toHaveBeenCalled();expect(account.deleteTunnel).not.toHaveBeenCalled();
+  expect(fs.existsSync(hubFile(hub.hubId))).toBe(true);expect(fs.existsSync(lifecycleFile(hub.hubId))).toBe(false);
+ });
  it("disconnects without the original repo, revoking only Hub auth and retaining grants/resources",async()=>{
   endpoint();bind();const {saved}=resources(),registry=new WorkspaceRegistry(hub.hubId),grants=fs.readFileSync(registry.file);
   const auth=new AuthStore(hub.hubId),token=auth.issueTokens({clientId:"test",scopes:["workspace.read"]}).accessToken;

@@ -73,7 +73,7 @@
 - Keep the main Skill focused on stable setup, verification, reconnect, doctor/repair, and disconnect flows.
 - Keep rare or experimental operations in focused references.
 - Successful setup or reconnect ends at `MCP READY`, then stops; do not start an automatic planning/review/coding loop.
-- Do not create ChatGPT Projects, persistent chat pointers, or session/checkpoint orchestration unless explicitly requested.
+- Optional ChatGPT Project bindings reuse the Hub connector and require visible instructions plus MCP verification. Never persist chat URLs or restore session/checkpoint orchestration.
 - Ask the user only for genuinely required grouped naming choices, human authentication, credentials/permissions, or real conflicts.
 
 ## Verification

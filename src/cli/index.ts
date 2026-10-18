@@ -54,6 +54,7 @@ import { pullFork, verifyForkOrigin } from "../config/update.js";
 import { acquireHubLock, destroyHub, disconnectHub, lifecycleFile } from "../lifecycle/hub.js";
 import { adoptLegacyWorkspace, finalizeAuthHandoff, hasLegacyInstall, handoffLegacyWorkspace } from "../migration/adoption.js";
 import { detachHub, legacyCleanup } from "../migration/finalize.js";
+import { addProjectCommands } from "../project/cli.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
 
 // Keep parent options before subcommands; Hub selectors are also accepted by subcommands.
@@ -168,6 +169,7 @@ let releaseLifecycleLock: (() => void) | undefined;
 program.hook("preAction", (_command, action) => {
   const name = action.name();
   commandHubSelector = action.optsWithGlobals().hub;
+  if (action.parent?.name() === "project") return;
   if (!["setup", "start", "restart", "doctor", "choose", "bind", "unpair", "pair", "stop", "add", "remove"].includes(name)) return;
   let hub: Hub;
   if (name === "setup") {
@@ -1242,6 +1244,7 @@ function addHubOptions(command: Command): void {
     addHubOptions(child);
   }
 }
+addProjectCommands(program);
 addHubOptions(program);
 program.parseAsync(process.argv).catch((error: Error) => {
   handleCliError(error, process.argv.includes("--json"));

@@ -74,7 +74,7 @@ may require the user. Preserve the tab to resume the same setup.
 Attach/select the exact plugin in a normal chat and require a real
 `workspace_info` result matching local ID/name. If the chat's tool surface is
 stale, use Manage → Refresh tools on the same connector, then a new ordinary
-verification chat. Do not create a Project or save a
+verification chat, inside the exact bound Project when applicable. Do not save a
 conversation pointer. A correct result plus `connector bind` and healthy doctor
 clears the pending binding. Report `MCP READY` and stop.
 

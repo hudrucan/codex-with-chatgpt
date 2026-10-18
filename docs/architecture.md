@@ -22,6 +22,7 @@ the read-only data plane. Successful setup or reconnect ends at `MCP READY`.
 | `hub/` | Independent identity, deterministic discovery and explicit selection |
 | `migration/` | Explicit one-shot adoption, detach and verified local cleanup |
 | `workspace/` | Hub-scoped registry, canonical containment, ignore rules, detection, reads, search and git |
+| `project/` | Optional Hub/workspace-scoped ChatGPT Project acknowledgements and deterministic instructions |
 | `tunnel/` | Quick/Named cloudflared processes, provisioning, naming and rollback |
 | `process/` | Daemon spawn/reuse and local admin requests |
 | `lifecycle/` | Hub operation locks, resource receipts and connection lifecycle |

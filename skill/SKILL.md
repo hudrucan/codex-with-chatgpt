@@ -2,15 +2,16 @@
 name: codex-with-chatgpt
 description: >
   Set up and operate Desk C2C Hub, a secure read-only MCP connection from ChatGPT
-  to explicitly registered local repos. Use for setup, adding a repo, verification,
+  to explicitly registered local repos. Use for setup, adding a repo, Project binding, verification,
   doctor/repair, disconnect, or an explicit update.
 ---
 
 # Desk C2C Hub
 
 Use the existing Hub whenever possible. Successful setup or verification ends
-at **MCP READY**, then STOP. Do not start a coding/planning loop or create Projects,
-chat pointers or session orchestration.
+at **MCP READY**, then STOP. Optional ChatGPT Projects hold durable workspace
+instructions and reuse the Hub connector. Do not persist chat URLs, start a
+coding/planning loop, or use INIT/PLAN/EXECUTED/REVIEW or session/checkpoint orchestration.
 
 ## Boundaries
 
@@ -55,8 +56,10 @@ With one healthy Hub:
 3. Select the same connector in ChatGPT. Call `list_workspaces`, then
    `workspace_info` with the new registration's alias/ID. Require actual MCP
    results matching the canonical local workspace ID.
-4. Report **MCP READY** and stop. No tunnel setup, OAuth setup or connector
-   creation is needed for an already connected healthy Hub.
+4. Inspect `c2c project status --workspace <workspaceId> --json`, then follow
+   [Project binding](references/projects.md) to reuse/select the Project and
+   verify within it. Report **MCP READY** and stop. No tunnel setup, OAuth setup
+   or connector creation is needed for an already connected healthy Hub.
 
 A stopped/disconnected Hub is an existing connection, not a fresh setup. An
 explicit request to reconnect authorizes `c2c start --tunnel`; preserve its saved
@@ -82,7 +85,9 @@ names and binding. Unknown runtime state is a blocker, not permission to spawn.
    connected local workspace.` Reuse the task's single in-app browser tab.
 6. When the pairing form is ready, use `c2c pair --json` and type that one-time
    code. Never unpair/revoke to solve a discovery or process-handoff issue.
-7. Verify actual MCP results and bind below. End at **MCP READY**.
+7. Verify actual MCP results and bind the connector below. Then follow
+   [Project binding](references/projects.md) for the registered workspace.
+   End at **MCP READY**.
 
 ## Verification and binding
 

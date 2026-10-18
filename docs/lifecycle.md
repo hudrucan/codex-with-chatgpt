@@ -102,3 +102,9 @@ Updates run only when requested.
 Experimental resource removal is isolated in the
 [Skill deprovisioning reference](../skill/references/deprovision.md); setup,
 reconnect and repair do not invoke that workflow.
+Destroy validates this Hub's Project-binding directory before remote deletion
+and removes only validated local acknowledgements before the Hub identity.
+Malformed, foreign, unexpected or symlinked Project state blocks cleanup.
+Local cleanup failures retain the destroy receipt for retry. ChatGPT Projects
+and their Instructions are not automatically deleted. Pending destroy receipts
+block Project bind/unbind; read-only Project diagnostics remain available.

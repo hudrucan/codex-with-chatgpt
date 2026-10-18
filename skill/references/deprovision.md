@@ -25,7 +25,11 @@ owned connector under the normal transaction without destroying the Hub.
    `--desired-connector-absent` only after step 3. Flags are receipts of observed
    UI actions, not proof the runtime independently obtained; never fabricate them.
 5. Runtime rechecks ownership, revokes/stops, removes recorded DNS/tunnel, then
-   this Hub's local state, registry and finally Hub identity. A failure retains its receipt/state for retry.
+   this Hub's local state (including validated Project binding acknowledgements),
+   registry and finally Hub identity. Project bindings are preflighted before
+   remote deletion; malformed, foreign, unexpected or symlinked state blocks it.
+   A failure retains its receipt/state for retry. ChatGPT Projects and their
+   Instructions are not automatically deleted.
    Shared credentials, other Hubs and repository files stay intact.
    Verify remote absence and removal of this Hub's state before reporting
    complete destruction. Report each remaining blocker separately; Cloudflare
@@ -68,7 +72,7 @@ Before reporting full completion, verify the recorded hostname is absent via
 the Cloudflare API and the tunnel UUID is absent from `cloudflared tunnel list`.
 Dashboard/browser/DNS resolver caches alone are not authoritative. Check that
 the bridge is stopped and this Hub's auth, runtime, endpoint, tunnel,
-registry and daemon logs are gone, including
+registry, local Project binding acknowledgements and daemon logs are gone, including
 the destroy receipt. Inspect paths/existence without dumping credentials.
 Reinspect after the user reports manual cleanup; do not reuse stale results.
 The shared state directory may remain for prefs, global logs or other Hub

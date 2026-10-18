@@ -13,6 +13,7 @@ import { readTunnelState, tunnelSchema } from "../tunnel/state.js";
 import { registrySchema } from "../workspace/registry.js";
 import { ProcessCloudflaredAccount, type CloudflaredAccount } from "../tunnel/named-provision.js";
 import { assertDnsOwnership } from "../tunnel/cloudflare-api.js";
+import { inspectProjectBindings, removeProjectBindings } from "../project/state.js";
 function localJson(file: string): Record<string, unknown> {
   try {
     const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -94,6 +95,10 @@ function readReceipt(hubId: string): z.infer<typeof receiptSchema> | null {
     throw new Error("OWNERSHIP_CONFLICT: Destroy receipt is malformed or belongs to another Hub.");
   }
 }
+/** Protect mutation APIs independently of CLI hooks; malformed receipts also fail closed. */
+export function assertNoPendingDestroy(hubId: string): void {
+  if (readReceipt(hubId)) throw new Error("DESTROY_PENDING: Finish this Hub's destroy before changing Project bindings.");
+}
 /** Exact resource plan; no ChatGPT APIs or deletion are performed during planning. */
 export async function destroyHub(hubId: string, opts: {
   confirm?: boolean;
@@ -141,6 +146,7 @@ export async function destroyHub(hubId: string, opts: {
         if (entries[n] === "workspace-registries")
           registrySchema.parse(raw);
       }
+    inspectProjectBindings(hubId);
     const account = opts.account ?? new ProcessCloudflaredAccount();
     if (plan.tunnel && !(receipt?.dnsRemoved && receipt?.tunnelRemoved)) {
       const rows = await account.listTunnels(), current = rows.find(r => r.id === plan.tunnel!.id);
@@ -176,6 +182,7 @@ export async function destroyHub(hubId: string, opts: {
     }
     receipt.localCleanup = true;
     save();
+    removeProjectBindings(hubId);
     // Registry follows all resource state; the Hub identity is the last product file.
     for (const dir of entries.filter(dir => dir !== "workspace-registries")) {
       const file = stateFile(dir, `${hubId}.json`);

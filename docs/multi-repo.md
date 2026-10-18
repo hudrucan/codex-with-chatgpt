@@ -87,6 +87,100 @@ see [security](security.md).
 | `git_status` | Branch and working-tree status | `git.read` |
 | `git_diff` | Scoped git diff with byte-offset pagination | `git.read` |
 
+## ChatGPT Project bindings
+
+One Hub connector serves many workspaces, each with an optional single ChatGPT
+Project binding. [Project instructions apply across its chats](https://learn.chatgpt.com/docs/projects).
+The binding supplies durable workspace selection, without a separate connector
+or any chat/task/session protocol. Workspace IDs are authoritative; aliases and
+display names are labels.
+
+```bash
+c2c project status --workspace backend --json
+c2c project instructions --workspace backend --json
+# After applying exact instructions and verifying MCP inside the selected Project:
+c2c project bind --workspace backend --project-url "<project-url>" --instruction-hash <verified-hash> --json
+c2c project unbind --workspace backend --json
+```
+
+Hub selection follows the usual single-Hub discovery or explicit `--hub <id>`.
+Project URLs must be HTTPS `chatgpt.com` Project landing URLs, such as
+`https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-desk-home/project`,
+without chat paths, queries or fragments. A title match is not Project identity.
+The stable `g-p-...` ID can be bound to only one `(hubId, workspaceId)` across
+all local Hubs, regardless of URL slug/title. Conflicts return
+`PROJECT_BINDING_CONFLICT`; explicitly unbind before reassignment. Re-acknowledging
+the same workspace's own Project is allowed. An exclusive Project-state lock
+serializes cross-Hub checks and writes; malformed binding state fails closed.
+
+`instructions` uses the registered workspace's ID, alias, display name and the
+Hub's verified connector ID/name/bound URL. It requires a reconciled connector
+binding and emits deterministic text plus its SHA-256 `instructionHash`.
+Every workspace-scoped tool must use `workspace="<workspaceId>"`, starting with
+`workspace_info` to confirm that exact identity. Metadata or instruction version
+changes require explicit instruction sync. Runtime PID, port and restart time
+are excluded; restoring the same MCP URL leaves instructions current.
+The generated text and hash include these exact managed-block markers:
+
+```text
+--- BEGIN DESK C2C HUB WORKSPACE BINDING ---
+...
+--- END DESK C2C HUB WORKSPACE BINDING ---
+```
+
+The Skill preserves unrelated Project instructions and replaces only one exact
+managed block. Multiple/ambiguous blocks require explicit resolution.
+
+`status` reports local metadata only:
+
+| Status | Meaning |
+| --- | --- |
+| `unbound` | Registered workspace has no saved Project acknowledgement |
+| `current` | Saved instruction version/hash matches the current generated block |
+| `sync_required` | Apply current instructions in the saved Project and verify MCP before acknowledging |
+| `stale` | Workspace grant/root is unavailable, or the Hub connector is not verified/reconciled |
+
+`projectVerification: "not_checked"` always distinguishes this local result from
+ChatGPT verification. The Skill opens the exact saved Project, confirms the
+instruction block and verifies MCP within it. For an unbound workspace it asks
+once to choose an existing Project or create one; declining leaves it unbound.
+For stale instructions it updates the same Project in place, preserving unrelated
+user instructions. A missing/inaccessible Project, conflicting connector,
+unconfirmed instruction block or mismatched MCP workspace stops the flow without
+replacement resources. See the [Skill procedure](../skill/references/projects.md).
+
+`bind` acknowledges completed UI/MCP verification; it does not modify ChatGPT or
+prove access on its own. Its hash must equal the currently generated hash.
+Removing a workspace retains its binding and never deletes a Project. Inspect
+or unbind a removed registration using its exact stored workspace ID. Rebinding
+requires explicit registration and fresh UI/MCP verification. `unbind` only
+removes local acknowledgement, leaving the Project and its instructions intact.
+
+External state at `project-bindings/<hubId>/<workspaceId>.json` is versioned,
+Hub/workspace-scoped and atomically written with owner-only permissions:
+
+```json
+{
+  "version": 1,
+  "hubId": "hub-550e8400-e29b-41d4-a716-446655440000",
+  "workspaceId": "0123456789ab",
+  "projectUrl": "https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-desk-home/project",
+  "instructionVersion": 1,
+  "appliedInstructionHash": "<sha256-of-generated-instructions>",
+  "updatedAt": "2026-10-18T14:00:00.000Z"
+}
+```
+
+No conversation URL, task/checkpoint state, raw credentials or repo contents are
+stored. Malformed or foreign binding files and symlinked state paths fail closed.
+Project bindings never widen workspace grants or alter connection lifecycle.
+Pending destroy receipts block bind/unbind with `DESTROY_PENDING`; read-only
+diagnostics remain available. Hub destroy preflights this Hub's binding files
+before remote deletion, rejects malformed/foreign/unexpected/symlinked state,
+and removes validated local acknowledgements before Hub identity. Failures retain
+the destroy receipt for retry. ChatGPT Projects and their Instructions are never
+automatically deleted.
+
 ## Registry storage
 
 Hub identity lives in `hubs/<hubId>.json` in the external C2C state directory.
