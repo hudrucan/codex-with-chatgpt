@@ -5,8 +5,11 @@ import path from "node:path";
 import { findBinary } from "./detect.js";
 import { suggestedNamedHostname } from "./hostname.js";
 import { normalizeNamedTunnelHostname } from "./cloudflared-named.js";
+import { CloudflareApi, assertDnsOwnership, type DnsRecord } from "./cloudflare-api.js";
+import { userFacingName } from "../config/naming.js";
 import {
   NAMED_FALLBACK_MESSAGE,
+  readTunnelState,
   writeTunnelState,
   type TunnelState,
 } from "./state.js";
@@ -43,6 +46,10 @@ export interface CloudflaredAccount {
   listTunnels(): Promise<ListedTunnel[]>;
   createTunnel(name: string): Promise<ListedTunnel>;
   routeDns(tunnelName: string, hostname: string): Promise<void>;
+  dns(zone: string, hostname: string): Promise<DnsRecord | null>;
+  deleteDns(zone: string, hostname: string, tunnelId: string): Promise<void>;
+  renameTunnel(zone: string, tunnelId: string, expectedName: string, name: string): Promise<void>;
+  deleteTunnel(tunnel: ListedTunnel): Promise<void>;
 }
 
 export function cloudflaredCertPath(): string {
@@ -127,19 +134,19 @@ export function inspectNamedTunnelCredentials(tunnelId?: string): NamedTunnelCre
 export function namedTunnelCredentialRepairMessage(status: NamedTunnelCredentialStatus): string {
   switch (status) {
     case "missing_account_certificate":
-      return "固定域名缺少 Cloudflare 账号证书。请运行 cloudflared tunnel login，完成后再运行 c2c doctor。";
+      return "The fixed hostname is missing its Cloudflare account certificate. Run cloudflared tunnel login, then c2c doctor.";
     case "missing_credentials":
-      return "固定域名缺少 Tunnel 凭据文件。请使用 cloudflared tunnel token --cred-file \"%USERPROFILE%\\.cloudflared\\<TUNNEL-UUID>.json\" <TUNNEL-UUID> 恢复该 Tunnel，再运行 c2c doctor。";
+      return "The fixed hostname is missing its tunnel credential file. Restore it with cloudflared tunnel token --cred-file \"%USERPROFILE%\\.cloudflared\\<TUNNEL-UUID>.json\" <TUNNEL-UUID>, then run c2c doctor.";
     case "unreadable_credentials":
-      return "固定域名的 Tunnel 凭据文件不可读或过大。请恢复正确的 UUID.json 文件权限和内容，再运行 c2c doctor。";
+      return "The tunnel credential file is unreadable or too large. Restore the correct UUID.json file and permissions, then run c2c doctor.";
     case "invalid_credentials":
-      return "固定域名的 Tunnel 凭据文件不是有效的本地 Tunnel JSON。请恢复正确文件，再运行 c2c doctor。";
+      return "The tunnel credential file is not valid local tunnel JSON. Restore the correct file, then run c2c doctor.";
     case "mismatched_credentials":
-      return "固定域名的 Tunnel 凭据与当前保存的 Tunnel ID 不匹配。请恢复对应的 UUID.json 文件，再运行 c2c doctor。";
+      return "The tunnel credential does not match the saved Tunnel ID. Restore the matching UUID.json file, then run c2c doctor.";
     case "missing_tunnel_id":
-      return "固定域名状态缺少 Tunnel ID。请运行 c2c setup 重新保存 Named Tunnel 状态。";
+      return "The fixed hostname's state is missing a Tunnel ID. Run c2c setup to restore the named tunnel state.";
     case "ready":
-      return "固定域名凭据已就绪。";
+      return "Fixed-hostname credentials are ready.";
   }
 }
 
@@ -176,8 +183,18 @@ export function parseCreatedTunnel(output: string, name: string): ListedTunnel |
   return id ? { id, name } : null;
 }
 
-export function isBenignRouteError(message: string): boolean {
-  return /already exists|duplicate|exists as a cname/i.test(message);
+export class TunnelNamingConflict extends Error {
+  constructor(message: string) {
+    super(`TUNNEL_NAMING_CONFLICT: ${message}`);
+  }
+}
+
+export function normalizeTunnelName(value: string): string {
+  const name = userFacingName(value, "Tunnel name");
+  if (name.length > 128 || name.startsWith("-")) {
+    throw new Error("INVALID_NAME: Tunnel name must be at most 128 characters and must not start with '-'.");
+  }
+  return name;
 }
 
 export class ProcessCloudflaredAccount implements CloudflaredAccount {
@@ -246,21 +263,49 @@ export class ProcessCloudflaredAccount implements CloudflaredAccount {
 
   async createTunnel(name: string): Promise<ListedTunnel> {
     const existing = (await this.listTunnels()).find((tunnel) => tunnel.name === name);
-    if (existing) return existing;
+    if (existing) throw new TunnelNamingConflict(`Tunnel "${name}" already exists; its binding must be verified before reuse.`);
     const result = this.run(["tunnel", "create", name]);
-    const created = parseCreatedTunnel(`${result.stdout}\n${result.stderr}`, name);
+    const created = result.ok ? parseCreatedTunnel(`${result.stdout}\n${result.stderr}`, name) : null;
     if (created) return created;
     if (/already exists/i.test(`${result.stdout}\n${result.stderr}`)) {
-      const again = (await this.listTunnels()).find((tunnel) => tunnel.name === name);
-      if (again) return again;
+      throw new TunnelNamingConflict(`Tunnel "${name}" was created by another process. Retry after checking its binding.`);
     }
     throw new Error(result.stderr || result.stdout || `Unable to create tunnel ${name}`);
   }
 
   async routeDns(tunnelName: string, hostname: string): Promise<void> {
     const result = this.run(["tunnel", "route", "dns", tunnelName, hostname]);
-    if (result.ok || isBenignRouteError(`${result.stdout}\n${result.stderr}`)) return;
+    if (result.ok) return;
+    if (/already exists|duplicate|exists as a cname/i.test(`${result.stdout}\n${result.stderr}`)) {
+      throw new TunnelNamingConflict(`Hostname "${hostname}" already has a DNS route; it was not reassigned to "${tunnelName}".`);
+    }
     throw new Error(result.stderr || result.stdout || `Unable to route ${hostname}`);
+  }
+
+  private readonly api = new CloudflareApi();
+
+  dns(zone: string, hostname: string): Promise<DnsRecord | null> {
+    return this.api.dns(zone, hostname);
+  }
+
+  deleteDns(zone: string, hostname: string, tunnelId: string): Promise<void> {
+    return this.api.deleteDns(zone, hostname, tunnelId);
+  }
+
+  renameTunnel(zone: string, id: string, expectedName: string, name: string): Promise<void> {
+    return this.api.renameTunnel(zone, id, expectedName, name);
+  }
+
+  async deleteTunnel(tunnel: ListedTunnel): Promise<void> {
+    const rows = await this.listTunnels();
+    const current = rows.find((row) => row.id === tunnel.id);
+    if (!current) {
+      if (rows.some((row) => row.name === tunnel.name)) throw new TunnelNamingConflict("Saved tunnel name now belongs to a different ID.");
+      return;
+    }
+    if (current.name !== tunnel.name) throw new TunnelNamingConflict("Saved tunnel ID now has a different name.");
+    const result = this.run(["tunnel", "delete", tunnel.id]);
+    if (!result.ok) throw new Error("Tunnel deletion failed; state retained. Stop active tunnel connections and retry.");
   }
 
   private run(args: string[]): { ok: boolean; stdout: string; stderr: string } {
@@ -288,44 +333,120 @@ export interface ProvisionNamedResult {
 export async function provisionNamedTunnel(opts: {
   workspaceId: string;
   workspaceName: string;
-  zone: string;
+  zone?: string;
   hostname?: string;
+  tunnelName?: string;
   account?: CloudflaredAccount;
 }): Promise<ProvisionNamedResult> {
   const account = opts.account ?? new ProcessCloudflaredAccount();
+  let previous = readTunnelState(opts.workspaceId);
+  if (previous.workspaceId !== opts.workspaceId) return { ok: false, state: previous, fallback: false, error: "OWNERSHIP_CONFLICT: Saved tunnel belongs to another workspace." };
+  if (previous.pending) {
+    try {
+      previous = await rollbackNamedTunnel(previous, account);
+    } catch (error) {
+      return { ok: false, state: previous, fallback: false, error: `TUNNEL_ROLLBACK_PENDING: ${(error as Error).message}` };
+    }
+  }
   let hostname: string;
+  let tunnelName: string;
+  let zone: string;
   try {
-    hostname = opts.hostname
-      ? normalizeNamedTunnelHostname(opts.hostname)
-      : suggestedNamedHostname(opts.zone, opts.workspaceName, opts.workspaceId);
+    zone = normalizeNamedTunnelHostname(opts.zone ?? previous.zone ?? "");
+    tunnelName = normalizeTunnelName(opts.tunnelName ?? previous.tunnelName ?? `c2c-${opts.workspaceId}`);
+    hostname = normalizeNamedTunnelHostname(
+      opts.hostname ?? previous.hostname ?? suggestedNamedHostname(zone, opts.workspaceName, opts.workspaceId)
+    );
+    if (hostname !== zone && !hostname.endsWith(`.${zone}`)) {
+      throw new Error(`INVALID_HOSTNAME: "${hostname}" must belong to "${zone}".`);
+    }
   } catch (error) {
-    return fallbackState(opts.workspaceId, "invalid_hostname", (error as Error).message);
+    return { ok: false, state: previous, fallback: false, error: (error as Error).message };
   }
 
-  const tunnelName = `c2c-${opts.workspaceId}`;
+  let staged: TunnelState | undefined;
   try {
     if (!account.hasCert()) await account.login();
-    const tunnel = await account.createTunnel(tunnelName);
-    await account.routeDns(tunnel.name, hostname);
+    const tunnels = await account.listTunnels();
+    const owned = previous.tunnelId ? tunnels.find((tunnel) => tunnel.id === previous.tunnelId) : undefined;
+    const existing = tunnels.find((tunnel) => tunnel.name === tunnelName);
+    if (existing && existing.id !== previous.tunnelId) {
+      throw new TunnelNamingConflict(`Tunnel "${tunnelName}" exists but does not match this workspace's saved Tunnel ID.`);
+    }
+    if (previous.tunnelId && (!owned || owned.name !== previous.tunnelName)) {
+      throw new TunnelNamingConflict("Saved tunnel is missing or no longer matches its saved name. Restore the existing resource before retrying.");
+    }
+    const changedHost = Boolean(owned && (previous.hostname !== hostname || previous.zone !== zone));
+    const changedName = Boolean(owned && owned.name !== tunnelName);
+    if (changedHost || changedName) {
+      if (!previous.zone || !previous.hostname) throw new Error("OWNERSHIP_CONFLICT: Legacy tunnel needs its saved zone and hostname before rename.");
+      const oldDns = await account.dns(previous.zone, previous.hostname);
+      if (!oldDns) throw new Error("OWNERSHIP_CONFLICT: Saved DNS route is missing before rename.");
+      assertDnsOwnership(oldDns, owned!.id);
+      if (changedHost && await account.dns(zone, hostname)) throw new TunnelNamingConflict(`Hostname "${hostname}" already has a DNS record.`);
+    }
+    if (owned && !changedHost && !changedName && previous.preference === "named") return { ok: true, state: previous, fallback: false };
+    // Write intent before remote mutations. In-place rename retains the UUID and
+    // credentials, so a DNS failure can never orphan a replacement tunnel.
+    staged = writeTunnelState({ ...previous, pending: {
+      tunnelId: owned?.id, tunnelName, hostname, zone, created: !owned,
+    } });
+    const tunnel = owned ?? await account.createTunnel(tunnelName);
+    staged = writeTunnelState({ ...staged, pending: { ...staged.pending!, tunnelId: tunnel.id } });
+    if (tunnel.name !== (owned?.name ?? tunnelName)) throw new TunnelNamingConflict("Cloudflare returned an unexpected tunnel name.");
+    if (changedName) await account.renameTunnel(previous.zone!, tunnel.id, owned!.name, tunnelName);
+    if (!owned || changedHost) await account.routeDns(tunnel.id, hostname);
+    if (changedHost) await account.deleteDns(previous.zone!, previous.hostname!, tunnel.id);
     const state = writeTunnelState({
-      workspaceId: opts.workspaceId,
-      preference: "named",
-      askedAt: new Date().toISOString(),
-      provider: "cloudflare-named",
-      tunnelName: tunnel.name,
-      tunnelId: tunnel.id,
-      hostname,
-      zone: normalizeNamedTunnelHostname(opts.zone),
+      workspaceId: opts.workspaceId, preference: "named", askedAt: new Date().toISOString(),
+      provider: "cloudflare-named", tunnelName, tunnelId: tunnel.id, hostname, zone,
       configuredAt: new Date().toISOString(),
     });
     return { ok: true, state, fallback: false };
   } catch (error) {
+    if (staged) {
+      try { await rollbackNamedTunnel(staged, account); }
+      catch (rollbackError) {
+        return { ok: false, state: readTunnelState(opts.workspaceId), fallback: false,
+          error: `TUNNEL_ROLLBACK_PENDING: ${(error as Error).message}; ${(rollbackError as Error).message}` };
+      }
+    }
+    if (staged || error instanceof TunnelNamingConflict || opts.tunnelName !== undefined || opts.hostname !== undefined || previous.tunnelName) {
+      return { ok: false, state: previous, fallback: false, error: (error as Error).message };
+    }
     return fallbackState(opts.workspaceId, "provision_failed", (error as Error).message);
   }
 }
 
+/** Retry rollback before accepting another provisioning request. Never forget a
+ * partially completed remote operation, even when cleanup also fails. */
+export async function rollbackNamedTunnel(state: TunnelState, account: CloudflaredAccount): Promise<TunnelState> {
+  const pending = state.pending;
+  if (!pending) return state;
+  if (!pending.tunnelId) throw new Error(`Creation outcome for "${pending.tunnelName}" is uncertain; verify Cloudflare ownership manually before recovery.`);
+  const rows = await account.listTunnels();
+  const current = rows.find((row) => row.id === pending.tunnelId);
+  if (current && current.name !== pending.tunnelName && current.name !== state.tunnelName) throw new Error("OWNERSHIP_CONFLICT: Pending tunnel was renamed externally.");
+  if (pending.created || pending.hostname !== state.hostname || pending.zone !== state.zone) {
+    await account.deleteDns(pending.zone, pending.hostname, pending.tunnelId);
+  }
+  if (pending.created) await account.deleteTunnel({ id: pending.tunnelId, name: pending.tunnelName });
+  else {
+    if (!current) throw new Error("OWNERSHIP_CONFLICT: Original tunnel disappeared during rollback.");
+    if (current.name !== state.tunnelName) await account.renameTunnel(state.zone!, current.id, current.name, state.tunnelName!);
+    const dns = await account.dns(state.zone!, state.hostname!);
+    if (dns) assertDnsOwnership(dns, current.id);
+    else await account.routeDns(current.id, state.hostname!);
+  }
+  const { pending: _pending, ...previous } = state;
+  return writeTunnelState(previous);
+}
+
 export function chooseQuickTunnel(workspaceId: string, fallbackReason?: string): TunnelState {
+  const previous = readTunnelState(workspaceId);
+  if (previous.pending) throw new Error("TUNNEL_ROLLBACK_PENDING: Resolve the pending operation before switching connection type.");
   return writeTunnelState({
+    ...previous,
     workspaceId,
     preference: "quick",
     askedAt: new Date().toISOString(),

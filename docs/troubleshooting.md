@@ -1,6 +1,6 @@
 # Troubleshooting
 
-First move, always:
+For an existing setup, start with:
 
 ```
 c2c doctor
@@ -9,13 +9,88 @@ c2c doctor
 It checks Node, workspace, bridge, MCP, OAuth and tunnel — and repairs what it
 can (restarts the bridge, restarts the tunnel) without asking.
 
+For a new setup, resolve names before provisioning or running a repairing
+doctor. Use `c2c doctor --no-fix` when only diagnosis is needed.
+
+## Setup names
+
+The [Skill](../skill/SKILL.md#setup-names-and-connection-choice-before-provisioning)
+resolves names using explicit user values, then persisted configuration, then
+human-readable project suggestions, and finally fallback defaults. Existing
+setups keep their saved names without another prompt unless a real conflict
+needs resolution. A stopped bridge or expired temporary URL is still an
+existing setup.
+
+For a new setup with names still unspecified, Codex presents one grouped
+choice before provisioning. For example, if you supplied the domain
+`example.com`:
+
+```text
+Suggested setup:
+- Workspace / Project: desk-c2c-hub
+- Tunnel: desk-c2c
+- Hostname: code.example.com
+- Connector: Desk C2C Hub
+
+Accept the suggestions, or tell me which names to customize.
+```
+
+Values you already supplied stay fixed. Without a known domain, the hostname
+suggestion is a temporary address, with the option to supply your Cloudflare
+domain in the same reply. Quick Tunnel names and hostnames are not user-chosen.
+After this decision, Codex completes setup and verifies file reads automatically,
+pausing only for authentication, credentials, required permission, or a real
+conflict/blocker. An explicitly chosen manual setup preference is preserved.
+
+Setup accepts all four names through existing configuration/state mechanisms:
+
+```bash
+c2c setup -w <workspace> --workspace-name "desk-c2c-hub" --tunnel-name "desk-c2c" --zone "example.com" --hostname "code.example.com" --connector-name "Desk C2C Hub" --json
+```
+
+Use your actual domain. Omit named-tunnel options for a temporary connection.
+`tunnel choose --mode named` also accepts `--tunnel-name` and `--hostname`.
+
+- Workspace display name: `--workspace-name` writes external C2C state at
+  `workspaces/<workspaceId>.json` (`displayName`, `workspaceRoot`, `workspaceId`).
+  It never creates/modifies `.c2c.json` just for naming. The external override
+  wins over an existing `.c2c.json` `name`; without an override, legacy `name`
+  and other project configuration remain readable.
+  The canonical root still determines `workspaceId`; names do not key auth or
+  runtime files. A running bridge does not reload the display name: setup/start
+  report `WORKSPACE_NAME_RESTART_REQUIRED`, and status/doctor expose
+  `workspaceNameRestartRequired`. Run `c2c restart -w <workspace> --tunnel --json`,
+  then rerun setup. Tokens remain valid; a Quick Tunnel may get a new address.
+- Tunnel resource name: explicit `--tunnel-name`, then saved `tunnelName`, then
+  legacy `c2c-<workspaceId>`. An existing resource must match the saved tunnel
+  name and ID to be reused; otherwise setup reports `TUNNEL_NAMING_CONFLICT`
+  and leaves state intact. DNS conflicts also fail explicitly, without a new
+  generated name or silent temporary-address fallback.
+- Hostname: explicit `--hostname`, then saved `hostname`, then the existing
+  generated default. A setup rerun or repair does not derive a new hostname
+  merely because the display name changed.
+- Connector display name: `--connector-name` saves `desiredConnectorName`,
+  including local-only setup. `connectorName`, `boundMcpUrl`, and `connectorId`
+  identify the last verified ChatGPT binding. Setup/doctor/restart preserve it
+  until the Skill verifies the desired plugin's settings and workspace_info,
+  then runs `c2c connector bind`. `doctor` keeps reporting pending reconciliation
+  across reruns instead of forgetting it after one local repair.
+
+Rename rollback, scoped Cloudflare API credentials, ownership checks and
+`disconnect` versus `destroy` are covered in [lifecycle and recovery](lifecycle.md).
+
+No naming flags are needed on rerun. Legacy installations keep their current
+defaults; no configuration migration or multi-workspace support is introduced.
+The Skill still controls suggestions, the grouped decision, ChatGPT Project
+titles, and browser creation/reconciliation of the actual connector.
+
 ## Common situations
 
-### "Bridge 未运行"
+### Bridge is not running
 `c2c start` (or let doctor do it). Bridge logs:
 `c2c logs`, or verbose: `c2c logs --verbose`.
 
-If doctor says the bridge state is **uncertain** (无法确认), do not start a
+If doctor says the bridge state is **uncertain**, do not start a
 second bridge and do not Delete the ChatGPT connector. Wait and run doctor
 again. The local process may still be running.
 
@@ -23,7 +98,7 @@ again. The local process may still be running.
 
 This repository installs the Codex Skill and the C2C Bridge. It does **not**
 ship the separate `Codex Web GPT` desktop launcher or the native Codex model
-catalog UI. If that launcher says **Install into Codex / 安装到 Codex** is
+catalog UI. If that launcher says **Install into Codex** is
 incomplete, separate route installation from catalog verification:
 
 - The launcher can successfully write its local `openai_base_url` route while
@@ -80,13 +155,15 @@ re-login to Cloudflare (`c2c tunnel login`) and doctor again. Do not Delete
 the connector; the address did not change.
 
 ### I have a Cloudflare domain and want a stable hostname
-During first-time setup (or the next coding session, once), say you have a
-Cloudflare account and give the domain. Codex opens a browser for Cloudflare
-login, then keeps `c2c-<project>.your-domain.com`. To stay on the temporary
-address, say you do not have a domain. Switching later: tell Codex you want
-the stable hostname; it runs `c2c tunnel choose --mode named --zone <domain>`.
+Include your Cloudflare domain and any preferred hostname in the setup
+request or the single grouped naming reply. Codex preserves the chosen
+hostname with `--hostname` and opens Cloudflare login when needed. Existing
+setups retain their saved hostname without another naming prompt. To switch
+later, tell Codex the desired domain/hostname; it resolves any conflict with
+the existing address before provisioning. A required fixed address is not
+silently replaced with a temporary one if provisioning fails.
 
-### "配对码无效/过期"
+### Pairing code is invalid or expired
 Pairing codes are one-time and expire after ~5 minutes. Generate one only
 when the ChatGPT Authorize page is ready:
 
@@ -151,14 +228,15 @@ Working as intended: `.env`, keys, credentials and anything matched by
 `.c2cignore` are never readable through ChatGPT. `.env.example` is allowed.
 
 ### I cannot see Projects in the ChatGPT sidebar
-Hover **Chats** /「聊天」, click the … that appears, and choose
-**Organize by project** /「按项目整理」. Then create a project named after
-this workspace, with **project-only memory**. Tell Codex「好了」when the
-collection page is open (`https://chatgpt.com/g/g-p-…/project`).
+Codex can hover **Chats**, click the … that appears, and choose
+**Organize by project** in the in-app browser. It creates the Project with the
+resolved display name and **project-only memory**, then saves the collection
+URL (`https://chatgpt.com/g/g-p-…/project`). In explicitly chosen manual setup,
+follow those steps and tell Codex when the collection page is open.
 
 ### This workspace opened the wrong ChatGPT Project
 Do not pick another project by name automatically. Open the collection that
-matches this workspace and tell Codex「已找到」, or say you want the old
+matches this workspace and tell Codex "found it", or say you want the old
 long-chat instead. Each workspace has its own Project and its own connector.
 
 ### Completely stuck

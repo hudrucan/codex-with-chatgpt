@@ -15,7 +15,6 @@ import { hostnameSlug, parseZoneInput, suggestedNamedHostname } from "../src/tun
 import {
   chooseQuickTunnel,
   cloudflaredCredentialPath,
-  isBenignRouteError,
   inspectNamedTunnelCredentials,
   namedTunnelCredentialRepairMessage,
   parseCreatedTunnel,
@@ -293,7 +292,7 @@ describe("named hostname helpers", () => {
   });
 
   it("falls back to the workspace id when the name is not ASCII", () => {
-    expect(hostnameSlug("回声", "abcdef123456")).toBe("c2c-ws-abcdef12");
+    expect(hostnameSlug("🌊", "abcdef123456")).toBe("c2c-ws-abcdef12");
   });
 
   it("parses a typed domain", () => {
@@ -322,9 +321,6 @@ ID                                   NAME          CREATED
     ).toEqual({ id: "22222222-2222-2222-2222-222222222222", name: "c2c-abc" });
   });
 
-  it("treats an existing DNS route as success", () => {
-    expect(isBenignRouteError("Failed to add route: record already exists")).toBe(true);
-  });
 });
 
 describe("tunnel preference state", () => {
@@ -346,6 +342,10 @@ describe("tunnel preference state", () => {
       listTunnels: async () => [],
       createTunnel: async (name) => ({ id: "33333333-3333-3333-3333-333333333333", name }),
       routeDns: async () => undefined,
+      dns: async () => null,
+      deleteDns: async () => undefined,
+      renameTunnel: async () => undefined,
+      deleteTunnel: async () => undefined,
     };
     return provisionNamedTunnel({
       workspaceId: "abcdef123456",
@@ -361,7 +361,7 @@ describe("tunnel preference state", () => {
     });
   });
 
-  it("falls back to a temporary address when named provisioning fails", () => {
+  it("retains creation intent when the remote create outcome is uncertain", () => {
     stateDirs.push(isolateStateDir());
     const account: CloudflaredAccount = {
       hasCert: () => true,
@@ -371,6 +371,10 @@ describe("tunnel preference state", () => {
         throw new Error("no zone");
       },
       routeDns: async () => undefined,
+      dns: async () => null,
+      deleteDns: async () => undefined,
+      renameTunnel: async () => undefined,
+      deleteTunnel: async () => undefined,
     };
     return provisionNamedTunnel({
       workspaceId: "ws2",
@@ -378,9 +382,10 @@ describe("tunnel preference state", () => {
       zone: "example.com",
       account,
     }).then((result) => {
-      expect(result.fallback).toBe(true);
-      expect(result.state.preference).toBe("quick");
-      expect(result.userMessage).toMatch(/临时地址/);
+      expect(result.ok).toBe(false);
+      expect(result.fallback).toBe(false);
+      expect(result.state.pending?.tunnelName).toBe("c2c-ws2");
+      expect(result.error).toContain("TUNNEL_ROLLBACK_PENDING");
     });
   });
 });

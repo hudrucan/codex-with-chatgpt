@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import readline from "node:readline";
 import { IgnoreRules } from "./ignore.js";
+import { readWorkspaceDisplayName } from "../config/naming.js";
 import { readJsonIfExists } from "../config/paths.js";
 
 export type WorkspaceErrorCode =
@@ -103,7 +104,7 @@ export class Workspace {
     this.id = createHash("sha256").update(normCase(real)).digest("hex").slice(0, 12);
     this.ignoreRules = new IgnoreRules(real);
     this.projectConfig = parseProjectConfig(readJsonIfExists<unknown>(path.join(real, ".c2c.json")));
-    this.name = this.projectConfig.name ?? path.basename(real);
+    this.name = readWorkspaceDisplayName(this.id, real) ?? this.projectConfig.name ?? path.basename(real);
   }
 
   private contains(candidate: string): boolean {
