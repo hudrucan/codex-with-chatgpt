@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { hubIdSchema, withHubControlPlane } from "../hub/store.js";
-import { ensureDir, getStateDir, writeSecureJson } from "../config/paths.js";
+import { ensureDir, writeSecureJson } from "../config/paths.js";
 import { stateFile } from "../config/state-files.js";
 
 export const SUPPORTED_SCOPES = [
@@ -45,13 +45,13 @@ export interface TokenRecord {
   revoked: boolean;
 }
 
-export const clientSchema = z.object({ clientId: z.string().min(1), clientName: z.string().optional(),
+const clientSchema = z.object({ clientId: z.string().min(1), clientName: z.string().optional(),
   redirectUris: z.array(z.string()), createdAt: z.string().datetime() }).strict();
-export const tokenFields = { hash: z.string().regex(/^[a-f0-9]{64}$/), kind: z.enum(["access", "refresh"]),
+const tokenFields = { hash: z.string().regex(/^[a-f0-9]{64}$/), kind: z.enum(["access", "refresh"]),
   clientId: z.string(), scopes: z.array(z.string()), issuedAt: z.number().finite(),
   expiresAt: z.number().finite(), revoked: z.boolean() };
 const tokenSchema = z.object({ ...tokenFields, hubId: hubIdSchema }).strict();
-export const authSchema = z.object({ version: z.literal(1), hubId: hubIdSchema,
+const authSchema = z.object({ version: z.literal(1), hubId: hubIdSchema,
   clients: z.array(clientSchema), tokens: z.array(tokenSchema) }).strict();
 type PersistedAuthState = z.infer<typeof authSchema>;
 
@@ -59,7 +59,7 @@ export class AuthStateError extends Error {
   constructor(message: string) { super(`AUTH_STATE_CONFLICT: ${message}`); this.name = "AuthStateError"; }
 }
 
-export function withAuthLock<T>(file: string, operation: () => T): T {
+function withAuthLock<T>(file: string, operation: () => T): T {
   ensureDir(path.dirname(file));
   const lock = `${file}.lock`;
   let fd: number;
@@ -69,7 +69,7 @@ export function withAuthLock<T>(file: string, operation: () => T): T {
   finally { fs.closeSync(fd); fs.unlinkSync(lock); }
 }
 
-export function readAuthJson(file: string): unknown | undefined {
+function readAuthJson(file: string): unknown | undefined {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -77,14 +77,9 @@ export function readAuthJson(file: string): unknown | undefined {
   }
 }
 
-export function requireUniqueRecords(data: { clients: ClientRegistration[]; tokens: { hash: string }[] }): void {
+function requireUniqueRecords(data: { clients: ClientRegistration[]; tokens: { hash: string }[] }): void {
   if (new Set(data.clients.map((client) => client.clientId)).size !== data.clients.length ||
       new Set(data.tokens.map((token) => token.hash)).size !== data.tokens.length) throw new Error("Duplicate auth records");
-}
-
-export function canonical(value: unknown): string {
-  return JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
-    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 }
 
 export function parseHubAuth(hubId: string, raw: unknown): PersistedAuthState | undefined {
@@ -318,6 +313,6 @@ export function filterScopes(requested: string | undefined): string[] {
   if (!requested || requested.trim() === "") return [...SUPPORTED_SCOPES];
   const asked = requested.split(/[\s+]+/).filter(Boolean);
   const granted = asked.filter((scope) => (SUPPORTED_SCOPES as readonly string[]).includes(scope));
-  // An explicit retired/unknown scope must not expand into all core permissions.
+  // An explicit unknown scope must not expand into all core permissions.
   return granted;
 }

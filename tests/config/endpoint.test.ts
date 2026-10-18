@@ -3,7 +3,6 @@ import {
   connectorAction,
   connectorNameFor,
   DEFAULT_CONNECTOR_NAME,
-  LEGACY_CONNECTOR_NAME,
   mcpUrlFromPublic,
   normalizePublicUrl,
   reclaimUserMessage,
@@ -20,8 +19,8 @@ describe("connectorAction", () => {
 
   it("updates when the old address was reclaimed", () => {
     expect(connectorAction("https://old.trycloudflare.com/mcp", "https://new.trycloudflare.com/mcp")).toBe("update");
-    expect(reclaimUserMessage("Codex with ChatGPT")).toContain("delete");
-    expect(reclaimUserMessage("Codex with ChatGPT")).not.toContain("Reconnect");
+    expect(reclaimUserMessage("Chosen Connector")).toContain("delete");
+    expect(reclaimUserMessage("Chosen Connector")).not.toContain("Reconnect");
   });
 
   it("does nothing without a next URL", () => {
@@ -34,26 +33,15 @@ describe("connectorNameFor", () => {
     expect(
       connectorNameFor({
         hubName: "EchoMind",
-        previousName: "Codex with ChatGPT",
-        hadEndpointBefore: true,
+        previousName: "Chosen Connector",
       })
-    ).toBe(LEGACY_CONNECTOR_NAME);
-  });
-
-  it("keeps the legacy title when this Hub was used before the name field existed", () => {
-    expect(
-      connectorNameFor({
-        hubName: "EchoMind",
-        hadEndpointBefore: true,
-      })
-    ).toBe(LEGACY_CONNECTOR_NAME);
+    ).toBe("Chosen Connector");
   });
 
   it("gives a new Hub its own connector title", () => {
     expect(
       connectorNameFor({
         hubName: "Landing",
-        hadEndpointBefore: false,
       })
     ).toBe(`${DEFAULT_CONNECTOR_NAME} · Landing`);
   });

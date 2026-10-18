@@ -32,11 +32,6 @@ describe("transactional connector reconciliation",()=>{
   for(const change of [{name:"Original",mcpUrl:"https://code.example.com/mcp"},{name:"Chosen",mcpUrl:"https://foreign.example.com/mcp"}])expect(()=>confirmConnectorBinding(hub.hubId,{...change,connectorId:"foreign"})).toThrow(/CONFLICT/);
   expect(readLastEndpoint(hub.hubId)).toEqual(saved);bind("Chosen");expect(connectorReconciliation(readLastEndpoint(hub.hubId)).needed).toBe(false);
  });
- it("preserves an existing unversioned binding label while tracking an address change",()=>{
-  writeLastEndpoint({hubId:hub.hubId,port:1,publicUrl:"https://old.example.com",mcpUrl:"https://old.example.com/mcp"});
-  persistHubEndpoint({hubId:hub.hubId,hubName:"Renamed",port:2,publicUrl:"https://new.example.com",mcpUrl:"https://new.example.com/mcp"});
-  expect(connectorReconciliation(readLastEndpoint(hub.hubId))).toMatchObject({needed:true,connectorName:"Codex with ChatGPT",previousMcpUrl:"https://old.example.com/mcp"});
- });
 });
 describe("Hub lifecycle",()=>{
  function projectBinding(id=hub.hubId,url="https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-desk-home/project"){
@@ -110,17 +105,15 @@ describe("Hub lifecycle",()=>{
   expect((await destroyHub(hub.hubId,{account,confirm:true})).destroyed).toBe(true);
   expect(account.deleteDns).toHaveBeenCalledTimes(1);expect(fs.existsSync(hubFile(hub.hubId))).toBe(false);
  });
- it.each(["auth","workspace-registries","hubs","lifecycle"])("recovers from a failed %s local removal without affecting another Hub or legacy files",async(stage)=>{
+ it.each(["auth","workspace-registries","hubs","lifecycle"])("recovers from a failed %s local removal without affecting another Hub",async(stage)=>{
   endpoint();bind();const {account}=resources(),other=createHub("Other");
-  const unrelated=write(state,"auth/abcdef123456.json",JSON.stringify({workspaceId:"abcdef123456",marker:"retained"}));
-  const unowned=write(state,"workspace-registry.json","{}");
   const blocked=path.join(state,stage,`${hub.hubId}.json`),remove=fs.rmSync;
   const removal=vi.spyOn(fs,"rmSync").mockImplementation((file,options)=>{if(String(file)===blocked)throw new Error("local cleanup interrupted");return remove(file,options);});
   await expect(destroyHub(hub.hubId,{account,confirm:true,connectorRemoved:"plugin_owned"})).rejects.toThrow(/local cleanup interrupted/);
   expect(fs.existsSync(lifecycleFile(hub.hubId))).toBe(true);
-  expect(fs.existsSync(hubFile(other.hubId))).toBe(true);expect(fs.existsSync(unrelated)).toBe(true);expect(fs.existsSync(unowned)).toBe(true);
+  expect(fs.existsSync(hubFile(other.hubId))).toBe(true);
   removal.mockRestore();expect((await destroyHub(hub.hubId,{account,confirm:true})).destroyed).toBe(true);
-  expect(fs.existsSync(hubFile(other.hubId))).toBe(true);expect(fs.existsSync(unrelated)).toBe(true);
+  expect(fs.existsSync(hubFile(other.hubId))).toBe(true);
  });
  it.each(["pending tunnel","foreign endpoint","uncertain runtime","state symlink","invalid receipt"])("blocks destroy before remote deletion for %s",async(kind)=>{
   endpoint();bind();const {account}=resources();

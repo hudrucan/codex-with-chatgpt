@@ -18,7 +18,7 @@ function runCli(args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
   });
 }
 
-describe("machine-wide commands accept leftover -w", () => {
+describe("Hub diagnostics", () => {
   const dirs: string[] = [];
 
   afterEach(() => {
@@ -26,42 +26,6 @@ describe("machine-wide commands accept leftover -w", () => {
     dirs.length = 0;
     delete process.env.C2C_STATE_DIR;
     delete process.env.CODEX_HOME;
-  });
-
-  it("update-check --json -w does not fail with unknown option", () => {
-    dirs.push(isolateStateDir());
-    const result = runCli(["update-check", "--json", "-w", "C:/Projects/aquant"], {
-      C2C_STATE_DIR: process.env.C2C_STATE_DIR,
-    });
-    expect(result.stderr).not.toMatch(/unknown option/i);
-    expect(result.status).toBe(0);
-    const payload = JSON.parse(result.stdout) as { ok: boolean };
-    expect(payload.ok).toBe(true);
-  });
-
-  it("prefs --json -w does not fail with unknown option", () => {
-    dirs.push(isolateStateDir());
-    const result = runCli(["prefs", "--json", "-w", "C:/Projects/aquant"], {
-      C2C_STATE_DIR: process.env.C2C_STATE_DIR,
-    });
-    expect(result.stderr).not.toMatch(/unknown option/i);
-    expect(result.status).toBe(0);
-    const payload = JSON.parse(result.stdout) as { ok: boolean };
-    expect(payload.ok).toBe(true);
-  });
-
-  it("sandbox-allow --json -w does not fail with unknown option", () => {
-    const stateDir = isolateStateDir();
-    const codexHome = makeTmpDir("cli-w-codex-home");
-    dirs.push(stateDir, codexHome);
-    const result = runCli(["sandbox-allow", "--json", "-w", "C:/Projects/aquant"], {
-      C2C_STATE_DIR: stateDir,
-      CODEX_HOME: codexHome,
-    });
-    expect(result.stderr).not.toMatch(/unknown option/i);
-    expect(result.status).toBe(0);
-    const payload = JSON.parse(result.stdout) as { ok: boolean };
-    expect(payload.ok).toBe(true);
   });
 
   it("doctor reports a missing named tunnel credential without attempting repair", () => {
@@ -82,7 +46,7 @@ describe("machine-wide commands accept leftover -w", () => {
     });
     const certPath = write(credentialDir, "cert.pem", "synthetic cert");
     const credentialPath = path.join(credentialDir, `${tunnelId}.json`);
-    const result = runCli(["doctor", "--json", "--no-fix", "-w", root], {
+    const result = runCli(["doctor", "--json", "--no-fix"], {
       C2C_STATE_DIR: stateDir,
       TUNNEL_ORIGIN_CERT: certPath,
       TUNNEL_CRED_FILE: credentialPath,

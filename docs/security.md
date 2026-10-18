@@ -67,12 +67,6 @@ URL slugs do not change Project identity. Pending destroy blocks binding mutatio
 Destroy rejects unsafe Project state before remote deletion and only removes
 validated local acknowledgements, never the ChatGPT Project or its Instructions.
 
-Native runtime never reads legacy sources. Explicit migration verifies exact
-legacy ownership, checkpoints adoption and finalizes auth only after the legacy
-writer exits. Detach requires complete validated Hub state and no live legacy
-writer or pending rollback. Cleanup is a separate, dry-run-first local operation:
-only validated legacy-owner files may be removed, after detach. Native state,
-credentials, repos, global settings and migration-gate backups are excluded.
 State-path symlinks are rejected before destructive access. Partial destroy
 retains its Hub receipt for exact-resource recovery; Hub identity is removed last.
 

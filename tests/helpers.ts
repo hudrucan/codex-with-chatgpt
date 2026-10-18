@@ -6,7 +6,6 @@ import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { SERVICE_NAME, VERSION } from "../src/version.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -55,7 +54,7 @@ export function git(dir: string, ...args: string[]): string {
 
 export function makeGitRepo(dir: string): void {
   git(dir, "init", "-b", "main");
-  write(dir, "hello.txt", "Hello from Codex with ChatGPT!\n");
+  write(dir, "hello.txt", "Hello from Desk C2C Hub!\n");
   write(dir, "src/index.ts", "export const answer = 42;\n");
   git(dir, "add", ".");
   git(dir, "commit", "-m", "initial commit");
@@ -72,29 +71,6 @@ export function pkceVerifierAndChallenge(): { verifier: string; challenge: strin
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
-}
-
-/** Persist an exact legacy auth fixture without using the Hub-owned AuthStore. */
-export function legacyAuthFixture(stateDir: string, workspaceId: string, stoppedRoot?: string) {
-  const client = { clientId: `c2c_client_${randomBytes(12).toString("base64url")}`, clientName: "Existing client",
-    redirectUris: ["http://127.0.0.1:19999/callback"], createdAt: new Date().toISOString() };
-  const accessToken = `c2c_at_${randomBytes(32).toString("base64url")}`;
-  const refreshToken = `c2c_rt_${randomBytes(32).toString("base64url")}`;
-  const now = Date.now();
-  const tokens = [[accessToken, "access", 60 * 60_000], [refreshToken, "refresh", 30 * 24 * 60 * 60_000]].map(([raw, kind, ttl]) => ({
-    hash: createHash("sha256").update(String(raw)).digest("hex"), kind, clientId: client.clientId, workspaceId,
-    scopes: ["workspace.read", "workspace.search", "git.read", "offline_access"], issuedAt: now,
-    expiresAt: now + Number(ttl), revoked: false,
-  }));
-  const data = { clients: [client], tokens };
-  const file = write(stateDir, `auth/${workspaceId}.json`, JSON.stringify(data));
-  if (stoppedRoot) {
-    write(stateDir, `runtime/${workspaceId}.json`, JSON.stringify({
-      service: SERVICE_NAME, version: VERSION, workspaceId, workspaceRoot: stoppedRoot, pid: 999_999_999,
-      port: 1, adminToken: "stopped-fixture-admin", publicUrl: null, startedAt: new Date().toISOString(),
-    }));
-  }
-  return { file, data, client, accessToken, refreshToken, contents: fs.readFileSync(file, "utf8") };
 }
 
 // Explicit native Hub fixtures; repository identity is only a test lookup key.

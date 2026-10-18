@@ -52,8 +52,6 @@ import {
 } from "../config/endpoint.js";
 import { pullFork, verifyForkOrigin } from "../config/update.js";
 import { acquireHubLock, destroyHub, disconnectHub, lifecycleFile } from "../lifecycle/hub.js";
-import { adoptLegacyWorkspace, finalizeAuthHandoff, hasLegacyInstall, handoffLegacyWorkspace } from "../migration/adoption.js";
-import { detachHub, legacyCleanup } from "../migration/finalize.js";
 import { addProjectCommands } from "../project/cli.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
 
@@ -175,7 +173,6 @@ program.hook("preAction", (_command, action) => {
   if (name === "setup") {
     const opts = action.opts();
     const workspace = new Workspace(resolveWorkspace(opts.workspace));
-    if (!listHubs().length && !commandHubSelector && hasLegacyInstall()) throw new Error("HUB_MIGRATION_REQUIRED: An existing legacy installation needs explicit c2c hub migrate before setup.");
     hub = listHubs().length || commandHubSelector ? selectedHub() : createHub(opts.hubName ?? opts.workspaceName ?? workspace.name);
     commandHubSelector = hub.hubId;
   } else hub = selectedHub();
@@ -185,11 +182,6 @@ program.hook("preAction", (_command, action) => {
 });
 program.hook("postAction", () => { releaseLifecycleLock?.(); releaseLifecycleLock = undefined; });
 process.on("exit", () => { releaseLifecycleLock?.(); });
-
-/** Machine-wide commands ignore `-w` so a Skill that always passes it cannot crash them. */
-function acceptUnusedWorkspaceOption(command: Command): Command {
-  return command.option("-w, --workspace <path>", "ignored; this command is machine-wide");
-}
 
 // ---------------------------------------------------------------- serve (internal)
 
@@ -218,10 +210,9 @@ program
 program
   .command("start")
   .description("Start (or reuse) the bridge for this Hub")
-  .option("-w, --workspace <path>", "ignored compatibility option; select the Hub with --hub")
   .option("--tunnel", "also establish the secure public connection", false)
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { workspace?: string; tunnel: boolean; json: boolean }) => {
+  .action(async (opts: { tunnel: boolean; json: boolean }) => {
     try {
       const { hub, runtime, info, mcpUrl } = await ensureBridgeAndTunnel(selectedHub().hubId, { tunnel: opts.tunnel });
       const previous = readLastEndpoint(hub.hubId);
@@ -368,13 +359,12 @@ program
 
 const connectorCmd = program.command("connector").description("Acknowledge verified ChatGPT-side reconciliation");
 connectorCmd.command("bind")
-  .option("-w, --workspace <path>")
   .requiredOption("--name <name>")
   .requiredOption("--mcp-url <url>")
   .requiredOption("--connector-id <id>", "exact plugin ID observed in ChatGPT settings")
   .requiredOption("--verified-workspace <id>", "workspace_info ID observed through this connector")
   .option("--json", "machine-readable output", false)
-  .action((opts: { workspace?: string; name: string; mcpUrl: string; connectorId: string; verifiedWorkspace: string; json: boolean }) => {
+  .action((opts: { name: string; mcpUrl: string; connectorId: string; verifiedWorkspace: string; json: boolean }) => {
     try {
       const registry = new WorkspaceRegistry(selectedHub().hubId);
       if (!registry.choices().some((entry) => entry.workspaceId === opts.verifiedWorkspace)) {
@@ -391,8 +381,7 @@ connectorCmd.command("bind")
 program
   .command("stop")
   .description("Stop the bridge for this Hub")
-  .option("-w, --workspace <path>")
-  .action(async (opts: { workspace?: string }) => {
+  .action(async () => {
     const stopped = await stopBridge(selectedHub().hubId);
     if (stopped) check("Bridge stopped");
     else say("No bridge is running.");
@@ -401,10 +390,9 @@ program
 program
   .command("restart")
   .description("Restart the bridge for this Hub")
-  .option("-w, --workspace <path>")
   .option("--tunnel", "re-establish the secure public connection", false)
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { workspace?: string; tunnel: boolean; json: boolean }) => {
+  .action(async (opts: { tunnel: boolean; json: boolean }) => {
     await stopBridge(selectedHub().hubId);
     try {
       const { hub, runtime, info, mcpUrl } = await ensureBridgeAndTunnel(selectedHub().hubId, { tunnel: opts.tunnel });
@@ -432,9 +420,8 @@ program
 program
   .command("status")
   .description("Show bridge status for this Hub")
-  .option("-w, --workspace <path>")
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { workspace?: string; json: boolean }) => {
+  .action(async (opts: { json: boolean }) => {
     const hub = selectedHub();
     readTunnelState(hub.hubId);
     const endpoint = readLastEndpoint(hub.hubId);
@@ -477,10 +464,9 @@ program
 program
   .command("doctor")
   .description("Diagnose and auto-repair the connection")
-  .option("-w, --workspace <path>")
   .option("--no-fix", "diagnose only, do not repair")
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { workspace?: string; fix: boolean; json: boolean }) => {
+  .action(async (opts: { fix: boolean; json: boolean }) => {
     const report: Record<string, { ok: boolean; detail?: string }> = {};
     const results: string[] = [];
 
@@ -565,7 +551,6 @@ program
       ? connectorNameFor({
           hubName: hub!.displayName,
           previousName: lastEndpoint?.desiredConnectorName ?? lastEndpoint?.connectorName,
-          hadEndpointBefore: Boolean(lastEndpoint),
         })
       : DEFAULT_CONNECTOR_NAME;
     const tunnelState = hub ? readTunnelState(hub.hubId) : null;
@@ -796,9 +781,8 @@ program
 program
   .command("pair")
   .description("Generate a fresh pairing code")
-  .option("-w, --workspace <path>")
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { workspace?: string; json: boolean }) => {
+  .action(async (opts: { json: boolean }) => {
     try {
       const { runtime } = await ensureBridge(selectedHub().hubId);
       const pairing = await adminFetch<PairingResponse>(runtime, "POST", "/admin/pairing");
@@ -815,8 +799,7 @@ program
 program
   .command("unpair")
   .description("Revoke ChatGPT's access to this Hub immediately")
-  .option("-w, --workspace <path>")
-  .action(async (opts: { workspace?: string }) => {
+  .action(async () => {
     const observation = await findBridgeObservation(selectedHub().hubId);
     if (observation.state === "unknown") throw new Error("LIFECYCLE_BUSY: Cannot verify the bridge before revoking access.");
     if (observation.state === "healthy") {
@@ -830,9 +813,8 @@ program
 
 program.command("disconnect")
   .description("Revoke access and stop this Hub; keep connector, DNS, tunnel and saved configuration")
-  .option("-w, --workspace <path>")
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { workspace?: string; json: boolean }) => {
+  .action(async (opts: { json: boolean }) => {
     try {
       await disconnectHub(selectedHub().hubId);
       if (opts.json) say(JSON.stringify({ ok: true, disconnected: true, resourcesRetained: true }));
@@ -842,12 +824,11 @@ program.command("disconnect")
 
 program.command("destroy")
   .description("Plan or explicitly deprovision owned resources after ChatGPT connector deletion")
-  .option("-w, --workspace <path>")
   .option("--confirm", "execute the verified destruction plan", false)
   .option("--connector-removed <id>", "receipt: exact owned plugin ID removed in ChatGPT")
   .option("--desired-connector-absent", "receipt: no plugin remains for the pending desired name and URL", false)
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { workspace?: string; confirm: boolean; connectorRemoved?: string; desiredConnectorAbsent: boolean; json: boolean }) => {
+  .action(async (opts: { confirm: boolean; connectorRemoved?: string; desiredConnectorAbsent: boolean; json: boolean }) => {
     try {
       const result = await destroyHub(commandHubSelector ?? selectedHub().hubId, opts);
       if (opts.json) say(JSON.stringify(result));
@@ -860,10 +841,9 @@ program.command("destroy")
 program
   .command("logs")
   .description("Show recent bridge logs")
-  .option("-w, --workspace <path>")
   .option("-n, --lines <n>", "number of lines", "50")
   .option("--verbose", "include debug detail", false)
-  .action((opts: { workspace?: string; lines: string; verbose: boolean }) => {
+  .action((opts: { lines: string; verbose: boolean }) => {
     const candidates = [path.join(getStateDir(), "logs", `bridge-${selectedHub().hubId}.out.log`),path.join(getStateDir(), "logs", `bridge-${selectedHub().hubId}.log`)];
     let shown = false;
     for (const file of candidates) {
@@ -919,40 +899,17 @@ workspaceCmd.command("remove <alias-or-id>")
     if(opts.json)say(JSON.stringify({ok:true,...entry}));else check(`Removed ${entry.alias} (${entry.workspaceId})`);
   });
 
-const hubCmd=program.command("hub").description("Inspect Hubs and explicitly finalize local upgrades");
+const hubCmd=program.command("hub").description("List configured Hubs");
 hubCmd.command("list").option("--json", "machine-readable output",false).action((opts:{json:boolean})=>{
   const hubs=listHubs().map(({hubId,displayName})=>({hubId,displayName}));
   say(opts.json?JSON.stringify({hubs}):hubs.map(h=>`${h.displayName} (${h.hubId})`).join("\n"));
 });
-hubCmd.command("migrate").requiredOption("-w, --workspace <path>","verified legacy install root")
-  .option("--handoff","stop only the verified legacy process without revocation and finalize auth",false)
-  .option("--finalize-auth","require a stopped legacy writer and finalize auth",false)
-  .option("--json","machine-readable output",false)
-  .action(async(opts:{workspace:string;handoff:boolean;finalizeAuth:boolean;json:boolean})=>{
-    if(opts.handoff){say(JSON.stringify({hubId:await handoffLegacyWorkspace(resolveWorkspace(opts.workspace)),next:"c2c hub detach --hub <id>"}));return;}
-    const result=adoptLegacyWorkspace(resolveWorkspace(opts.workspace));
-    if(opts.finalizeAuth)finalizeAuthHandoff(result.hub.hubId,new Workspace(resolveWorkspace(opts.workspace)));
-    say(JSON.stringify({hubId:result.hub.hubId,next:"c2c hub detach --hub <id>"}));
-  });
-hubCmd.command("detach").option("--confirm","detach only after validating all checkpoints",false)
-  .option("--json","machine-readable output",false).action(async(opts:{confirm:boolean;json:boolean})=>{
-    if(!commandHubSelector)throw new Error("HUB_SELECTION_REQUIRED: Select the exact migration Hub with --hub.");
-    say(JSON.stringify(await detachHub(commandHubSelector,opts.confirm)));
-  });
-hubCmd.command("cleanup-legacy").option("--confirm","delete only the verified local legacy plan",false)
-  .option("--json","machine-readable output",false).action(async(opts:{confirm:boolean;json:boolean})=>{
-    if(!commandHubSelector)throw new Error("HUB_SELECTION_REQUIRED: Select the exact migration Hub with --hub.");
-    say(JSON.stringify(await legacyCleanup(commandHubSelector,opts.confirm)));
-  });
-
 // ---------------------------------------------------------------- sandbox-allow (Codex writable_roots, macOS + Windows)
 
-acceptUnusedWorkspaceOption(
-  program
-    .command("sandbox-allow")
-    .description("Add the local settings directory to the Codex sandbox allowlist")
-    .option("--json", "machine-readable output", false)
-)
+program
+  .command("sandbox-allow")
+  .description("Add the local settings directory to the Codex sandbox allowlist")
+  .option("--json", "machine-readable output", false)
   .action((opts: { json: boolean }) => {
     const result = trySandboxAllow();
     if (opts.json) {
@@ -984,13 +941,11 @@ function runGit(args: string[]): { ok: boolean; stdout: string } {
   return { ok: result.status === 0, stdout: (result.stdout ?? "").trim() };
 }
 
-acceptUnusedWorkspaceOption(
-  program
-    .command("update-check")
-    .description("Check GitHub for a newer version (real check at most once per local day)")
-    .option("--force", "check even if already checked today", false)
-    .option("--json", "machine-readable output", false)
-)
+program
+  .command("update-check")
+  .description("Check GitHub for a newer version (real check at most once per local day)")
+  .option("--force", "check even if already checked today", false)
+  .option("--json", "machine-readable output", false)
   .action((opts: { force: boolean; json: boolean }) => {
     try { verifyForkOrigin(runGit); }
     catch (error) { handleCliError(error, opts.json); return; }
@@ -1035,8 +990,8 @@ acceptUnusedWorkspaceOption(
     emit({ checked: true, updateAvailable, localCommit: local.stdout, remoteCommit });
   });
 
-acceptUnusedWorkspaceOption(program.command("update").description("Explicitly fast-forward this fork after checking origin and a clean checkout")
-  .option("--json", "machine-readable output", false))
+program.command("update").description("Explicitly fast-forward this fork after checking origin and a clean checkout")
+  .option("--json", "machine-readable output", false)
   .action((opts: { json: boolean }) => {
     try {
       pullFork(repoRoot);
@@ -1051,12 +1006,10 @@ const prefsCmd = program
   .command("prefs")
   .description("Remember ChatGPT developer mode and setup choice for this machine");
 
-acceptUnusedWorkspaceOption(
-  prefsCmd
-    .command("get", { isDefault: true })
-    .description("Show remembered ChatGPT setup choices (not per workspace)")
-    .option("--json", "machine-readable output", false)
-)
+prefsCmd
+  .command("get", { isDefault: true })
+  .description("Show remembered ChatGPT setup choices (not per workspace)")
+  .option("--json", "machine-readable output", false)
   .action((opts: { json: boolean }) => {
     const prefs = readUiPrefs();
     if (opts.json) {
@@ -1069,14 +1022,12 @@ acceptUnusedWorkspaceOption(
     else say("Setup mode: not selected");
   });
 
-acceptUnusedWorkspaceOption(
-  prefsCmd
-    .command("set")
-    .description("Save a ChatGPT setup choice for this machine")
-    .option("--developer-mode", "remember that ChatGPT developer mode is on", false)
-    .option("--setup-mode <mode>", "auto (preview) or manual")
-    .option("--json", "machine-readable output", false)
-)
+prefsCmd
+  .command("set")
+  .description("Save a ChatGPT setup choice for this machine")
+  .option("--developer-mode", "remember that ChatGPT developer mode is on", false)
+  .option("--setup-mode <mode>", "auto (preview) or manual")
+  .option("--json", "machine-readable output", false)
   .action((opts: { developerMode: boolean; setupMode?: string; json: boolean }) => {
     try {
       const modeRaw = opts.setupMode?.trim().toLowerCase();
@@ -1106,11 +1057,10 @@ const tunnelCmd = program.command("tunnel").description("Choose or inspect the p
 
 tunnelCmd
   .command("status", { isDefault: true })
-  .description("Show whether this workspace still needs a one-time connection choice")
-  .option("-w, --workspace <path>")
+  .description("Show whether this Hub still needs a one-time connection choice")
   .option("--zone <domain>", "optional domain, used to preview the stable hostname")
   .option("--json", "machine-readable output", false)
-  .action((opts: { workspace?: string; zone?: string; json: boolean }) => {
+  .action((opts: { zone?: string; json: boolean }) => {
     try {
       const payload = tunnelChoicePayload(selectedHub(), opts.zone);
       if (opts.json) {
@@ -1129,12 +1079,11 @@ tunnelCmd
   .command("choose")
   .description("Remember quick vs named, and provision a named hostname when asked")
   .requiredOption("--mode <mode>", "quick or named")
-  .option("-w, --workspace <path>")
   .option("--zone <domain>", "Cloudflare domain for a named hostname")
   .option("--hostname <hostname>", "override the default c2c-<project>.<zone>")
   .option("--tunnel-name <name>", "Cloudflare Named Tunnel resource name (otherwise keep the saved name)")
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { mode: string; workspace?: string; zone?: string; hostname?: string; tunnelName?: string; json: boolean }) => {
+  .action(async (opts: { mode: string; zone?: string; hostname?: string; tunnelName?: string; json: boolean }) => {
     try {
       const hub = selectedHub();
       const mode = opts.mode.trim().toLowerCase();
@@ -1203,12 +1152,10 @@ tunnelCmd
     }
   });
 
-acceptUnusedWorkspaceOption(
-  tunnelCmd
-    .command("login")
-    .description("Open the Cloudflare login window used by a named hostname")
-    .option("--json", "machine-readable output", false)
-)
+tunnelCmd
+  .command("login")
+  .description("Open the Cloudflare login window used by a named hostname")
+  .option("--json", "machine-readable output", false)
   .action(async (opts: { json: boolean }) => {
     try {
       if (!opts.json) say(NAMED_LOGIN_PROMPT);

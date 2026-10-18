@@ -54,7 +54,7 @@ in the same IAB tab and verify there. Tool refresh does not create a Project;
 reuse an existing Project binding when applicable. Do not persist a chat pointer,
 send a task handoff or repeatedly message a stale conversation.
 
-Use visible settings navigation if a legacy deep link redirects without opening
+Use visible settings navigation if a settings link redirects without opening
 the add form. Start at Plugins → Manage → Add → Add custom MCP server when
 those controls are present. A new layout is a reason to inspect the UI, not
 recreate unrelated plugins. Login/2FA/CAPTCHA and explicit consent may need the

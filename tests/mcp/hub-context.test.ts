@@ -15,7 +15,7 @@ let state: string;
 let root: string;
 let bridge: Bridge | undefined;
 let client: Client | undefined;
-const ownershipDirectories = ["hubs", "hub-mappings", "workspace-registries"];
+const ownershipDirectories = ["hubs", "workspace-registries"];
 const workspaceCalls = [
   ["workspace_info", {}], ["list_directory", {}], ["read_file", { path: "hello.txt" }],
   ["read_image", { path: "pixel.png" }], ["search_workspace", { query: "Hello" }],
@@ -75,7 +75,7 @@ async function expectWorkspaceReads(): Promise<void> {
     const { result, data } = await call(name, args);
     expect(result.isError ?? false, `${name}: ${JSON.stringify(data)}`).toBe(false);
     if (name === "workspace_info") expect(data.workspaceId).toBe(fixtureWorkspace(bridge!).id);
-    if (name === "read_file") expect(data.content).toContain("Hello from Codex");
+    if (name === "read_file") expect(data.content).toContain("Hello from Desk");
   }
 }
 
@@ -92,17 +92,17 @@ describe("MCP uses the Hub resolved at startup", () => {
     expect(fs.readdirSync(state)).toEqual([]);
   });
 
-  it.each(["locked", "malformed"])("serves all tools without scanning or mutating %s Hub mappings", async (kind) => {
+  it.each(["locked", "malformed"])("serves all tools without scanning or mutating %s Hub identity state", async (kind) => {
     await start();
-    if (kind === "locked") write(state, "hub-mappings/.lock", "control-plane-operation");
-    if (kind === "malformed") write(state, "hub-mappings/unrelated.json", "{malformed control-plane state");
+    if (kind === "locked") write(state, "hubs/.lock", "control-plane-operation");
+    if (kind === "malformed") write(state, "hubs/unrelated.json", "{malformed control-plane state");
     const before = ownershipSnapshot();
     await connect();
     await expectWorkspaceReads();
     expect(ownershipSnapshot()).toEqual(before);
   });
 
-  it("does not recreate missing Hub, mapping or registry ownership state", async () => {
+  it("does not recreate missing Hub or registry ownership state", async () => {
     await start();
     for (const directory of ownershipDirectories) fs.rmSync(path.join(state, directory), { recursive: true, force: true });
     const before = ownershipSnapshot();

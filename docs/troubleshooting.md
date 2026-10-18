@@ -19,9 +19,9 @@ check the new address and reconcile the owned ChatGPT plugin.
 
 | Diagnostic | Recovery |
 | --- | --- |
-| `TUNNEL_STATE_CONFLICT` / `ENDPOINT_STATE_CONFLICT` | Preserve both files and the Hub mapping/checkpoint; verify the exact owner and interrupted copy; never merge, reset or create a replacement resource to bypass the conflict |
+| `TUNNEL_STATE_CONFLICT` / `ENDPOINT_STATE_CONFLICT` | Preserve the authoritative Hub file; verify its exact owner and format; never merge, reset or create replacement resources to bypass a conflict |
 | `TUNNEL_STATE_BUSY` / `ENDPOINT_STATE_BUSY` | Verify no local writer is active before removing only the reported owner's state lock |
-| `AUTH_STATE_CONFLICT` | Preserve both auth files and the Hub mapping/checkpoint; verify ownership and the interrupted copy before retrying, without merging or resetting credentials |
+| `AUTH_STATE_CONFLICT` | Preserve Hub auth state; verify ownership and format before retrying, without merging or resetting credentials |
 | `RUNTIME_STATE_INVALID` / uncertain runtime | Preserve state and verify Hub identity and PID; never stop or replace an unverified process |
 | Bridge stopped | Doctor can start it; explicit `start --tunnel` also reconnects |
 | `disconnected: true` | Intentional; reconnect only when requested |
@@ -35,7 +35,7 @@ check the new address and reconcile the owned ChatGPT plugin.
 | `DESTROY_PENDING` | Preserve state and follow the isolated [deprovisioning recovery reference](../skill/references/deprovision.md#interrupted-destroy) |
 | `LIFECYCLE_BUSY` after a crash | Verify the lock's PID has exited before removing that specific lock |
 | `HUB_STATE_BUSY` after a crash | Verify no Hub operation is running before removing only `hubs/.lock` |
-| `HUB_STATE_INVALID` / `HUB_MAPPING_CONFLICT` | Preserve state; inspect the exact Hub record before repair; do not merge or create replacement identities |
+| `HUB_STATE_INVALID` | Preserve state; inspect the exact Hub record before repair; do not merge or create replacement identities |
 | `WORKSPACE_REGISTRY_BUSY` after a crash | Verify no registry writer is running before removing only `workspace-registries/<hubId>.json.lock` |
 
 Use `c2c logs` for local diagnostics. Do not paste logs or credentials
@@ -93,18 +93,3 @@ For selection errors, inspect `c2c workspace list --json` and call
 `--hub <id>` from `c2c hub list --json`. `WORKSPACE_REQUIRED` asks for a registered
 alias/ID on that call; no tool establishes a default workspace.
 See [multi-repo access](multi-repo.md).
-
-## Explicit local upgrade
-
-`HUB_MIGRATION_REQUIRED` isolates old installations from native runtime. Use
-`c2c hub migrate -w <verified-old-root> --json` to adopt exactly that owner's
-state without remote mutation. Use `--handoff` to stop only a verified legacy writer without revocation, or
-`--finalize-auth` after its verified process has already exited. Never disconnect
-or revoke for process handoff. Current tokens replace provisional snapshots in full.
-
-Inspect `c2c hub detach --hub <id> --json`. `--confirm` detaches only after every
-checkpoint, Hub-owned file and runtime validates. Native discovery then needs no
-old root or mapping. `c2c hub cleanup-legacy --hub <id> --json` lists exact verified
-local files; its separate `--confirm` deletes only that plan after detach. Unknown
-retired data is retained. Credentials, global settings, repos and migration-gate
-backups are never cleanup targets. Preserve state on any ownership conflict.

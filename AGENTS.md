@@ -37,7 +37,7 @@
 - Documentation describes the current supported product, not implementation history or phase-by-phase development decisions.
 - Keep `README.md` short: product purpose, install, quick setup, main commands/capabilities, and links to focused docs.
 - Move substantial feature details into focused files under `docs/`.
-- Do not use README or docs as a changelog, engineering diary, migration log, or decision log; git history and commit messages serve that purpose.
+- Do not use README or docs as a changelog, engineering diary, development diary, or decision log; git history and commit messages serve that purpose.
 - Remove obsolete historical explanations instead of accumulating them.
 - Avoid labels such as `phase 1`, `phase 2`, or descriptions of temporary implementation stages in user-facing docs.
 - Avoid duplicating the same detailed explanation across README, docs, and the Skill. Keep one authoritative place and link to it when useful.
@@ -56,7 +56,7 @@
 - Preserve canonical path containment, sensitive-file filtering, ignore rules, and git filtering for every registered workspace.
 - Keep `workspaceId` root-derived and deterministic; display names and aliases are labels, not authorization identities.
 - Keep secrets, OAuth material, Cloudflare credentials, runtime admin tokens, and machine-local state outside repositories.
-- Do not create or edit `.c2c.json` merely for local naming.
+- Store local display names in external workspace state; never write repository configuration for naming.
 
 ## Resource lifecycle
 
@@ -78,7 +78,7 @@
 
 ## Verification
 
-- Prefer behavior/invariant tests for public behavior, security/ownership boundaries, migration safety, and regressions.
+- Prefer behavior/invariant tests for public behavior, security/ownership boundaries, persisted-state safety, and regressions.
 - Avoid equivalent coverage across unit and integration layers; use table-driven cases for equivalent edge inputs.
 - Do not add tests merely for new private helpers; keep the smallest set that strongly protects the changed boundary.
 - Prefer focused tests for changed files/features; do not rerun the full suite after each small sub-step.

@@ -68,7 +68,7 @@ afterAll(async () => {
 });
 
 describe("multiple workspaces through one existing MCP connection", () => {
-  it("automatically registers the bridge root and preserves single-repo calls", async () => {
+  it("serves one registered workspace without an explicit selector", async () => {
     expect(primary.root).toBe(root);
     expect((await call("workspace_info")).data.workspaceId).toBe(fixtureWorkspace(bridge).id);
     const { result, data } = await call("list_workspaces");

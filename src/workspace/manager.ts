@@ -56,18 +56,6 @@ export interface ListDirectoryResult {
   hasMore: boolean;
 }
 
-export interface ProjectConfig {
-  name?: string;
-}
-
-function parseProjectConfig(value: unknown): ProjectConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const raw = value as Record<string, unknown>;
-  const config: ProjectConfig = {};
-  if (typeof raw.name === "string") config.name = raw.name;
-  return config;
-}
-
 function stringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const entries = Object.entries(value as Record<string, unknown>).filter(
@@ -85,7 +73,6 @@ export class Workspace {
   readonly id: string;
   readonly name: string;
   readonly ignoreRules: IgnoreRules;
-  readonly projectConfig: ProjectConfig;
 
   constructor(rootInput: string) {
     const resolved = path.resolve(rootInput);
@@ -101,8 +88,7 @@ export class Workspace {
     this.root = real;
     this.id = createHash("sha256").update(normCase(real)).digest("hex").slice(0, 12);
     this.ignoreRules = new IgnoreRules(real);
-    this.projectConfig = parseProjectConfig(readJsonIfExists<unknown>(path.join(real, ".c2c.json")));
-    this.name = readWorkspaceDisplayName(this.id, real) ?? this.projectConfig.name ?? path.basename(real);
+    this.name = readWorkspaceDisplayName(this.id, real) ?? path.basename(real);
   }
 
   private contains(candidate: string): boolean {

@@ -173,33 +173,6 @@ describe("workspace identity", () => {
     expect(ws.name).toBe(path.basename(root));
   });
 
-  it("reads .c2c.json project name", () => {
-    const named = makeTmpDir("named");
-    write(
-      named,
-      ".c2c.json",
-      JSON.stringify({
-        name: "Remi",
-        maxIterations: 12,
-      })
-    );
-    const namedWs = new Workspace(named);
-    expect(namedWs.name).toBe("Remi");
-    expect(namedWs.projectConfig).toEqual({ name: "Remi" }); // legacy loop settings are ignored
-    cleanup(named);
-  });
-
-  it("falls back to the directory name when .c2c.json has invalid types", () => {
-    const invalid = makeTmpDir("invalid-project-config");
-    write(invalid, ".c2c.json", JSON.stringify({ name: 42, maxIterations: "many" }));
-
-    const invalidWs = new Workspace(invalid);
-
-    expect(invalidWs.name).toBe(path.basename(invalid));
-    expect(invalidWs.projectConfig).toEqual({});
-    cleanup(invalid);
-  });
-
   it("filters invalid package script values during project detection", () => {
     const projectRoot = makeTmpDir("invalid-package-scripts");
     write(

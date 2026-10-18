@@ -1,5 +1,4 @@
-import { adoptLegacyWorkspace, finalizeAuthHandoff } from "../../src/migration/adoption.js";
-import { detachHub } from "../../src/migration/finalize.js";
+import { AuthStore } from "../../src/auth/store.js";
 import { listHubs } from "../../src/hub/store.js";
 import { fixtureHub, fixtureRegistry, fixtureWorkspace } from "../helpers.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,9 +14,8 @@ import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { readRuntimeState } from "../../src/bridge/runtime.js";
 import { readLastEndpoint, writeLastEndpoint, confirmConnectorBinding } from "../../src/config/endpoint.js";
 import { readTunnelState, writeTunnelState } from "../../src/tunnel/state.js";
-import { SERVICE_NAME, VERSION } from "../../src/version.js";
 import type { TunnelProvider } from "../../src/tunnel/provider.js";
-import { cleanup, isolateStateDir, makeTmpDir, write, legacyAuthFixture } from "../helpers.js";
+import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 const execFileAsync = promisify(execFile);
 const cliEntry = fileURLToPath(new URL("../../src/cli/index.ts", import.meta.url));
@@ -47,7 +45,7 @@ describe("naming through setup and repair commands", () => {
       env: { ...process.env, C2C_STATE_DIR: stateDir, CODEX_HOME: codexHome, ...env },
     };
     try {
-      const result = await execFileAsync(process.execPath, ["--import", "tsx", cliEntry, ...args, "-w", root, "--json", ...(bridge ? ["--hub",bridge.hubId] : [])], options);
+      const result = await execFileAsync(process.execPath, ["--import", "tsx", cliEntry, ...args, ...(args[0] === "setup" ? ["-w", root] : []), "--json", ...(bridge ? ["--hub",bridge.hubId] : [])], options);
       return { status: 0, payload: JSON.parse(result.stdout) };
     } catch (error) {
       const failed = error as Error & { stdout?: string; stderr?: string; code?: number };
@@ -61,7 +59,7 @@ describe("naming through setup and repair commands", () => {
     if (ownsDaemon) {
       const workspace = new Workspace(root);
       // stop has no --json flag; invoke it separately and wait for state cleanup.
-      await execFileAsync(process.execPath, ["--import", "tsx", cliEntry, "stop", "-w", root], {
+      await execFileAsync(process.execPath, ["--import", "tsx", cliEntry, "stop"], {
         env: { ...process.env, C2C_STATE_DIR: stateDir }, timeout: 10_000,
       });
       for (let attempt = 0; attempt < 100 && readRuntimeState(resolveHub(workspace).hubId); attempt++) {
@@ -75,11 +73,9 @@ describe("naming through setup and repair commands", () => {
   });
 
   it("persists explicit names through setup reruns, doctor, restart, and display-name changes without revoking tokens", async () => {
-    write(root, ".c2c.json", JSON.stringify({ name: "Original", maxIterations: 7 }));
     const workspace = new Workspace(root);
-    const token = legacyAuthFixture(stateDir, workspace.id, root).accessToken;
-    const migrated=adoptLegacyWorkspace(root);migrated.registry.add(root);
-    finalizeAuthHandoff(migrated.hub.hubId,workspace);await detachHub(migrated.hub.hubId,true);
+    const nativeHub = fixtureHub(root);
+    const token = new AuthStore(nativeHub.hubId).issueTokens({clientId: "naming-test", scopes: ["workspace.read"]}).accessToken;
     ownsDaemon = true;
     const first = await runCli(["setup", "--no-tunnel", "--hub-name", "Desk C2C Hub", "--workspace-name", "Desk C2C Hub", "--connector-name", "Desk Connector"]);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
@@ -108,7 +104,6 @@ describe("naming through setup and repair commands", () => {
     expect(restarted.payload).toMatchObject({ workspaceId: workspace.id, workspaceName: "Renamed Hub", connectorName: "Desk Connector" });
     expect(new Workspace(root).id).toBe(workspace.id);
     expect(readLastEndpoint(resolveHub(workspace).hubId)?.desiredConnectorName).toBe("Desk Connector");
-    expect(JSON.parse(fs.readFileSync(path.join(root, ".c2c.json"), "utf8"))).toEqual({ name: "Original", maxIterations: 7 });
 
     const runtime = readRuntimeState(resolveHub(workspace).hubId)!;
     const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, { headers: { authorization: `Bearer ${token}` } });
@@ -128,7 +123,6 @@ describe("naming through setup and repair commands", () => {
     const reconnect = await runCli(["setup", "--no-tunnel"]);
     expect(reconnect.payload).toMatchObject({ workspaceName: "Local Name", connectorName: "Retained Connector" });
     expect(readLastEndpoint(resolveHub(new Workspace(root)).hubId)?.disconnected).toBe(false);
-    expect(fs.existsSync(path.join(root, ".c2c.json"))).toBe(false);
   });
 
   it("preserves configured connector, tunnel name and hostname when doctor repairs a changed endpoint", async () => {
@@ -169,7 +163,7 @@ describe("naming through setup and repair commands", () => {
     expect((await runCli(["doctor"], { TUNNEL_ORIGIN_CERT: cert, TUNNEL_CRED_FILE: credential })).payload.chatgptRepair.needed).toBe(false);
   });
 
-  it("ignores stale legacy resources while managing a healthy native Hub without restarting its tunnel", async () => {
+  it("reuses a healthy Hub and its existing named tunnel without restarting", async () => {
     let url: string | null = null;
     let starts = 0, stops = 0;
     const tunnel: TunnelProvider = {
@@ -183,21 +177,11 @@ describe("naming through setup and repair commands", () => {
     };
     bridge = await startBridge({ hubId: fixtureHub(root).hubId, port: 0, persistRuntime: true, tunnelProvider: tunnel });
     await fetch(`${bridge.localBaseUrl()}/admin/tunnel/start`, { method: "POST", headers: { authorization: `Bearer ${bridge.adminToken}` } });
-    const owner = fixtureWorkspace(bridge).id;
     const tunnelId = "11111111-1111-4111-8111-111111111111";
-    const legacyRuntime = write(stateDir, `runtime/${owner}.json`, JSON.stringify({ service: SERVICE_NAME, version: VERSION,
-      workspaceId: owner, hubId: fixtureHub(root).hubId, pid: process.pid, port: bridge.port, adminToken: bridge.adminToken,
-      publicUrl: url, startedAt: new Date().toISOString() }));
-    const legacyTunnel = write(stateDir, `tunnels/${owner}.json`, JSON.stringify({ workspaceId: owner, preference: "named",
-      provider: "cloudflare-named", tunnelName: "existing-name", tunnelId, hostname: "code.example.com", zone: "example.com" }));
-    const legacyEndpoint = write(stateDir, `endpoints/${owner}.json`, JSON.stringify({ workspaceId: owner, port: bridge.port,
-      publicUrl: url, mcpUrl: `${url}/mcp`, connectorName: "Existing Connector", desiredConnectorName: "Existing Connector",
-      connectorId: "plugin_existing", bindingVersion: 1, boundMcpUrl: `${url}/mcp`, savedAt: new Date().toISOString() }));
     writeTunnelState({hubId:bridge.hubId,preference:"named",provider:"cloudflare-named",tunnelName:"existing-name",tunnelId,hostname:"code.example.com",zone:"example.com"});
     writeLastEndpoint({hubId:bridge.hubId,port:bridge.port,publicUrl:url,mcpUrl:`${url}/mcp`,connectorName:"Existing Connector",desiredConnectorName:"Existing Connector",connectorId:"plugin_existing",bindingVersion:1,boundMcpUrl:`${url}/mcp`});
-    const files = [legacyRuntime, legacyTunnel, legacyEndpoint].map((file) => ({ file, contents: fs.readFileSync(file, "utf8") }));
-    const cert = write(stateDir, "legacy-cert.pem", "synthetic cert");
-    const credential = write(stateDir, "legacy-credential.json", JSON.stringify({ TunnelID: tunnelId, TunnelSecret: "synthetic secret" }));
+    const cert = write(stateDir, "test-cert.pem", "synthetic cert");
+    const credential = write(stateDir, "test-credential.json", JSON.stringify({ TunnelID: tunnelId, TunnelSecret: "synthetic secret" }));
     const setup = await runCli(["setup", "--no-tunnel"]);
     expect(setup.status, JSON.stringify(setup.payload)).toBe(0);
     expect(setup.payload).toMatchObject({ connectorName: "Existing Connector", connectorId: "plugin_existing", connectorAction: "none" });
@@ -206,7 +190,6 @@ describe("naming through setup and repair commands", () => {
     expect(starts).toBe(1);
     expect(stops).toBe(0);
     expect(readRuntimeState(bridge.hubId)?.hubId).toBe(bridge.hubId);
-    for (const saved of files) expect(fs.readFileSync(saved.file, "utf8")).toBe(saved.contents);
   });
 
   it("binds only MCP workspace evidence currently registered to the Hub", async () => {
@@ -264,7 +247,6 @@ if (args.includes("run")) {
     const flags = ["--workspace-name", "Desk C2C Hub", "--connector-name", "Desk Connector", "--tunnel-name", "desk-c2c", "--hostname", "code.example.com", "--zone", "example.com"];
     const first = await runCli(["setup", ...flags], env);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
-    expect(fs.existsSync(path.join(root, ".c2c.json"))).toBe(false);
     expect(first.payload).toMatchObject({ workspaceName: "Desk C2C Hub", connectorName: "Desk Connector", tunnel: { name: "desk-c2c", hostname: "code.example.com" } });
     const pid = readRuntimeState(resolveHub(new Workspace(root)).hubId)!.pid;
     const rerun = await runCli(["setup", ...flags], env);

@@ -20,7 +20,6 @@ the read-only data plane. Successful setup or reconnect ends at `MCP READY`.
 | `auth/` | OAuth discovery, client registration, PKCE, token rotation/revocation and token hashes |
 | `pairing/` | Expiring one-time pairing codes, attempt limits and rate limiting |
 | `hub/` | Independent identity, deterministic discovery and explicit selection |
-| `migration/` | Explicit one-shot adoption, detach and verified local cleanup |
 | `workspace/` | Hub-scoped registry, canonical containment, ignore rules, detection, reads, search and git |
 | `project/` | Optional Hub/workspace-scoped ChatGPT Project acknowledgements and deterministic instructions |
 | `tunnel/` | Quick/Named cloudflared processes, provisioning, naming and rollback |
@@ -51,8 +50,8 @@ No original repo path is needed to start, stop or inspect the Hub.
 
 The listener prefers port 48765 and falls back to a free port on collision.
 Runtime discovery reads only `runtime/<hubId>.json` and distinguishes healthy,
-stopped and uncertain processes before repair. Native runtime and MCP never
-import legacy state. Upgrade compatibility is isolated in `migration/`.
+stopped and uncertain processes before repair. Runtime reads only Hub-owned
+state; MCP selection remains stateless.
 
 ## Public connection and binding
 

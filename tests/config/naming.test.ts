@@ -184,7 +184,7 @@ describe("runtime naming", () => {
     for (const name of [" ", "bad\nname", "--other-option", "a".repeat(129)]) {
       expect(() => normalizeTunnelName(name)).toThrow(/INVALID_NAME/);
     }
-    expect(() => connectorNameFor({ hubName: "Demo", hadEndpointBefore: false, explicitName: " " })).toThrow(/INVALID_NAME/);
+    expect(() => connectorNameFor({ hubName: "Demo", explicitName: " " })).toThrow(/INVALID_NAME/);
   });
 
   it("persists the connector name across local setup, reruns, display changes and endpoint repair", () => {
@@ -196,40 +196,16 @@ describe("runtime naming", () => {
     expect(persistHubEndpoint({ ...endpoint, connectorName: "Explicit Replacement" })).toBe("Explicit Replacement");
   });
 
-  it("does not rename legacy connectors whose state predates the name field", () => {
-    const endpoint = { hubId, hubName: "Demo", port: 1234, publicUrl: null, mcpUrl: null };
-    const { hubName: _name, ...saved } = endpoint;
-    writeLastEndpoint(saved);
-    expect(persistHubEndpoint(endpoint)).toBe("Codex with ChatGPT");
-  });
-
-  it("does not create .c2c.json when saving a local display name", () => {
-    const root = makeTmpDir("local-display"); dirs.push(root);
-    const ws = new Workspace(root);
-    saveWorkspaceDisplayName(ws, "Chosen");
-    expect(fs.existsSync(path.join(root, ".c2c.json"))).toBe(false);
-    expect(new Workspace(root).name).toBe("Chosen");
-    expect(new Workspace(root).id).toBe(ws.id);
-  });
-
-  it("still reads a legacy project display name when there is no external override", () => {
-    const root = makeTmpDir("legacy-display"); dirs.push(root);
-    write(root, ".c2c.json", JSON.stringify({ name: "Legacy", maxIterations: 9 }));
-    expect(new Workspace(root).name).toBe("Legacy");
-    expect(new Workspace(root).projectConfig).toEqual({ name: "Legacy" });
-  });
-
-  it("stores the display name outside the repo, preserving canonical-root identity and legacy config", () => {
+  it("preserves canonical identity when changing an external display name", () => {
     const root = makeTmpDir("display-name");
     dirs.push(root);
-    write(root, ".c2c.json", JSON.stringify({ name: "Old", maxIterations: 7, unrelated: true }));
     const original = new Workspace(root);
     saveWorkspaceDisplayName(original, "Desk C2C Hub");
     const renamed = new Workspace(root);
     expect(renamed.name).toBe("Desk C2C Hub");
     expect(renamed.id).toBe(original.id);
     expect(renamed.root).toBe(original.root);
-    expect(JSON.parse(fs.readFileSync(path.join(root, ".c2c.json"), "utf8"))).toEqual({ name: "Old", maxIterations: 7, unrelated: true });
+    expect(fs.readdirSync(root)).toEqual([]);
     expect(JSON.parse(fs.readFileSync(workspaceRegistrationFile(original.id), "utf8"))).toMatchObject({ workspaceId: original.id, workspaceRoot: original.root, displayName: "Desk C2C Hub" });
   });
 });

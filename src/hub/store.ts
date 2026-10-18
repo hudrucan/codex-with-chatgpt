@@ -2,12 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { ensureDir, getStateDir, writeSecureJson } from "../config/paths.js";
+import { ensureDir, writeSecureJson } from "../config/paths.js";
 import { stateFile } from "../config/state-files.js";
 export const hubIdSchema = z.string().regex(/^hub-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
 export const hubSchema = z.object({ version: z.literal(1), hubId: hubIdSchema,
   displayName: z.string().trim().min(1).refine((name) => !/[\x00-\x1f\x7f]/.test(name)),
-  createdAt: z.string().datetime(), legacyOwnerWorkspaceId: z.string().regex(/^[a-f0-9]{12}$/).optional(),
+  createdAt: z.string().datetime(),
 }).strict();
 export type Hub = z.infer<typeof hubSchema>;
 export class HubError extends Error {
@@ -53,8 +53,6 @@ export function resolveHub(selector?: string): Hub {
       throw new HubError("HUB_NOT_CONFIGURED", "Run c2c setup to create a Hub.");
     throw new HubError("HUB_SELECTION_REQUIRED", `Select --hub <id>: ${hubs.map((entry) => `${entry.displayName} (${entry.hubId})`).join(", ")}`);
   }
-  if (hub.legacyOwnerWorkspaceId)
-    throw new HubError("HUB_MIGRATION_REQUIRED", "Finalize this Hub using c2c hub detach before native control-plane operations.");
   return hub;
 }
 export function withHubLock<T>(operation: () => T): T {

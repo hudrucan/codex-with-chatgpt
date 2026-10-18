@@ -9,21 +9,11 @@ import { readTunnelState } from "../../src/tunnel/state.js";
 import { readRuntimeState } from "../../src/bridge/runtime.js";
 import { fixtureHub as resolveHub } from "../helpers.js";
 import { Workspace } from "../../src/workspace/manager.js";
-import { SERVICE_NAME, VERSION } from "../../src/version.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
+import { cleanup, isolateStateDir, makeTmpDir } from "../helpers.js";
 
-it("starts and stops a Hub-owned source daemon without deleting or copying stale legacy runtime", async () => {
+it("starts, reuses and stops a Hub daemon independently of registered repo paths", async () => {
   const state = isolateStateDir(), root = makeTmpDir("hub-daemon");
   const workspace = new Workspace(root), hub = resolveHub(workspace);
-  const legacyFile = write(state, `runtime/${workspace.id}.json`, JSON.stringify({ service: SERVICE_NAME, version: VERSION,
-    workspaceId: workspace.id, workspaceRoot: root, pid: 999_999_999, port: 1,
-    adminToken: "stale-admin", publicUrl: null, startedAt: new Date().toISOString() }));
-  const original = fs.readFileSync(legacyFile, "utf8");
-  const legacyTunnel = { workspaceId: workspace.id, preference: "named", provider: "cloudflare-named",
-    tunnelName: "existing-tunnel", tunnelId: "11111111-1111-4111-8111-111111111111",
-    hostname: "code.example.com", zone: "example.com" };
-  const tunnelFile = write(state, `tunnels/${workspace.id}.json`, JSON.stringify(legacyTunnel));
-
   let spawnedPid: number | undefined;
   try {
     const started = await ensureBridge(hub.hubId, { port: 0 });
@@ -31,7 +21,6 @@ it("starts and stops a Hub-owned source daemon without deleting or copying stale
     expect(started.spawned).toBe(true);
     expect(started.runtime.hubId).toBe(hub.hubId);
     expect(readTunnelState(hub.hubId)).toMatchObject({ hubId: hub.hubId, preference: "unset" });
-    expect(fs.readFileSync(tunnelFile, "utf8")).toBe(JSON.stringify(legacyTunnel));
     const extra=makeTmpDir("hub-extra-repo");
     const immutable=["auth","runtime","tunnels","endpoints"].map(dir=>{const file=path.join(state,dir,`${hub.hubId}.json`);return {file,bytes:fs.readFileSync(file)};});
     try {
@@ -48,7 +37,6 @@ it("starts and stops a Hub-owned source daemon without deleting or copying stale
     cleanup(root);
     expect((await ensureBridge(hub.hubId)).spawned).toBe(false);
     expect(fs.existsSync(path.join(state, "logs", `bridge-${hub.hubId}.out.log`))).toBe(true);
-    expect(fs.readFileSync(legacyFile, "utf8")).toBe(original);
     expect(await stopBridge(hub.hubId)).toBe(true);
     for (let n = 0; n < 100 && readRuntimeState(hub.hubId); n++) await new Promise((resolve) => setTimeout(resolve, 50));
     expect(readRuntimeState(hub.hubId)).toBeNull();
@@ -57,7 +45,6 @@ it("starts and stops a Hub-owned source daemon without deleting or copying stale
     expect(restarted.runtime.workspaceRoot).toBeUndefined();
     expect(new WorkspaceRegistry(hub.hubId).choices()).toEqual([]);
     expect(await stopBridge(hub.hubId)).toBe(true);
-    expect(fs.readFileSync(legacyFile, "utf8")).toBe(original);
   } finally {
     if (spawnedPid && readRuntimeState(hub.hubId)) {
       try { process.kill(spawnedPid, "SIGTERM"); } catch { /* helper already exited */ }

@@ -94,7 +94,7 @@ describe("MCP tools over Streamable HTTP", () => {
       "search_workspace",
       "workspace_info",
     ]);
-    // no write tools in V1
+    // Remote access is read-only.
     for (const forbidden of ["write_file", "delete_file", "execute_shell", "git_commit", "install_package"]) {
       expect(names).not.toContain(forbidden);
     }
@@ -130,7 +130,7 @@ describe("MCP tools over Streamable HTTP", () => {
   it("read_file returns hello.txt", async () => {
     const result = await client.callTool({ name: "read_file", arguments: { path: "hello.txt" } });
     const file = structuredJsonOf<{ content: string; totalLines: number }>(result);
-    expect(file.content).toContain("Hello from Codex with ChatGPT!");
+    expect(file.content).toContain("Hello from Desk C2C Hub!");
   });
 
   it("read_image returns metadata and image content", async () => {
@@ -200,26 +200,6 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(second.offset).toBe(first.nextOffset);
     expect(second.diff.length).toBeGreaterThan(0);
     git(root, "reset", "big-change.txt");
-  });
-
-  it.each(["test_status", "execution_summary", "execution_output"])("does not expose the removed %s tool", async (name) => {
-    const result = await client.callTool({ name, arguments: {} });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toMatch(/not found|unknown tool/i);
-  });
-
-  it("keeps a persisted legacy token usable for its core scopes", async () => {
-    const legacy = bridge.authStore.issueTokens({ clientId: "legacy", scopes: ["workspace.read", "execution.read"] });
-    const reloaded = new AuthStore(bridge.hubId, { file: authFile });
-    expect(reloaded.verifyAccessToken(legacy.accessToken).ok).toBe(true);
-    const legacyClient = new Client({ name: "legacy", version: "1.0.0" });
-    try {
-      await legacyClient.connect(new StreamableHTTPClientTransport(new URL(`${bridge.localBaseUrl()}/mcp`), {
-        requestInit: { headers: { authorization: `Bearer ${legacy.accessToken}` } },
-      }));
-      const result = await legacyClient.callTool({ name: "workspace_info", arguments: {} });
-      expect(jsonOf<{ workspaceId: string }>(result).workspaceId).toBe(fixtureWorkspace(bridge).id);
-    } finally { await legacyClient.close(); }
   });
 
   it("enforces scopes per tool", async () => {

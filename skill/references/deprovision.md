@@ -10,9 +10,9 @@ owned connector under the normal transaction without destroying the Hub.
 ## Workflow
 
 1. Run `c2c destroy --json` for the read-only ownership-checked plan.
-   Do not proceed on incomplete legacy bindings, pending rollback or conflicts.
+   Do not proceed on incomplete connector bindings, pending rollback or conflicts.
 2. In ChatGPT verify `plan.connector` by exact ID/name/Server URL, then remove
-   only that plugin (or verify that exact ID is already absent). Legacy bindings
+   only that plugin (or verify that exact ID is already absent). Bindings
    without a plugin ID need verified `connector bind` before deletion.
    Uninstall/disconnect is not deletion. If settings deletion fails, read
    [interrupted destroy recovery](#interrupted-destroy)
@@ -84,5 +84,4 @@ added DNS aliases need separate ownership review. External dashboard changes
 can race API checks; stop on conflicts instead of forcing deletion.
 Shared Cloudflare credentials and ChatGPT chat history are never deprovisioned.
 
-Legacy cleanup is separate from destroy. Never delete retained migration-gate
-backups, shared credentials, global settings or repository contents.
+Never delete retained backups, shared credentials, global settings or repository contents.

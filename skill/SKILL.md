@@ -34,16 +34,14 @@ coding/planning loop, or use INIT/PLAN/EXECUTED/REVIEW or session/checkpoint orc
 Checkout: `<ACTUAL_CHECKOUT_PATH>`. Run `node "<checkout>/bin/c2c.js" <command>`
 or `c2c` when linked. Node >= 20 and Corepack/pnpm are required. Build/install
 only if absent or explicitly updating; never pull just to start a connection.
-Keep OS C2C state outside repos. Never create/edit `.c2c.json` for naming.
+Keep OS C2C state outside repos. Keep display naming in external workspace state.
 
 Start with `c2c hub list --json`:
 
 - One Hub: use it automatically. The user need not know its internal ID.
 - Multiple Hubs: ask once which displayed Hub to use; pass its exact `--hub <id>`
   on local commands. Never choose based on a repo path or silently change grants.
-- No Hub: perform initial setup below. `HUB_MIGRATION_REQUIRED` requires the
-  explicit upgrade boundary documented in troubleshooting; do not create a
-  replacement Hub or resources to bypass it.
+- No Hub: perform initial setup below.
 
 ## “Use C2C for this repo”
 

@@ -26,17 +26,14 @@ describe("external workspace registry", () => {
   it("persists canonical identities and stable aliases without writing repo configuration", () => {
     const link = path.join(state, "link");
     fs.symlinkSync(root, link, "junction");
-    write(root, ".c2c.json", '{"name":"Legacy display"}');
-    const before = fs.readFileSync(path.join(root, ".c2c.json"), "utf8");
     const entry = registry.add(link);
     expect(entry).toEqual({ workspaceId: new Workspace(root).id, alias: expect.stringMatching(/^registry-a-.*-[a-f0-9]{12}$/), root });
     expect(fixtureRegistry(new Workspace(root)).add(root)).toEqual(entry);
     expect(registry.list()).toEqual([entry]);
     expect(registry.resolve().id).toBe(entry.workspaceId);
-    expect(registry.resolve(entry.alias).name).toBe("Legacy display");
+    expect(registry.resolve(entry.alias).name).toBe(path.basename(root));
     expect(registry.resolve(entry.workspaceId).root).toBe(root);
-    expect(fs.readdirSync(root)).toEqual([".c2c.json"]);
-    expect(fs.readFileSync(path.join(root, ".c2c.json"), "utf8")).toBe(before);
+    expect(fs.readdirSync(root)).toEqual([]);
     expect(JSON.parse(fs.readFileSync(registry.file, "utf8"))).toEqual({ version: 2, hubId: registry.hubId, workspaces: [entry] });
     if (process.platform !== "win32") expect(fs.statSync(registry.file).mode & 0o777).toBe(0o600);
   });
@@ -107,11 +104,7 @@ describe("external workspace registry", () => {
     expect(registry.choices()).toEqual([{ alias: entry.alias, workspaceId: entry.workspaceId }]);
   });
 
-  it("isolates owner grants and ignores the unowned legacy registry", () => {
-    const legacyFile = write(state, "workspace-registry.json", JSON.stringify({ version: 1, workspaces: [
-      { workspaceId: new Workspace(other).id, alias: "legacy", root: other },
-    ] }));
-    const legacy = fs.readFileSync(legacyFile, "utf8");
+  it("isolates grants between Hubs", () => {
     const anotherOwner = new WorkspaceRegistry(createHub("Other").hubId);
     expect(registry.list()).toEqual([]);
     expect(anotherOwner.list()).toEqual([]);
@@ -122,7 +115,6 @@ describe("external workspace registry", () => {
     expect(anotherOwner.resolve("shared").root).toBe(other);
     expect(() => registry.resolve(b.workspaceId)).toThrow(expect.objectContaining({ code: "WORKSPACE_NOT_FOUND" }));
     expect(() => anotherOwner.remove(a.workspaceId)).toThrow(expect.objectContaining({ code: "WORKSPACE_NOT_FOUND" }));
-    expect(fs.readFileSync(legacyFile, "utf8")).toBe(legacy);
   });
 
   it("rejects invalid owner IDs and registry files belonging to another owner", () => {

@@ -2,6 +2,7 @@ import { fixtureHub, fixtureAuthFile } from "../helpers.js";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import path from "node:path";
 import { filterScopes } from "../../src/auth/store.js";
+import { renameHub } from "../../src/hub/store.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { makeTmpDir, cleanup, write, isolateStateDir, pkceVerifierAndChallenge } from "../helpers.js";
 
@@ -155,9 +156,9 @@ describe("authorization + token flow", () => {
     expect(result.page).toContain("Incorrect pairing code");
   });
 
-  it("escapes the workspace name in the pairing page", async () => {
+  it("escapes the Hub display name in the pairing page", async () => {
     const xssWorkspaceRoot = makeTmpDir("oauth-html");
-    write(xssWorkspaceRoot, ".c2c.json", JSON.stringify({ name: "<script>alert('xss')</script>" }));
+    renameHub(fixtureHub(xssWorkspaceRoot).hubId, "<script>alert('xss')</script>");
     const xssBridge = await startBridge({
       hubId: fixtureHub(xssWorkspaceRoot).hubId,
       port: 0,
@@ -338,18 +339,18 @@ describe("refresh token rotation", () => {
 
 
 describe("bridge-only OAuth scopes", () => {
-  it("does not broaden retired execution-only or unknown-only requests", () => {
-    expect(filterScopes("execution.read")).toEqual([]);
+  it("does not broaden unsupported scope requests", () => {
+    expect(filterScopes("unsupported.read")).toEqual([]);
     expect(filterScopes("unknown.scope")).toEqual([]);
-    expect(filterScopes("execution.read workspace.read")).toEqual(["workspace.read"]);
+    expect(filterScopes("unsupported.read workspace.read")).toEqual(["workspace.read"]);
     expect(filterScopes(undefined)).toEqual(["workspace.read", "workspace.search", "git.read", "offline_access"]);
   });
 
-  it("does not grant core access to an execution-only OAuth authorization", async () => {
+  it("does not grant core access to an unsupported-only OAuth authorization", async () => {
     const clientId = await registerClient();
     const { verifier, challenge } = pkceVerifierAndChallenge();
     const pairing = bridge.pairing.create();
-    const authorization = await authorizeWithPairing(clientId, challenge, pairing.code, "legacy-scope", "execution.read");
+    const authorization = await authorizeWithPairing(clientId, challenge, pairing.code, "unsupported-scope", "unsupported.read");
     expect(authorization.status).toBe(302);
     const token = await exchangeToken(clientId, authorization.code!, verifier);
     expect(token.status).toBe(200);
@@ -359,7 +360,7 @@ describe("bridge-only OAuth scopes", () => {
     if (verified.ok) expect(verified.record.scopes).toEqual([]);
   });
 
-  it("advertises only the remaining bridge scopes", async () => {
+  it("advertises only supported bridge scopes", async () => {
     const metadata = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
     expect(metadata.scopes_supported).toEqual(["workspace.read", "workspace.search", "git.read", "offline_access"]);
     const resource = await (await fetch(`${base}/.well-known/oauth-protected-resource/mcp`)).json();

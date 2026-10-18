@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
-import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write, legacyAuthFixture } from "../helpers.js";
+import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
 
 async function connect(bridge: Bridge, existingToken?: string): Promise<Client> {
   const token = existingToken ?? bridge.authStore.issueTokens({
@@ -25,7 +25,7 @@ async function call(client: Client, name: string, args: Record<string, unknown> 
   return { result, data: JSON.parse((result.content as { text: string }[])[0].text) };
 }
 
-it("isolates the grants of two simultaneously running bridge owners in the same state directory", async () => {
+it("isolates the grants of two simultaneously running Hubs in the same state directory", async () => {
   const state = isolateStateDir();
   const ownerRoots = [makeTmpDir("owner-a"), makeTmpDir("owner-b")];
   const repoRoots = [makeTmpDir("owner-a-repo"), makeTmpDir("owner-b-repo")];
@@ -36,19 +36,6 @@ it("isolates the grants of two simultaneously running bridge owners in the same 
       makeGitRepo(root);
       write(root, "hello.txt", `owner-${index} isolated-marker\n`);
       fs.writeFileSync(path.join(root, "pixel.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-    });
-    // Unowned grants must never be imported into either legacy bridge.
-    const legacyFile = write(state, "workspace-registry.json", JSON.stringify({ version: 1, workspaces: repoRoots.map((root) => ({
-      workspaceId: new Workspace(root).id, alias: `legacy-${new Workspace(root).id}`, root,
-    })) }));
-    const legacyContents = fs.readFileSync(legacyFile, "utf8");
-    const legacyOwned = ownerRoots.map((root, index) => {
-      const owner = new Workspace(root);
-      const file = write(state, `workspace-registries/${owner.id}.json`, JSON.stringify({
-        version: 1, ownerWorkspaceId: owner.id,
-        workspaces: [{ workspaceId: owner.id, alias: `legacy-owner-${index}`, root }],
-      }));
-      return { file, contents: fs.readFileSync(file, "utf8"), token: legacyAuthFixture(state, owner.id, root).accessToken };
     });
     for (const root of ownerRoots) bridges.push(await startBridge({ hubId: fixtureHub(root).hubId, port: 0, persistRuntime: false }));
     for (let index = 0; index < bridges.length; index++) clients.push(await connect(bridges[index]));
@@ -95,10 +82,6 @@ it("isolates the grants of two simultaneously running bridge owners in the same 
     expect((await call(clients[0], "read_file", { workspace: "repo", path: "hello.txt" })).data.error).toBe("WORKSPACE_NOT_FOUND");
     expect((await call(clients[1], "read_file", { workspace: "repo", path: "hello.txt" })).data.content).toBe("owner-1 isolated-marker");
     expect(registries[0].hubId).not.toBe(registries[1].hubId);
-    for (let index = 0; index < 2; index++) {
-      expect(fs.readFileSync(legacyOwned[index].file, "utf8")).toBe(legacyOwned[index].contents);
-    }
-    expect(fs.readFileSync(legacyFile, "utf8")).toBe(legacyContents);
   } finally {
     await Promise.allSettled(clients.map((client) => client.close()));
     await Promise.allSettled(bridges.map((bridge) => bridge.close()));

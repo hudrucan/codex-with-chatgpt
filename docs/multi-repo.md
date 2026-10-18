@@ -19,7 +19,7 @@ One configured Hub is selected automatically. With several Hubs, inspect
 A repo path never selects registry ownership.
 
 Bare `c2c workspace -w <path> [--json]` inspects the repo without creating,
-adopting or selecting a Hub. Setup registers its initial repo; starting a Hub
+or selecting a Hub. Setup registers its initial repo; starting a Hub
 does not register or restore grants. Removing even the first repo persists
 across restarts. Changes take effect on the next MCP call without restarting,
 changing auth or touching tunnel/connector state. Disconnect retains grants.

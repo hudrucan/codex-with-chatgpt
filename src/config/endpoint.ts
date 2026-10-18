@@ -9,7 +9,6 @@ export const CHATGPT_CREATE_CONNECTOR_URL =
   "https://chatgpt.com/settings/plugins-settings";
 
 export const DEFAULT_CONNECTOR_NAME = "Desk C2C Hub";
-export const LEGACY_CONNECTOR_NAME = "Codex with ChatGPT";
 
 const fields = {
   port: z.number().int().min(0).max(65535),
@@ -19,7 +18,7 @@ const fields = {
   desiredConnectorName: z.string().optional(),
   boundMcpUrl: z.string().nullable().optional(),
   connectorId: z.string().optional(),
-  bindingVersion: z.literal(1).optional(),
+  bindingVersion: z.literal(1),
   disconnected: z.boolean().optional(),
   savedAt: z.string().datetime(),
 };
@@ -72,18 +71,15 @@ export function sanitizeConnectorLabel(name: string): string {
 
 /**
  * Names persist until explicitly changed by the user.
- * An existing binding without a title keeps its default name.
  * A new Hub uses its display label.
  */
 export function connectorNameFor(opts: {
   hubName: string;
   previousName?: string | null;
-  hadEndpointBefore: boolean;
   explicitName?: string;
 }): string {
   if (opts.explicitName !== undefined) return userFacingName(opts.explicitName, "Connector name");
   if (opts.previousName?.trim()) return opts.previousName.trim();
-  if (opts.hadEndpointBefore) return LEGACY_CONNECTOR_NAME;
   return `${DEFAULT_CONNECTOR_NAME} · ${sanitizeConnectorLabel(opts.hubName)}`;
 }
 
@@ -102,7 +98,6 @@ export function persistHubEndpoint(opts: {
   const connectorName = connectorNameFor({
     hubName: opts.hubName,
     previousName: previous?.desiredConnectorName ?? previous?.connectorName,
-    hadEndpointBefore: Boolean(previous),
     explicitName: opts.connectorName,
   });
   const bound = boundConnector(previous);
@@ -127,14 +122,15 @@ export function reclaimUserMessage(connectorName: string): string {
 
 export function boundConnector(endpoint: EndpointBinding | null): { name: string; mcpUrl: string; id?: string } | null {
   if (!endpoint) return null;
-  const url = endpoint.bindingVersion === 1 ? endpoint.boundMcpUrl : endpoint.mcpUrl;
+  const url = endpoint.boundMcpUrl;
   if (!url) return null;
-  return { name: endpoint.connectorName ?? LEGACY_CONNECTOR_NAME, mcpUrl: url, id: endpoint.connectorId };
+  if (!endpoint.connectorName) throw new Error("CONNECTOR_BINDING_CONFLICT: Bound connector name is missing.");
+  return { name: endpoint.connectorName, mcpUrl: url, id: endpoint.connectorId };
 }
 
 export function connectorReconciliation(endpoint: EndpointBinding | null) {
   const bound = boundConnector(endpoint);
-  const name = endpoint?.desiredConnectorName ?? endpoint?.connectorName ?? (endpoint ? LEGACY_CONNECTOR_NAME : DEFAULT_CONNECTOR_NAME);
+  const name = endpoint?.desiredConnectorName ?? endpoint?.connectorName ?? DEFAULT_CONNECTOR_NAME;
   const action = connectorAction(bound?.mcpUrl, endpoint?.mcpUrl);
   const renamed = Boolean(bound && bound.name !== name);
   return {
@@ -153,7 +149,7 @@ export function connectorReconciliation(endpoint: EndpointBinding | null) {
 export function confirmConnectorBinding(hubId: string, opts: { name: string; mcpUrl: string; connectorId: string }): LastEndpoint {
   const endpoint = readLastEndpoint(hubId);
   if (!endpoint || endpoint.hubId !== hubId ||
-      opts.name !== (endpoint.desiredConnectorName ?? endpoint.connectorName ?? LEGACY_CONNECTOR_NAME) ||
+      opts.name !== (endpoint.desiredConnectorName ?? endpoint.connectorName) ||
       !endpoint.mcpUrl || normalizePublicUrl(opts.mcpUrl) !== normalizePublicUrl(endpoint.mcpUrl)) {
     throw new Error("CONNECTOR_BINDING_CONFLICT: Verification does not match the current desired name and endpoint.");
   }
