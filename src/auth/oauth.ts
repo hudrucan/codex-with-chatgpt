@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, urlencoded, json } from "express";
 import { randomBytes } from "node:crypto";
-import { AuthStore, SUPPORTED_SCOPES, base64UrlSha256, filterScopes, safeEqual } from "./store.js";
+import { AuthStore, ClientRegistrationLimitError, SUPPORTED_SCOPES, base64UrlSha256, filterScopes, safeEqual } from "./store.js";
 import { PairingManager } from "../pairing/manager.js";
 import type { Logger } from "../logger/index.js";
 import { PRODUCT_NAME } from "../version.js";
@@ -24,6 +24,9 @@ interface PendingAuthRequest {
   resource?: string;
   expiresAt: number;
 }
+
+export const MAX_PENDING_AUTH_REQUESTS = 128;
+export const PENDING_AUTH_TTL_MS = 10 * 60_000;
 
 function isAllowedRedirectUri(uri: string): boolean {
   let parsed: URL;
@@ -140,7 +143,7 @@ export function createOAuthRouter(deps: OAuthDeps): Router {
   const prunePending = (): void => {
     const now = Date.now();
     for (const [id, request] of pendingRequests) {
-      if (now > request.expiresAt) pendingRequests.delete(id);
+      if (now >= request.expiresAt) pendingRequests.delete(id);
     }
   };
 
@@ -173,10 +176,17 @@ export function createOAuthRouter(deps: OAuthDeps): Router {
       });
       return;
     }
-    const client = deps.store.registerClient({
-      clientName: typeof body.client_name === "string" ? body.client_name.slice(0, 200) : undefined,
-      redirectUris: redirectUris as string[],
-    });
+    let client: ReturnType<AuthStore["registerClient"]>;
+    try {
+      client = deps.store.registerClient({
+        clientName: typeof body.client_name === "string" ? body.client_name.slice(0, 200) : undefined,
+        redirectUris: redirectUris as string[],
+      });
+    } catch (error) {
+      if (!(error instanceof ClientRegistrationLimitError)) throw error;
+      res.status(503).json({ error: "temporarily_unavailable", error_description: error.message });
+      return;
+    }
     deps.logger.info(`Registered OAuth client ${client.clientId} (${client.clientName ?? "unnamed"})`);
     res.status(201).json({
       client_id: client.clientId,
@@ -220,6 +230,12 @@ export function createOAuthRouter(deps: OAuthDeps): Router {
       fail("invalid_request", "PKCE with S256 is required");
       return;
     }
+    if (pendingRequests.size >= MAX_PENDING_AUTH_REQUESTS) {
+      setAuthSecurityHeaders(res);
+      res.status(429).set("Retry-After", String(PENDING_AUTH_TTL_MS / 1000))
+        .json({ error: "temporarily_unavailable", error_description: "Too many pending authorization requests. Try again later." });
+      return;
+    }
     const scopes = filterScopes(query.scope);
     const request: PendingAuthRequest = {
       id: randomBytes(16).toString("hex"),
@@ -229,7 +245,7 @@ export function createOAuthRouter(deps: OAuthDeps): Router {
       state: query.state,
       codeChallenge: query.code_challenge,
       resource: query.resource,
-      expiresAt: Date.now() + 10 * 60_000,
+      expiresAt: Date.now() + PENDING_AUTH_TTL_MS,
     };
     pendingRequests.set(request.id, request);
     setAuthSecurityHeaders(res);

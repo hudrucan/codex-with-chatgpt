@@ -42,6 +42,7 @@ it("supports a single-repo Project with explicit routing, deterministic hash and
   expect(fs.existsSync(path.dirname(file()))).toBe(false);
   expect(preview.instructionHash).toBe(createHash("sha256").update(preview.instructions).digest("hex"));
   expect(preview.instructions).toContain(`- frontend -> workspace="${frontend}"`);
+  expect(preview.instructions).toContain("Connector: Desk C2C Hub · Foundation\nUse this connector for the listed repositories.");
   expect(preview.instructions.startsWith("[desk-c2c]\n")).toBe(true); expect(preview.instructions.endsWith("\n[/desk-c2c]")).toBe(true);
   for (const hidden of ["connector_verified", "https://code.example.com", "Instruction version:", "frontend-generated-"]) expect(preview.instructions).not.toContain(hidden);
   expect(() => bindProject(hubId, a, "0".repeat(64), frontend)).toThrow("PROJECT_INSTRUCTIONS_CHANGED");
@@ -128,16 +129,23 @@ it("keeps an empty Project record available for syncing after its final membersh
   acknowledge(a); expect(projectStatus(hubId, a).status).toBe("current");
 });
 
-it("does not change semantic instructions on alias, connector identity/URL/name, PID or port changes", () => {
+it("ignores alias, connector ID/URL, PID and port changes but requires sync for a verified connector name change", () => {
   acknowledge(a, frontend); const before = projectInstructions(hubId, a);
   registry.add(registry.resolve(frontend).root, "renamed-alias");
   const endpoint = readLastEndpoint(hubId)!;
-  writeLastEndpoint({ ...endpoint, connectorId: "another_verified_connector", connectorName: "Renamed", desiredConnectorName: "Renamed",
+  writeLastEndpoint({ ...endpoint, connectorId: "another_verified_connector",
     port: 55555, publicUrl: "https://changed.example.com", mcpUrl: "https://changed.example.com/mcp", boundMcpUrl: "https://changed.example.com/mcp" });
   write(state, `runtime/${hubId}.json`, JSON.stringify({ hubId, pid: 1234, port: 55555 }));
   const after = projectInstructions(hubId, a);
   expect(after.instructions).toBe(before.instructions); expect(after.instructionHash).toBe(before.instructionHash);
   expect(after.connector).not.toEqual(before.connector); expect(projectStatus(hubId, a).status).toBe("current");
+  writeLastEndpoint({ ...readLastEndpoint(hubId)!, connectorName: "Renamed", desiredConnectorName: "Renamed" });
+  const renamed = projectInstructions(hubId, a);
+  expect(renamed.instructions).toContain("Connector: Renamed");
+  expect(renamed.instructionHash).not.toBe(before.instructionHash);
+  expect(projectStatus(hubId, a).status).toBe("sync_required");
+  expect(() => bindProject(hubId, a, before.instructionHash)).toThrow("PROJECT_INSTRUCTIONS_CHANGED");
+  acknowledge(a); expect(projectStatus(hubId, a).status).toBe("current");
 });
 
 it("requires sync for repository label changes and rejects stale acknowledgement hashes", () => {

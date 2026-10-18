@@ -29,6 +29,7 @@ export type PairingVerifyResult = PairingVerifyOk | PairingVerifyFail;
 
 // No ambiguous characters (I, L, O, 0, 1).
 const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export const MAX_PAIRING_IPS = 1024;
 
 function generateCode(length = 8): string {
   const chars: string[] = [];
@@ -100,10 +101,15 @@ export class PairingManager {
   }
 
   private checkIpRate(ip: string | undefined): boolean {
-    if (!ip) return true;
     const now = Date.now();
+    for (const [address, entry] of this.ipHits) {
+      if (now >= entry.resetAt) this.ipHits.delete(address);
+    }
+    if (!ip) return true;
     const entry = this.ipHits.get(ip);
-    if (!entry || now > entry.resetAt) {
+    if (!entry) {
+      // Preserve active rate limits; reject new IPs instead of evicting tracked ones.
+      if (this.ipHits.size >= MAX_PAIRING_IPS) return false;
       this.ipHits.set(ip, { count: 1, resetAt: now + this.ipRateWindowMs });
       return true;
     }

@@ -84,7 +84,13 @@ describe("multiple workspaces through one existing MCP connection", () => {
       expect(tool.annotations?.readOnlyHint).toBe(true);
       expect(tool.inputSchema.properties?.workspace).toMatchObject({ type: "string" });
       expect(tool.inputSchema.required ?? []).not.toContain("workspace");
+      expect(tool.inputSchema.properties?.workspace).toMatchObject({ description: expect.stringContaining("Never omit workspace when the target is known.") });
+      expect(tool.inputSchema.properties?.workspace).toMatchObject({ description: expect.stringContaining("Project or conversation context") });
+      expect(tool.inputSchema.properties?.workspace).toMatchObject({ description: expect.stringContaining("discovery/admin only, not repository routing") });
     }
+    expect(tools.find(tool => tool.name === "list_workspaces")?.description).toContain("discovery/admin only, not repository routing");
+    expect(tools.find(tool => tool.name === "workspace_info")?.description).toContain("Use the explicit workspace ID");
+    expect(JSON.stringify(tools)).not.toContain("Use list_workspaces first");
     const limited = await connect(["git.read"]);
     try {
       expect((await call("list_workspaces", {}, limited)).data.error).toBe("INSUFFICIENT_SCOPE");

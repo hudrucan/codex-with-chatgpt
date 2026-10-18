@@ -1,7 +1,9 @@
 import { fixtureHub, fixtureAuthFile } from "../helpers.js";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import path from "node:path";
-import { filterScopes } from "../../src/auth/store.js";
+import fs from "node:fs";
+import { AuthStore, MAX_OAUTH_CLIENTS, filterScopes } from "../../src/auth/store.js";
+import { MAX_PENDING_AUTH_REQUESTS, PENDING_AUTH_TTL_MS } from "../../src/auth/oauth.js";
 import { renameHub } from "../../src/hub/store.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { makeTmpDir, cleanup, write, isolateStateDir, pkceVerifierAndChallenge } from "../helpers.js";
@@ -114,6 +116,77 @@ describe("discovery metadata", () => {
 });
 
 describe("authorization + token flow", () => {
+  it.each(["uncredentialed", "protected"])("bounds public client registration with %s slots without losing credentials", async kind => {
+    const cappedRoot = makeTmpDir("oauth-client-cap"), hub = fixtureHub(cappedRoot);
+    const store = new AuthStore(hub.hubId), original = store.registerClient({ redirectUris: [REDIRECT_URI] });
+    const token = store.issueTokens({ clientId: original.clientId, scopes: ["workspace.read"] });
+    const file = path.join(process.env.C2C_STATE_DIR!, "auth", `${hub.hubId}.json`);
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    state.clients = [original, ...Array.from({ length: MAX_OAUTH_CLIENTS - 1 }, (_, index) => ({ ...original,
+      clientId: `seeded-${index}`, createdAt: "2000-01-01T00:00:00.000Z" }))];
+    if (kind === "protected") {
+      state.tokens = [state.tokens[0], ...state.clients.slice(1).map((client: { clientId: string }, index: number) => ({
+        ...state.tokens[0], clientId: client.clientId, hash: (index + 1).toString(16).padStart(64, "0"),
+      }))];
+    }
+    fs.writeFileSync(file, JSON.stringify(state));
+    const cappedBridge = await startBridge({ hubId: hub.hubId, port: 0, persistRuntime: false });
+    try {
+      const register = () => fetch(`${cappedBridge.localBaseUrl()}/oauth/register`, { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ redirect_uris: [REDIRECT_URI] }) });
+      const before = fs.readFileSync(file);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await register();
+        if (kind === "protected") {
+          expect(response.status).toBe(503);
+          expect(await response.json()).toMatchObject({ error: "temporarily_unavailable" });
+          expect(fs.readFileSync(file)).toEqual(before);
+          for (const client of state.clients) expect(cappedBridge.authStore.getClient(client.clientId)).toEqual(client);
+        } else {
+          expect(response.status).toBe(201);
+          const added = await response.json() as { client_id: string };
+          expect(cappedBridge.authStore.getClient(added.client_id)).toBeDefined();
+          expect(JSON.parse(fs.readFileSync(file, "utf8")).clients).toHaveLength(MAX_OAUTH_CLIENTS);
+        }
+      }
+      const reloaded = new AuthStore(hub.hubId);
+      expect(reloaded.getClient(original.clientId)).toEqual(original);
+      expect(reloaded.verifyAccessToken(token.accessToken).ok).toBe(true);
+      if (kind === "protected") {
+        expect(() => reloaded.registerClient({ redirectUris: [REDIRECT_URI] })).toThrow("registration limit");
+        expect(fs.readFileSync(file)).toEqual(before);
+      }
+    } finally { await cappedBridge.close(); cleanup(cappedRoot); }
+  });
+
+  it("caps pending requests without evicting active approvals and reclaims consumed or expired slots", async () => {
+    const clientId = await registerClient(), { challenge } = pkceVerifierAndChallenge();
+    const now = Date.now() + PENDING_AUTH_TTL_MS;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const url = new URL(`${base}/oauth/authorize`);
+      for (const [key, value] of Object.entries({ client_id: clientId, redirect_uri: REDIRECT_URI,
+        response_type: "code", code_challenge: challenge, code_challenge_method: "S256" })) url.searchParams.set(key, value);
+      const requests: string[] = [];
+      for (let index = 0; index < MAX_PENDING_AUTH_REQUESTS; index++) {
+        const response = await fetch(url); expect(response.status).toBe(200);
+        requests.push((await response.text()).match(/name="request_id" value="([a-f0-9]+)"/)![1]);
+      }
+      const full = await fetch(url); expect(full.status).toBe(429);
+      expect(full.headers.get("retry-after")).toBe(String(PENDING_AUTH_TTL_MS / 1000));
+      expect(await full.json()).toMatchObject({ error: "temporarily_unavailable" });
+      const pairing = bridge.pairing.create();
+      const approve = (requestId: string) => fetch(`${base}/oauth/authorize`, { method: "POST", redirect: "manual",
+        headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request_id: requestId, pairing_code: pairing.code }) });
+      const approved = await approve(requests[0]); expect(approved.status).toBe(302);
+      expect(approved.headers.get("location")).toContain("code=");
+      expect((await fetch(url)).status).toBe(200);
+      clock.mockReturnValue(now + PENDING_AUTH_TTL_MS);
+      expect((await approve(requests[1])).status).toBe(400);
+      expect((await fetch(url)).status).toBe(200);
+    } finally { clock.mockRestore(); }
+  });
+
   it("completes the full pairing + PKCE flow and calls MCP", async () => {
     const clientId = await registerClient();
     const { verifier, challenge } = pkceVerifierAndChallenge();
@@ -280,6 +353,28 @@ describe("token enforcement on /mcp", () => {
   it("401 with an invalid token", async () => {
     const response = await mcpCall("c2c_at_totally-invalid");
     expect(response.status).toBe(401);
+  });
+
+  it.each(["missing", "invalid"])("authenticates a %s bearer before parsing malformed or oversized MCP bodies", async kind => {
+    for (const body of ["{", JSON.stringify("x".repeat(8 * 1024 * 1024 + 1))]) {
+      const response = await fetch(`${base}/mcp`, { method: "POST", headers: {
+        "content-type": "application/json", ...(kind === "invalid" ? { authorization: "Bearer invalid" } : {}),
+      }, body });
+      expect(response.status).toBe(401);
+      expect(response.headers.get("www-authenticate")).toContain("resource_metadata");
+      expect(await response.json()).toMatchObject({ error: "unauthorized" });
+    }
+  });
+
+  it("still parses and limits JSON bodies after successful bearer authentication", async () => {
+    const token = bridge.authStore.issueTokens({ clientId: "test", scopes: ["workspace.read"] });
+    for (const [body, status] of [["{", 400], [JSON.stringify("x".repeat(8 * 1024 * 1024 + 1)), 413]] as const) {
+      const response = await fetch(`${base}/mcp`, { method: "POST", headers: {
+        "content-type": "application/json", authorization: `Bearer ${token.accessToken}`,
+      }, body });
+      expect(response.status).toBe(status);
+      await response.text();
+    }
   });
 
   it("401 with an expired token", async () => {

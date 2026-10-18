@@ -18,9 +18,10 @@
 
 | Threat | Mitigation |
 | --- | --- |
-| MCP URL leaks | URL alone is useless: every `/mcp` request requires a valid bearer token (401 without, 403 wrong Hub) |
+| MCP URL leaks | URL alone is useless: every `/mcp` request validates its bearer before parsing the 8 MiB JSON body (401 without, 403 wrong Hub) |
 | Pairing code brute force | 8 chars from a 31-char CSPRNG alphabet (~40 bits), 5 attempts per session, per-IP rate limit (10/min), 5-minute TTL, one-time use, session destroyed on limit |
 | OAuth CSRF | `state` round-tripped verbatim; authorization requests are server-side records keyed by random ids |
+| Anonymous state growth | Pending authorization requests expire after 10 minutes and are capped at 128 per bridge (429 when full); pairing IP counters are pruned after their 60-second window and capped at 1,024 (new IPs rejected when full); dynamic registration is capped at 128 persisted clients per Hub, reclaiming the oldest registration without live access/refresh tokens or authorization codes (createdAt, then clientId). Expired codes may be pruned; 503 is returned only when every slot is protected by live credentials |
 | Code interception | PKCE S256 mandatory (plain rejected); authorization codes are one-time, 5-minute TTL, bound to client + redirect URI |
 | Token theft | Opaque high-entropy tokens; stored only as SHA-256 hashes; access tokens live 1 h; refresh tokens rotate on every use (replay of the old one fails); revocation endpoint + `c2c unpair` |
 | Cross-owner repo access | Registries and alias namespaces are keyed by the Hub ID; MCP accepts no owner override and resolves registered aliases/IDs independently on every tool call |
@@ -81,6 +82,8 @@ Eight read-only tools expose workspace discovery and bounded repo reads.
 selector accepts registered aliases or IDs, never arbitrary local roots, and
 cannot select another owner. See [multi-repo access](multi-repo.md) for tool
 scopes, selection rules and registry format.
+Use explicit workspace IDs supplied by Project/conversation context; never omit
+the selector when the target is known. Discovery/admin listing does not route repositories.
 
 Canonical containment, sensitive-file and git policies apply to every selected
 root. Files and diffs are untrusted project data and cannot authorize new grants.

@@ -59,6 +59,11 @@ export class AuthStateError extends Error {
   constructor(message: string) { super(`AUTH_STATE_CONFLICT: ${message}`); this.name = "AuthStateError"; }
 }
 
+export const MAX_OAUTH_CLIENTS = 128;
+export class ClientRegistrationLimitError extends Error {
+  constructor() { super("OAuth client registration limit reached."); }
+}
+
 function withAuthLock<T>(file: string, operation: () => T): T {
   ensureDir(path.dirname(file));
   const lock = `${file}.lock`;
@@ -155,6 +160,23 @@ export class AuthStore {
   // ---- Dynamic Client Registration -------------------------------------
 
   registerClient(input: { clientName?: string; redirectUris: string[] }): ClientRegistration {
+    if (this.clients.size >= MAX_OAUTH_CLIENTS) {
+      const now = Date.now();
+      for (const [code, record] of this.authCodes) {
+        if (now > record.expiresAt) this.authCodes.delete(code);
+      }
+      const protectedClients = new Set([
+        ...[...this.tokens.values()].filter(token => !token.revoked && now <= token.expiresAt).map(token => token.clientId),
+        ...[...this.authCodes.values()].map(code => code.clientId),
+      ]);
+      const candidates = [...this.clients.values()].filter(client => !protectedClients.has(client.clientId))
+        .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+          (a.clientId < b.clientId ? -1 : a.clientId > b.clientId ? 1 : 0));
+      // Check capacity before removing anything; live credentials must never lose their client.
+      const needed = this.clients.size - MAX_OAUTH_CLIENTS + 1;
+      if (candidates.length < needed) throw new ClientRegistrationLimitError();
+      for (const client of candidates.slice(0, needed)) this.clients.delete(client.clientId);
+    }
     const client: ClientRegistration = {
       clientId: `c2c_client_${randomBytes(12).toString("base64url")}`,
       clientName: input.clientName,

@@ -40,7 +40,8 @@ to adopt another by title or create a replacement. `stale` or nonempty
    Omit `--workspace` to sync existing memberships. This preview writes nothing.
    Use returned `repositories`, `instructions`, `instructionHash` and separate
    `connector` metadata. Connector ID/name/URL must match the Hub's verified
-   binding even though they never enter the managed text or semantic hash.
+   binding. The verified display name enters the managed text and semantic hash;
+   connector ID/URL and runtime details do not. A verified name change requires sync.
 3. Open the exact Project's visible Instructions editor. Preserve unrelated
    user instructions. Replace only the single complete block delimited by
    `[desk-c2c]` and `[/desk-c2c]` with the exact generated text. If no C2C block

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { PairingManager, formatPairingCode, normalizePairingCode } from "../../src/pairing/manager.js";
+import { PairingManager, MAX_PAIRING_IPS, formatPairingCode, normalizePairingCode } from "../../src/pairing/manager.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -57,7 +57,7 @@ describe("PairingManager", () => {
     manager.verify("AAAA-AAAA", "1.2.3.4");
     expect(manager.verify("AAAA-AAAA", "1.2.3.4")).toMatchObject({ ok: false, reason: "rate_limited" });
     // other IPs unaffected
-    expect(manager.verify("AAAA-AAAA", "5.6.7.8").reason).not.toBe("rate_limited");
+    expect(manager.verify("AAAA-AAAA", "5.6.7.8")).not.toMatchObject({ ok: false, reason: "rate_limited" });
   });
 
   it("invalidates previous sessions when creating a new one", () => {
@@ -65,6 +65,19 @@ describe("PairingManager", () => {
     const first = manager.create();
     manager.create();
     expect(manager.verify(first.code).ok).toBe(false);
+  });
+
+  it("caps IP tracking without evicting active limits, then prunes expired entries", () => {
+    vi.useFakeTimers();
+    const manager = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440000", { ipRateLimit: 1 });
+    for (let index = 0; index < MAX_PAIRING_IPS; index++) {
+      expect(manager.verify("AAAA-AAAA", `ip-${index}`)).toMatchObject({ ok: false, reason: "no_active_session" });
+    }
+    expect(manager.verify("AAAA-AAAA", "new-ip")).toMatchObject({ ok: false, reason: "rate_limited" });
+    expect(manager.verify("AAAA-AAAA", "ip-0")).toMatchObject({ ok: false, reason: "rate_limited" });
+    vi.advanceTimersByTime(60_000);
+    expect(manager.verify("AAAA-AAAA", "new-ip")).toMatchObject({ ok: false, reason: "no_active_session" });
+    expect(manager.verify("AAAA-AAAA", "ip-0")).toMatchObject({ ok: false, reason: "no_active_session" });
   });
 
   it("owns pairing sessions by Hub and never shares codes across connections", () => {

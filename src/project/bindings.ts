@@ -46,6 +46,8 @@ function intended(hubId: string, projectUrl: string, workspaceSelector?: string)
   const text = [
     "[desk-c2c]",
     "Use Desk C2C Hub for repository access.",
+    `Connector: ${connector.name}`,
+    "Use this connector for the listed repositories.",
     "",
     "Repositories:",
     ...repositories.map(repo => `- ${repo.name} -> workspace="${repo.workspaceId}"`),

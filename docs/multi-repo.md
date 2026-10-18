@@ -125,12 +125,13 @@ workspace explicitly. Verify `workspace_info(workspace="<id>")` before first use
 of each repo in a conversation; reuse that verification unless a tool/connector
 error suggests a binding change.
 
-Ordering and SHA-256 hashing are deterministic. Membership or repo display-name
-changes require sync. Generated aliases, connector ID/name/MCP URL, instruction
-version, runtime PID and port are absent from the block. Verified connector
-metadata remains in CLI output for Skill verification; endpoint changes that do
-not alter routing never cause instruction rewrites. An unreconciled connector
-still blocks acknowledgement.
+Ordering and SHA-256 hashing are deterministic. The block names the verified
+connector and directs ChatGPT to use it for the listed repositories. Membership,
+repo display-name or verified connector-name changes require sync. Generated
+aliases, connector ID/MCP URL, instruction version, runtime PID and port are
+absent from the block. Connector metadata remains in CLI output for Skill
+verification; ID/URL/PID/port changes do not change its semantic hash.
+An unreconciled connector still blocks acknowledgement.
 
 `status` reports `unbound`, `current`, `sync_required` or `stale`, with
 `projectVerification: "not_checked"`. These are local metadata checks, never proof
