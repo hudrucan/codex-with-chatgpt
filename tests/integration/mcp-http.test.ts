@@ -1,3 +1,4 @@
+import { fixtureHub, fixtureWorkspace, fixtureAuthFile } from "../helpers.js";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
@@ -53,10 +54,10 @@ beforeAll(async () => {
 
   authFile = path.join(makeTmpDir("auth"), "store.json");
   bridge = await startBridge({
-    workspaceRoot: root,
+    hubId: fixtureHub(root).hubId,
     port: 0,
     persistRuntime: false,
-    authStoreFile: authFile,
+    authStoreFile: fixtureAuthFile(fixtureHub(root).hubId, authFile),
   });
   const tokens = bridge.authStore.issueTokens({
     clientId: "it-client",
@@ -119,7 +120,7 @@ describe("MCP tools over Streamable HTTP", () => {
   it("workspace_info returns identity and project detection", async () => {
     const result = await client.callTool({ name: "workspace_info", arguments: {} });
     const info = structuredJsonOf<{ workspaceId: string; projectType: string; frameworks: string[]; git: { isRepo: boolean; branch: string } }>(result);
-    expect(info.workspaceId).toBe(bridge.workspace.id);
+    expect(info.workspaceId).toBe(fixtureWorkspace(bridge).id);
     expect(info.projectType).toBe("node");
     expect(info.frameworks).toContain("React");
     expect(info.git.isRepo).toBe(true);
@@ -217,7 +218,7 @@ describe("MCP tools over Streamable HTTP", () => {
         requestInit: { headers: { authorization: `Bearer ${legacy.accessToken}` } },
       }));
       const result = await legacyClient.callTool({ name: "workspace_info", arguments: {} });
-      expect(jsonOf<{ workspaceId: string }>(result).workspaceId).toBe(bridge.workspace.id);
+      expect(jsonOf<{ workspaceId: string }>(result).workspaceId).toBe(fixtureWorkspace(bridge).id);
     } finally { await legacyClient.close(); }
   });
 

@@ -1,27 +1,24 @@
 import fs from "node:fs";
-import path from "node:path";
+import { stateFile } from "../config/state-files.js";
 import { z } from "zod";
-import { getStateDir, writeSecureJson } from "../config/paths.js";
-import { hubIdSchema, readConfiguredHub, type Hub } from "../hub/store.js";
-import { Workspace } from "../workspace/manager.js";
+import { writeSecureJson } from "../config/paths.js";
+import { hubIdSchema, readConfiguredHub } from "../hub/store.js";
 import { SERVICE_NAME, VERSION } from "../version.js";
 
 const runtimeFields = {
   service: z.literal(SERVICE_NAME), version: z.string(),
-  workspaceId: z.string().regex(/^[a-f0-9]{12}$/),
-  workspaceRoot: z.string().refine((root) => path.isAbsolute(root)),
+  workspaceId: z.string().regex(/^[a-f0-9]{12}$/).optional(),
+  workspaceRoot: z.string().optional(),
   pid: z.number().int().positive(), port: z.number().int().min(1).max(65535),
   adminToken: z.string().min(1), publicUrl: z.string().nullable(), startedAt: z.string().datetime(),
 };
-const legacyRuntimeSchema = z.object(runtimeFields).strict();
-const hubRuntimeSchema = z.object({ ...runtimeFields, stateVersion: z.literal(1), hubId: hubIdSchema }).strict();
+export const hubRuntimeSchema = z.object({ ...runtimeFields, stateVersion: z.literal(1), hubId: hubIdSchema }).strict();
 export type HubRuntimeState = z.infer<typeof hubRuntimeSchema>;
-/** Startup workspace fields are compatibility metadata, not the runtime identity. */
-export type RuntimeState = z.infer<typeof legacyRuntimeSchema> & { hubId?: string; stateVersion?: 1 };
+export type RuntimeState = HubRuntimeState;
 
 export function runtimeFile(hubId: string): string {
   if (!hubIdSchema.safeParse(hubId).success) throw new Error("RUNTIME_OWNERSHIP_CONFLICT: Runtime owner must be a Hub ID.");
-  return path.join(getStateDir(), "runtime", `${hubId}.json`);
+  return stateFile("runtime", `${hubId}.json`);
 }
 
 export function writeRuntimeState(state: HubRuntimeState): void {
@@ -37,7 +34,7 @@ function readRuntime(file: string, hubId?: string): RuntimeState | null {
     throw new Error("RUNTIME_STATE_INVALID: Cannot read runtime state.");
   }
   try {
-    const value = hubId ? hubRuntimeSchema.parse(JSON.parse(raw)) : legacyRuntimeSchema.parse(JSON.parse(raw));
+    const value = hubRuntimeSchema.parse(JSON.parse(raw));
     if (hubId && (!('hubId' in value) || value.hubId !== hubId)) throw new Error("Wrong owner");
     return value;
   } catch { throw new Error("RUNTIME_STATE_INVALID: Runtime ownership or format is invalid."); }
@@ -81,55 +78,24 @@ function observePid(pid: number): "present" | "missing" | "unknown" {
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? "missing" : "unknown"; }
 }
 
-/** Called under the Hub control-plane lock, before copying authoritative auth. */
-export function assertAuthHandoffQuiescent(hub: Hub, owner: Workspace, hasLegacyAuth: boolean): void {
-  if (hub.legacyOwnerWorkspaceId !== owner.id) throw new Error("AUTH_HANDOFF_CONFLICT: Legacy owner does not match this Hub.");
-  const current = readRuntimeState(hub.hubId);
-  if (current && observePid(current.pid) !== "missing") {
-    throw new Error("AUTH_HANDOFF_BUSY: A Hub runtime may still be writing auth.");
-  }
-  const legacy = readRuntime(path.join(getStateDir(), "runtime", `${owner.id}.json`));
-  if (!legacy) {
-    if (hasLegacyAuth) throw new Error("AUTH_HANDOFF_REQUIRED: Retain the verified legacy runtime record until its process exit is confirmed.");
-    return;
-  }
-  if (legacy.workspaceId !== owner.id || legacy.workspaceRoot !== owner.root) {
-    throw new Error("AUTH_HANDOFF_CONFLICT: Legacy runtime belongs to another owner.");
-  }
-  if (observePid(legacy.pid) !== "missing") {
-    throw new Error("AUTH_HANDOFF_BUSY: Stop the legacy bridge and confirm its process has exited before finalizing auth.");
-  }
-}
-
-async function observe(file: string, hubId: string, legacyOwner?: string): Promise<BridgeObservation> {
+async function observe(file: string, hubId: string): Promise<BridgeObservation> {
   let runtime: RuntimeState | null;
-  try { runtime = readRuntime(file, legacyOwner ? undefined : hubId); }
+  try { runtime = readRuntime(file, hubId); }
   catch { return { state: "unknown", runtime: null, reason: "runtime_invalid" }; }
   if (!runtime) return { state: "stopped", runtime: null, reason: "runtime_missing" };
   const pid = observePid(runtime.pid);
   if (pid === "missing") return { state: "stopped", runtime, reason: "pid_missing" };
-  if (legacyOwner) {
-    try {
-      const workspace = new Workspace(runtime.workspaceRoot);
-      if (runtime.workspaceId !== legacyOwner || workspace.id !== legacyOwner || workspace.root !== runtime.workspaceRoot) throw new Error("Wrong legacy owner");
-    } catch { return { state: "unknown", runtime, reason: "workspace_mismatch" }; }
-  }
   const health = await probeBridge(runtime.port);
-  const matches = health && (legacyOwner
-    ? health.workspaceId === legacyOwner && (health.hubId === undefined || health.hubId === hubId)
-    : health.hubId === hubId);
+  const matches = health && health.hubId === hubId;
   if (matches) return { state: "healthy", runtime };
   if (health) return { state: "unknown", runtime, reason: "workspace_mismatch" };
   return { state: "unknown", runtime, reason: pid === "unknown" ? "pid_unknown" : "probe_failed" };
 }
 
-/** Read-only discovery. Live legacy runtime stays in its own file until its process exits. */
+/** Native discovery never reads workspace-owned runtime files. */
 export async function findBridgeObservation(hubId: string): Promise<BridgeObservation> {
-  const hub = readConfiguredHub(hubId);
-  const current = await observe(runtimeFile(hubId), hubId);
-  if (current.state !== "stopped" || !hub.legacyOwnerWorkspaceId) return current;
-  const legacy = await observe(path.join(getStateDir(), "runtime", `${hub.legacyOwnerWorkspaceId}.json`), hubId, hub.legacyOwnerWorkspaceId);
-  return legacy.state !== "stopped" ? legacy : current.runtime ? current : legacy;
+  readConfiguredHub(hubId);
+  return observe(runtimeFile(hubId), hubId);
 }
 
 export async function findLiveBridge(hubId: string): Promise<RuntimeState | null> {

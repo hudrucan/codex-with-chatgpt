@@ -1,3 +1,4 @@
+import { fixtureHub, fixtureWorkspace } from "../helpers.js";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -51,7 +52,7 @@ function ownershipSnapshot(): Record<string, unknown> {
 async function start(): Promise<void> {
   makeGitRepo(root);
   fs.writeFileSync(path.join(root, "pixel.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  bridge = await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false });
+  bridge = await startBridge({ hubId: fixtureHub(root).hubId, port: 0, persistRuntime: false });
 }
 
 async function connect(): Promise<void> {
@@ -73,7 +74,7 @@ async function expectWorkspaceReads(): Promise<void> {
   for (const [name, args] of workspaceCalls) {
     const { result, data } = await call(name, args);
     expect(result.isError ?? false, `${name}: ${JSON.stringify(data)}`).toBe(false);
-    if (name === "workspace_info") expect(data.workspaceId).toBe(bridge!.workspace.id);
+    if (name === "workspace_info") expect(data.workspaceId).toBe(fixtureWorkspace(bridge!).id);
     if (name === "read_file") expect(data.content).toContain("Hello from Codex");
   }
 }
@@ -103,7 +104,7 @@ describe("MCP uses the Hub resolved at startup", () => {
 
   it("does not recreate missing Hub, mapping or registry ownership state", async () => {
     await start();
-    for (const directory of ownershipDirectories) fs.rmSync(path.join(state, directory), { recursive: true });
+    for (const directory of ownershipDirectories) fs.rmSync(path.join(state, directory), { recursive: true, force: true });
     const before = ownershipSnapshot();
     await connect();
     expect((await call("list_workspaces")).data).toEqual({ workspaces: [] });

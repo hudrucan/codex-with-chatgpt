@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthStore, finalizeAuthHandoff } from "../../src/auth/store.js";
-import { hubMappingFile, resolveHub } from "../../src/hub/store.js";
+import { LegacyAuthSnapshot as AuthStore, finalizeAuthHandoff } from "../../src/migration/adoption.js";
+import { hubMappingFile, resolveHub } from "../../src/migration/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, isolateStateDir, legacyAuthFixture, makeTmpDir, write } from "../helpers.js";
 

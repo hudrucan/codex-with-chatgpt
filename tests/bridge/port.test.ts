@@ -1,3 +1,4 @@
+import { fixtureHub, fixtureWorkspace, fixtureAuthFile } from "../helpers.js";
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { startBridge } from "../../src/bridge/server.js";
@@ -14,16 +15,16 @@ describe("port collision handling", () => {
     const preferred = 47000 + Math.floor(Math.random() * 1000);
 
     const bridgeA = await startBridge({
-      workspaceRoot: rootA,
+      hubId: fixtureHub(rootA).hubId,
       port: preferred,
       persistRuntime: false,
-      authStoreFile: path.join(makeTmpDir("auth"), "a.json"),
+      authStoreFile: fixtureAuthFile(fixtureHub(rootA).hubId, path.join(makeTmpDir("auth"), "a.json")),
     });
     const bridgeB = await startBridge({
-      workspaceRoot: rootB,
+      hubId: fixtureHub(rootB).hubId,
       port: preferred,
       persistRuntime: false,
-      authStoreFile: path.join(makeTmpDir("auth"), "b.json"),
+      authStoreFile: fixtureAuthFile(fixtureHub(rootB).hubId, path.join(makeTmpDir("auth"), "b.json")),
     });
 
     expect(bridgeA.port).toBe(preferred);
@@ -33,8 +34,8 @@ describe("port collision handling", () => {
     // health identifies each bridge's workspace, so callers can detect reuse
     const healthA = await probeBridge(bridgeA.port);
     const healthB = await probeBridge(bridgeB.port);
-    expect(healthA?.workspaceId).toBe(bridgeA.workspace.id);
-    expect(healthB?.workspaceId).toBe(bridgeB.workspace.id);
+    expect(healthA?.workspaceId).toBe(fixtureWorkspace(bridgeA).id);
+    expect(healthB?.workspaceId).toBe(fixtureWorkspace(bridgeB).id);
     expect(healthA?.workspaceId).not.toBe(healthB?.workspaceId);
 
     await bridgeA.close();
@@ -47,7 +48,7 @@ describe("port collision handling", () => {
     const root = makeTmpDir("port-c");
     write(root, "c.txt", "c");
     await expect(
-      startBridge({ workspaceRoot: root, host: "0.0.0.0", persistRuntime: false })
+      startBridge({ hubId: fixtureHub(root).hubId, host: "0.0.0.0", persistRuntime: false })
     ).rejects.toThrow(/loopback/);
     cleanup(root);
   });

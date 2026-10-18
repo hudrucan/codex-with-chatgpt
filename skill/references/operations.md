@@ -1,7 +1,7 @@
 # Rare bridge operations
 
-Read only the section relevant to the current diagnostic. Keep the requested
-workspace and its existing resource IDs. These are recovery procedures, not a
+Read only the section relevant to the current diagnostic. Keep the selected
+Hub and its existing resource IDs. These are recovery procedures, not a
 coding workflow; a recovered connection ends at `MCP READY` and stops.
 
 ## Named Tunnel prerequisites
@@ -41,14 +41,15 @@ ownership manually, preserving the journal.
 
 ## Locks
 
-CLI lifecycle operations serialize per workspace. A crash can leave a lock;
+CLI lifecycle operations serialize per Hub. A crash can leave a lock;
 verify the recorded process is gone before removing that specific lock. Do not
 auto-remove locks by age or kill an unverified PID.
 
 ## ChatGPT UI recovery
 
-For a stale tool surface, first attach/select the exact desired plugin again.
-If the current chat still cannot call workspace_info, use a new ordinary chat
+For a stale tool surface, open the exact existing connector in Manage and use
+Refresh tools. Then select that connector and verify all eight tools and the
+optional workspace selector in a new ordinary chat
 in the same IAB tab and verify there. Do not create a Project, persist a chat
 pointer, send a task handoff or repeatedly message a stale conversation.
 

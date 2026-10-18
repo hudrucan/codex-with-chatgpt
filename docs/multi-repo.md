@@ -1,32 +1,28 @@
 # Multi-repo access
 
 One MCP connection can read multiple explicitly registered local repos. A stable
-local Hub owns those grants. The configured startup workspace resolves its Hub
-through an explicit local mapping. Different legacy owners resolve different Hubs,
-even in the same C2C state directory.
+local Hub owns those grants, independently of every repo path.
 
 ## Register and remove workspaces
 
 ```bash
-c2c workspace list -w /path/to/hub-root --json
-c2c workspace add /path/to/repo -w /path/to/hub-root --alias backend
-c2c workspace add /path/to/another-repo -w /path/to/hub-root
-c2c workspace remove backend -w /path/to/hub-root
-c2c workspace remove <workspaceId> -w /path/to/hub-root
+c2c workspace list --json
+c2c workspace add /path/to/repo --alias backend
+c2c workspace add /path/to/another-repo
+c2c workspace remove backend
+c2c workspace remove <workspaceId>
 ```
 
-For these commands, `-w` selects the configured startup root used to resolve its
-Hub, defaulting to the current directory. The repo to add is a separate positional path. Adding a repo
-grants read access without starting another bridge or provisioning resources.
-Bare `c2c workspace -w <path> [--json]` shows local identity and project information
-without registering that path.
+One configured Hub is selected automatically. With several Hubs, inspect
+`c2c hub list --json` and pass `--hub <id>` to the command. No Hub returns
+`HUB_NOT_CONFIGURED`; ambiguous selection returns `HUB_SELECTION_REQUIRED`.
+A repo path never selects registry ownership.
 
-The bridge automatically registers its canonical startup root when it starts.
-Registration changes take effect on the next tool call. Removing the startup
-root revokes its grant too; starting that bridge again registers the root again.
-Disconnect retains registrations. Grants do not transfer ownership of tokens,
-tunnels, runtime state or connector bindings; those belong to the configured Hub.
-See [lifecycle](lifecycle.md) for connection operations.
+Bare `c2c workspace -w <path> [--json]` inspects the repo without creating,
+adopting or selecting a Hub. Setup registers its initial repo; starting a Hub
+does not register or restore grants. Removing even the first repo persists
+across restarts. Changes take effect on the next MCP call without restarting,
+changing auth or touching tunnel/connector state. Disconnect retains grants.
 
 ## Identity and aliases
 
@@ -94,37 +90,21 @@ see [security](security.md).
 ## Registry storage
 
 Hub identity lives in `hubs/<hubId>.json` in the external C2C state directory.
-`hubId` is an opaque random UUID with a `hub-` prefix, independent of repo paths
-and display names. The initial display name uses the configured workspace's name;
-resolving that connection again preserves the Hub's identity and display name.
-The optional `legacyOwnerWorkspaceId` links an existing connection to its Hub.
+The ID is random and independent of repo paths and labels. Fresh setup may use
+the first repo's display name as a suggestion; it creates no workspace-owner
+mapping. For example:
 
 ```json
 {
   "version": 1,
   "hubId": "hub-550e8400-e29b-41d4-a716-446655440000",
   "displayName": "My Hub",
-  "createdAt": "2026-10-18T08:00:00.000Z",
-  "legacyOwnerWorkspaceId": "abcdef012345"
+  "createdAt": "2026-10-18T08:00:00.000Z"
 }
 ```
 
-`hub-mappings/<legacyOwnerWorkspaceId>.json` records the one-to-one connection
-mapping and whether registry initialization completed:
-
-```json
-{
-  "version": 1,
-  "legacyOwnerWorkspaceId": "abcdef012345",
-  "hubId": "hub-550e8400-e29b-41d4-a716-446655440000",
-  "registryInitialized": true
-}
-```
-
-`workspace-registries/<hubId>.json` stores the Hub's read grants, separately from
-display names in `workspaces/`. `C2C_STATE_DIR` can override the state directory.
-No repository configuration is written. Hub IDs remain internal: CLI owner
-selection uses `-w`, and MCP selectors remain workspace aliases or IDs.
+`workspace-registries/<hubId>.json` stores the Hub's read grants. `C2C_STATE_DIR`
+can override the state directory. No repository configuration is written.
 
 ```json
 {
@@ -136,22 +116,7 @@ selection uses `-w`, and MCP selectors remain workspace aliases or IDs.
 }
 ```
 
-The registry's Hub ID must match the configured connection's Hub mapping.
-An owner-scoped `workspace-registries/<legacyOwnerWorkspaceId>.json` can be copied
-only if its ownership metadata matches that exact owner. Aliases and grants are
-preserved, and the source file is retained. Conflicting destination grants are
-rejected rather than merged or overwritten. Initialization is checkpointed so
-removed grants are not re-imported on later resolutions. An interrupted copy can
-resume only when the destination matches the verified source.
-
-Registries from other owners and the unowned `workspace-registry.json` are never
-adopted. Missing Hub targets, malformed state, duplicate owner claims and
-conflicting mappings deny access. Hub metadata and registration do not change
-OAuth scopes or remote connector bindings. Auth, runtime, tunnel and endpoint
-state are keyed by Hub ID.
-Resource cleanup remains keyed by the configured startup workspace.
-
-Registry writes use an exclusive Hub-local `.lock` file and atomic replacement;
-identity claims and adoption also hold `hub-mappings/.lock`. For leftover locks
-or inaccessible state, follow
-[troubleshooting](troubleshooting.md#local-process-and-tunnel-diagnostics).
+Registry ownership must match the running Hub. Writes use an exclusive local
+lock and atomic replacement. Native stores never import old files or merge
+other Hubs' grants. See [troubleshooting](troubleshooting.md) for explicit upgrade
+and lock recovery. All connection resources and destroy receipts are Hub-owned.

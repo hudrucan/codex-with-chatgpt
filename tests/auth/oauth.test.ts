@@ -1,3 +1,4 @@
+import { fixtureHub, fixtureAuthFile } from "../helpers.js";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import path from "node:path";
 import { filterScopes } from "../../src/auth/store.js";
@@ -15,10 +16,10 @@ beforeAll(async () => {
   root = makeTmpDir("oauth-ws");
   write(root, "hello.txt", "hello oauth\n");
   bridge = await startBridge({
-    workspaceRoot: root,
+    hubId: fixtureHub(root).hubId,
     port: 0,
     persistRuntime: false,
-    authStoreFile: path.join(makeTmpDir("auth"), "store.json"),
+    authStoreFile: fixtureAuthFile(fixtureHub(root).hubId, path.join(makeTmpDir("auth"), "store.json")),
   });
   base = bridge.localBaseUrl();
 });
@@ -158,10 +159,10 @@ describe("authorization + token flow", () => {
     const xssWorkspaceRoot = makeTmpDir("oauth-html");
     write(xssWorkspaceRoot, ".c2c.json", JSON.stringify({ name: "<script>alert('xss')</script>" }));
     const xssBridge = await startBridge({
-      workspaceRoot: xssWorkspaceRoot,
+      hubId: fixtureHub(xssWorkspaceRoot).hubId,
       port: 0,
       persistRuntime: false,
-      authStoreFile: path.join(makeTmpDir("auth-html"), "store.json"),
+      authStoreFile: fixtureAuthFile(fixtureHub(xssWorkspaceRoot).hubId, path.join(makeTmpDir("auth-html"), "store.json")),
     });
 
     try {

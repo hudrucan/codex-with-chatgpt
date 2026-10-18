@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { resolveHub } from "../../src/hub/store.js";
+import { fixtureHub as resolveHub } from "../helpers.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { writeTunnelState } from "../../src/tunnel/state.js";
 import path from "node:path";

@@ -1,10 +1,19 @@
+import { readTunnelState as nativeTunnel } from "../../src/tunnel/state.js";
+import { readLastEndpoint as nativeEndpoint } from "../../src/config/endpoint.js";
+import { createHub, resolveHub as discoverHub, readConfiguredHub as readNativeHub } from "../../src/hub/store.js";
+import { AuthStore as NativeAuthStore } from "../../src/auth/store.js";
+import { adoptLegacyWorkspace, finalizeAuthHandoff } from "../../src/migration/adoption.js";
+import { detachHub, legacyCleanup } from "../../src/migration/finalize.js";
+import { WorkspaceRegistry } from "../../src/workspace/registry.js";
+import { legacyAuthFixture } from "../helpers.js";
+import { adoptLegacyTunnel as readTunnelState, adoptLegacyEndpoint as readLastEndpoint } from "../../src/migration/adoption.js";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hubFile, hubMappingFile, resolveHub } from "../../src/hub/store.js";
-import { readTunnelState, tunnelStateFile } from "../../src/tunnel/state.js";
-import { readLastEndpoint, endpointFile } from "../../src/config/endpoint.js";
+import { hubFile, hubMappingFile, resolveHub } from "../../src/migration/store.js";
+import { tunnelStateFile } from "../../src/tunnel/state.js";
+import { endpointFile } from "../../src/config/endpoint.js";
 import { ProcessCloudflaredAccount } from "../../src/tunnel/named-provision.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
@@ -190,3 +199,92 @@ describe.each(["tunnel", "endpoint"] as const)("Hub-owned %s adoption", (resourc
     expect(fs.readFileSync(legacy.source, "utf8")).toBe(contents);
   });
 });
+
+
+describe("native Hub discovery and grants",()=>{
+  it("creates a self-sufficient Hub without repo identity or a legacy mapping",()=>{
+    expect(()=>discoverHub()).toThrow(/HUB_NOT_CONFIGURED/);
+    const hub=createHub("Desk");
+    expect(hub.legacyOwnerWorkspaceId).toBeUndefined();expect(hub.hubId).toMatch(/^hub-[a-f0-9-]{36}$/);
+    expect(discoverHub()).toEqual(hub);expect(discoverHub(hub.hubId)).toEqual(hub);
+    expect(fs.existsSync(path.join(state,"hub-mappings"))).toBe(false);
+    const registry=new WorkspaceRegistry(hub.hubId);const grant=registry.add(root,"first");
+    const files=["auth","endpoints","tunnels","hubs"].map(dir=>({file:path.join(state,dir,`${hub.hubId}.json`),bytes:fs.readFileSync(path.join(state,dir,`${hub.hubId}.json`))}));
+    registry.remove(grant.workspaceId);cleanup(root);
+    expect(discoverHub()).toEqual(hub);expect(new NativeAuthStore(hub.hubId).tokenCount()).toBe(0);
+    for(const item of files)expect(fs.readFileSync(item.file)).toEqual(item.bytes);
+  });
+  it("requires a stable explicit selector for multiple Hubs and ignores stale mappings",()=>{
+    const a=createHub("Same name"),b=createHub("Same name");
+    write(state,"hub-mappings/unrelated.json","{stale");
+    expect(()=>discoverHub()).toThrow(/HUB_SELECTION_REQUIRED/);
+    expect(discoverHub(a.hubId)).toEqual(a);expect(discoverHub(b.hubId)).toEqual(b);
+    for(const selector of [root,"Same name","../escape"])expect(()=>discoverHub(selector)).toThrow(/HUB_NOT_CONFIGURED/);
+  });
+});
+
+function readyLegacy(){
+  const owner=new Workspace(root);legacyAuthFixture(state,owner.id,root);
+  write(state,`workspace-registries/${owner.id}.json`,JSON.stringify({version:1,ownerWorkspaceId:owner.id,workspaces:[{workspaceId:owner.id,alias:"first",root}]}));
+  write(state,`tunnels/${owner.id}.json`,JSON.stringify({workspaceId:owner.id,preference:"named",tunnelId:"11111111-1111-4111-8111-111111111111",tunnelName:"existing",hostname:"code.example.com",zone:"example.com"}));
+  write(state,`endpoints/${owner.id}.json`,JSON.stringify({workspaceId:owner.id,port:1234,publicUrl:"https://code.example.com",mcpUrl:"https://code.example.com/mcp",connectorId:"plugin_owned",connectorName:"Existing",desiredConnectorName:"Existing",boundMcpUrl:"https://code.example.com/mcp",bindingVersion:1,savedAt:new Date().toISOString()}));
+  const result=adoptLegacyWorkspace(root);finalizeAuthHandoff(result.hub.hubId,owner);return {...result,owner};
+}
+describe("explicit detach and verified local cleanup",()=>{
+  it("detaches a fully migrated Hub, preserves credentials and then ignores every stale legacy source",async()=>{
+    const {hub,owner,registry}=readyLegacy();
+    const auth=fs.readFileSync(path.join(state,"auth",`${hub.hubId}.json`));
+    expect(()=>discoverHub()).toThrow(/HUB_MIGRATION_REQUIRED/);
+    expect((await detachHub(hub.hubId)).eligible).toBe(true);
+    expect(readNativeHub(hub.hubId).legacyOwnerWorkspaceId).toBe(owner.id);
+    expect((await detachHub(hub.hubId,true)).detached).toBe(true);
+    for(const dir of ["auth","endpoints","tunnels","runtime","workspace-registries"])write(state,`${dir}/${owner.id}.json`,"{obsolete");
+    fs.writeFileSync(hubMappingFile(owner.id),"{obsolete mapping");
+    registry.remove(owner.id);cleanup(root);
+    expect(discoverHub().hubId).toBe(hub.hubId);
+    expect(new NativeAuthStore(hub.hubId).tokenCount()).toBe(2);
+    expect(fs.readFileSync(path.join(state,"auth",`${hub.hubId}.json`))).toEqual(auth);
+    expect(nativeTunnel(hub.hubId).tunnelName).toBe("existing");
+    expect(nativeEndpoint(hub.hubId)?.connectorId).toBe("plugin_owned");
+    expect(registry.choices()).toEqual([]);
+  });
+  it.each(["checkpoint","live legacy runtime","pending tunnel","missing auth","uncertain Hub runtime","state symlink"])("refuses detach for %s without advancing ownership",async(kind)=>{
+    const {hub,owner}=readyLegacy(),before=fs.readFileSync(hubFile(hub.hubId));
+    if(kind==="checkpoint")fs.writeFileSync(hubMappingFile(owner.id),JSON.stringify({...mapping(owner.id),authHandoffFinalized:false}));
+    if(kind==="live legacy runtime"){const file=path.join(state,"runtime",`${owner.id}.json`);fs.writeFileSync(file,JSON.stringify({...JSON.parse(fs.readFileSync(file,"utf8")),pid:process.pid}));}
+    if(kind==="pending tunnel"){const file=path.join(state,"tunnels",`${hub.hubId}.json`);fs.writeFileSync(file,JSON.stringify({...JSON.parse(fs.readFileSync(file,"utf8")),pending:{tunnelName:"pending",hostname:"code.example.com",zone:"example.com",created:false}}));}
+    if(kind==="missing auth")fs.unlinkSync(path.join(state,"auth",`${hub.hubId}.json`));
+    if(kind==="state symlink"){const file=path.join(state,"auth",`${hub.hubId}.json`);fs.unlinkSync(file);fs.symlinkSync(path.join(state,"auth",`${owner.id}.json`),file);}
+    if(kind==="uncertain Hub runtime")write(state,`runtime/${hub.hubId}.json`,JSON.stringify({stateVersion:1,hubId:hub.hubId,service:"c2c-bridge",version:"0",pid:process.pid,port:1,adminToken:"test",publicUrl:null,startedAt:new Date().toISOString()}));
+    await expect(detachHub(hub.hubId,true)).rejects.toThrow();
+    expect(fs.readFileSync(hubFile(hub.hubId))).toEqual(before);
+  });
+  it("retries a detach interrupted before its final archive checkpoint",async()=>{
+    const {hub}=readyLegacy(),original=fs.renameSync;let count=0;
+    const rename=vi.spyOn(fs,"renameSync").mockImplementation((from,to)=>{if(String(to)===path.join(state,"migrations",`${hub.hubId}.json`)&&++count===2)throw new Error("checkpoint interrupted");return original(from,to);});
+    await expect(detachHub(hub.hubId,true)).rejects.toThrow(/checkpoint interrupted/);rename.mockRestore();
+    expect((await detachHub(hub.hubId,true)).detached).toBe(true);
+  });
+  it("plans cleanup before detach and deletes only validated legacy-owner files after detach",async()=>{
+    const {hub,owner}=readyLegacy(),other=createHub("Other");
+    const unowned=write(state,"workspace-registry.json","unowned retained"),backup=write(state,"migration-gates/backups/legacy.json","backup retained");
+    const foreign=write(state,`auth/${new Workspace(otherRoot()).id}.json`,"foreign retained");
+    const plan=await legacyCleanup(hub.hubId);expect(plan.eligible).toBe(false);expect(plan.requiresDetach).toBe(true);
+    await expect(legacyCleanup(hub.hubId,true)).rejects.toThrow(/HUB_MIGRATION_REQUIRED/);
+    await detachHub(hub.hubId,true);const before=fs.readFileSync(path.join(state,"auth",`${hub.hubId}.json`));
+    const ready=await legacyCleanup(hub.hubId);expect(ready.files.map(f=>path.basename(f.file))).toEqual(expect.arrayContaining([`${owner.id}.json`]));
+    expect((await legacyCleanup(hub.hubId,true)).cleaned).toBe(true);
+    for(const item of ready.files)expect(fs.existsSync(item.file)).toBe(false);
+    expect(fs.readFileSync(path.join(state,"auth",`${hub.hubId}.json`))).toEqual(before);
+    for(const file of [hubFile(other.hubId),unowned,backup,foreign])expect(fs.existsSync(file)).toBe(true);
+  });
+  it.each(["foreign owner","foreign resource","symlink"])("rejects %s legacy cleanup before deleting any file",async(kind)=>{
+    const {hub,owner}=readyLegacy();await detachHub(hub.hubId,true);
+    const file=path.join(state,"tunnels",`${owner.id}.json`);
+    if(kind==="foreign owner")fs.writeFileSync(file,JSON.stringify({...JSON.parse(fs.readFileSync(file,"utf8")),workspaceId:"abcdef123456"}));
+    else if(kind==="foreign resource")fs.writeFileSync(file,JSON.stringify({...JSON.parse(fs.readFileSync(file,"utf8")),tunnelId:"foreign-uuid"}));
+    else{fs.unlinkSync(file);fs.symlinkSync(path.join(state,"tunnels",`${hub.hubId}.json`),file);}
+    await expect(legacyCleanup(hub.hubId,true)).rejects.toThrow();expect(fs.existsSync(path.join(state,"auth",`${owner.id}.json`))).toBe(true);
+  });
+});
+function otherRoot(){return other;}

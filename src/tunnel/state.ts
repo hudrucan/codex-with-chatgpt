@@ -1,6 +1,4 @@
-import path from "node:path";
 import { z } from "zod";
-import { getStateDir, readJsonIfExists } from "../config/paths.js";
 import { hubIdSchema } from "../hub/store.js";
 import { resourceFile, withHubResource } from "../hub/resource-state.js";
 
@@ -17,28 +15,20 @@ const fields = {
   pending: z.object({ tunnelId: z.string().min(1).optional(), tunnelName: z.string().min(1),
     hostname: z.string().min(1), zone: z.string().min(1), created: z.boolean() }).strict().optional(),
 };
-const legacySchema = z.object({ workspaceId: z.string().regex(/^[a-f0-9]{12}$/), ...fields }).strict();
-const schema = z.object({ version: z.literal(1), hubId: hubIdSchema, ...fields }).strict();
-export type TunnelState = z.infer<typeof schema>;
+export const tunnelSchema = z.object({ version: z.literal(1), hubId: hubIdSchema, ...fields }).strict();
+export type TunnelState = z.infer<typeof tunnelSchema>;
 export type TunnelPreference = TunnelState["preference"];
 
 export function tunnelStateFile(hubId: string): string { return resourceFile("tunnel", hubId); }
 
 function access<R>(hubId: string, operation: (current: TunnelState, save: (value: TunnelState) => TunnelState) => R): R {
-  const empty: TunnelState = { version: 1, hubId, preference: "unset" };
-  return withHubResource(hubId, "tunnel", schema, legacySchema, empty, operation);
+  return withHubResource(hubId, "tunnel", tunnelSchema, operation);
 }
 
 export function readTunnelState(hubId: string): TunnelState { return access(hubId, (current) => current); }
 
 export function writeTunnelState(state: Omit<TunnelState, "version"> & { version?: 1 }): TunnelState {
   return access(state.hubId, (_current, save) => save({ ...state, version: 1 }));
-}
-
-/** Read-only compatibility for the existing legacy destroy path. */
-export function legacyTunnelStateFile(owner: string): string { return path.join(getStateDir(), "tunnels", `${owner}.json`); }
-export function readLegacyTunnelState(owner: string): z.infer<typeof legacySchema> {
-  return readJsonIfExists<z.infer<typeof legacySchema>>(legacyTunnelStateFile(owner)) ?? { workspaceId: owner, preference: "unset" };
 }
 
 export function needsTunnelChoice(state: TunnelState): boolean {
@@ -62,7 +52,7 @@ export function namedTunnelBinding(state: TunnelState): { tunnelName: string; ho
 export const TUNNEL_CHOICE_PROMPT = `Before connecting ChatGPT, choose a connection type.
 Do you have a Cloudflare account and a domain already configured there?
 - Yes: use a fixed hostname. Authorize Cloudflare once and add a subdomain; the connector usually survives restarts.
-- No: use a temporary address. No account is needed and the features are the same, but the address may change after restart. Codex can recreate this project's connector; you may need to log in again.
+- No: use a temporary address. No account is needed and the features are the same, but the address may change after restart. Codex can recreate this Hub's connector; you may need to log in again.
 Which do you prefer? For a fixed hostname, provide your domain (for example example.com).`;
 
 export const NAMED_LOGIN_PROMPT =

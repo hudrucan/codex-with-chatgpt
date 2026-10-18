@@ -5,8 +5,6 @@ import { fileURLToPath } from "node:url";
 import { ensureDir, getStateDir } from "../config/paths.js";
 import { findBridgeObservation, findLiveBridge, readRuntimeState, type RuntimeState } from "../bridge/runtime.js";
 import { resolveHub } from "../hub/store.js";
-import { Workspace } from "../workspace/manager.js";
-import { finalizeAuthHandoff } from "../auth/store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,12 +26,11 @@ export interface EnsureBridgeResult {
 }
 
 /**
- * Ensure a bridge is running for the workspace. Reuses a live instance,
+ * Ensure a bridge is running for the Hub. Reuses a live instance,
  * otherwise spawns a detached daemon and waits for it to become healthy.
  */
-export async function ensureBridge(workspaceRoot: string, opts: { port?: number } = {}): Promise<EnsureBridgeResult> {
-  const workspace = new Workspace(workspaceRoot);
-  const hub = resolveHub(workspace);
+export async function ensureBridge(hubId: string, opts: { port?: number } = {}): Promise<EnsureBridgeResult> {
+  const hub = resolveHub(hubId);
   const observation = await findBridgeObservation(hub.hubId);
   if (observation.state === "healthy") return { runtime: observation.runtime, spawned: false };
   if (observation.state === "unknown") {
@@ -42,7 +39,6 @@ export async function ensureBridge(workspaceRoot: string, opts: { port?: number 
     );
   }
 
-  finalizeAuthHandoff(hub.hubId, workspace);
   const logDir = ensureDir(path.join(getStateDir(), "logs"));
   const logFile = path.join(logDir, `bridge-${hub.hubId}.out.log`);
   const out = fs.openSync(logFile, "a", 0o600);
@@ -56,7 +52,7 @@ export async function ensureBridge(workspaceRoot: string, opts: { port?: number 
   const { cmd, args } = cliEntry();
   const child = spawn(
     cmd,
-    [...args, "serve", "--workspace", workspace.root, ...(opts.port ? ["--port", String(opts.port)] : [])],
+    [...args, "serve", "--hub", hub.hubId, ...(opts.port !== undefined ? ["--port", String(opts.port)] : [])],
     {
       detached: true,
       stdio: ["ignore", out, out],
@@ -84,7 +80,7 @@ export async function ensureBridge(workspaceRoot: string, opts: { port?: number 
 }
 
 export async function adminFetch<T = unknown>(
-  runtime: RuntimeState,
+  runtime: Pick<RuntimeState, "port" | "adminToken">,
   method: "GET" | "POST",
   route: string,
   timeoutMs = 60_000
@@ -107,12 +103,15 @@ export async function adminFetch<T = unknown>(
   }
 }
 
-export async function stopBridge(workspaceRoot: string): Promise<boolean> {
-  const workspace = new Workspace(workspaceRoot);
-  const hub = resolveHub(workspace);
+export async function stopBridge(hubId: string): Promise<boolean> {
+  const hub = resolveHub(hubId);
   const observation = await findBridgeObservation(hub.hubId);
   if (observation.state === "stopped") return false;
   if (observation.state === "unknown") throw new Error(`Bridge state is uncertain (${observation.reason}); refusing to stop an unverified process.`);
   await adminFetch(observation.runtime, "POST", "/admin/shutdown", 5000);
-  return true;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if ((await findBridgeObservation(hub.hubId)).state === "stopped") return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("LIFECYCLE_BUSY: Hub shutdown could not be confirmed; no replacement was started.");
 }

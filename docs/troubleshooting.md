@@ -1,6 +1,6 @@
 # Troubleshooting Desk C2C Hub
 
-For an existing setup start with `c2c doctor -w <repo> --json`. Use `--no-fix`
+For an existing setup start with `c2c doctor --json`. Use `--no-fix`
 for read-only diagnosis. For a new setup, resolve names before a repairing
 doctor or provisioning. Successful repair ends with real MCP verification,
 `MCP READY`, and no follow-on workflow.
@@ -11,19 +11,18 @@ See [lifecycle](lifecycle.md) for naming precedence, restart requirements and
 connector verification. A stopped bridge or expired URL is not a new setup;
 reuse saved names and owned resource bindings.
 
-On `WORKSPACE_NAME_RESTART_REQUIRED`, run
-`c2c restart -w <repo> --tunnel --json` and rerun setup. For a Quick Tunnel,
+On `HUB_NAME_RESTART_REQUIRED`, run
+`c2c restart --tunnel --json` and rerun setup. For a Quick Tunnel,
 check the new address and reconcile the owned ChatGPT plugin.
 
 ## Local process and tunnel diagnostics
 
 | Diagnostic | Recovery |
 | --- | --- |
-| Healthy legacy bridge | Reuse the verified running process; do not create another bridge or copy its runtime state |
 | `TUNNEL_STATE_CONFLICT` / `ENDPOINT_STATE_CONFLICT` | Preserve both files and the Hub mapping/checkpoint; verify the exact owner and interrupted copy; never merge, reset or create a replacement resource to bypass the conflict |
 | `TUNNEL_STATE_BUSY` / `ENDPOINT_STATE_BUSY` | Verify no local writer is active before removing only the reported owner's state lock |
 | `AUTH_STATE_CONFLICT` | Preserve both auth files and the Hub mapping/checkpoint; verify ownership and the interrupted copy before retrying, without merging or resetting credentials |
-| `RUNTIME_STATE_INVALID` / uncertain runtime | Preserve state and verify Hub/legacy identity and PID; never stop or replace an unverified process |
+| `RUNTIME_STATE_INVALID` / uncertain runtime | Preserve state and verify Hub identity and PID; never stop or replace an unverified process |
 | Bridge stopped | Doctor can start it; explicit `start --tunnel` also reconnects |
 | `disconnected: true` | Intentional; reconnect only when requested |
 | Bridge state unknown | Resolve the local uncertainty; never spawn another process or delete the plugin |
@@ -35,11 +34,11 @@ check the new address and reconcile the owned ChatGPT plugin.
 | `TUNNEL_ROLLBACK_PENDING` | Rerun the named setup request to recover first; retain the journal |
 | `DESTROY_PENDING` | Preserve state and follow the isolated [deprovisioning recovery reference](../skill/references/deprovision.md#interrupted-destroy) |
 | `LIFECYCLE_BUSY` after a crash | Verify the lock's PID has exited before removing that specific lock |
-| `HUB_STATE_BUSY` after a crash | Verify no Hub operation is running before removing only `hub-mappings/.lock` |
-| `HUB_STATE_INVALID` / `HUB_MAPPING_CONFLICT` | Preserve state; inspect the exact Hub record and owner mapping before repair; do not merge or create replacement identities |
+| `HUB_STATE_BUSY` after a crash | Verify no Hub operation is running before removing only `hubs/.lock` |
+| `HUB_STATE_INVALID` / `HUB_MAPPING_CONFLICT` | Preserve state; inspect the exact Hub record before repair; do not merge or create replacement identities |
 | `WORKSPACE_REGISTRY_BUSY` after a crash | Verify no registry writer is running before removing only `workspace-registries/<hubId>.json.lock` |
 
-Use `c2c logs -w <repo>` for local diagnostics. Do not paste logs or credentials
+Use `c2c logs` for local diagnostics. Do not paste logs or credentials
 into ChatGPT. Local state uses the OS app directory `codex-with-chatgpt`.
 
 ## Named Tunnel credentials
@@ -74,7 +73,8 @@ may require the user. Preserve the tab to resume the same setup.
 
 Attach/select the exact plugin in a normal chat and require a real
 `workspace_info` result matching local ID/name. If the chat's tool surface is
-stale, use a new ordinary verification chat. Do not create a Project or save a
+stale, use Manage → Refresh tools on the same connector, then a new ordinary
+verification chat. Do not create a Project or save a
 conversation pointer. A correct result plus `connector bind` and healthy doctor
 clears the pending binding. Report `MCP READY` and stop.
 
@@ -88,8 +88,23 @@ It does not import generated/downloaded media.
 
 ## Workspace selection
 
-For selection errors, inspect `c2c workspace list -w <hub-root> --json` and call
-`list_workspaces` through the intended connection. The owner root determines
-which registry is used. `WORKSPACE_REQUIRED` means an alias or workspace ID is
-needed on that tool call; selecting a repo does not set a default for later calls.
-See [multi-repo access](multi-repo.md) for error meanings and registration commands.
+For selection errors, inspect `c2c workspace list --json` and call
+`list_workspaces` through the intended connection. With multiple Hubs, use
+`--hub <id>` from `c2c hub list --json`. `WORKSPACE_REQUIRED` asks for a registered
+alias/ID on that call; no tool establishes a default workspace.
+See [multi-repo access](multi-repo.md).
+
+## Explicit local upgrade
+
+`HUB_MIGRATION_REQUIRED` isolates old installations from native runtime. Use
+`c2c hub migrate -w <verified-old-root> --json` to adopt exactly that owner's
+state without remote mutation. Use `--handoff` to stop only a verified legacy writer without revocation, or
+`--finalize-auth` after its verified process has already exited. Never disconnect
+or revoke for process handoff. Current tokens replace provisional snapshots in full.
+
+Inspect `c2c hub detach --hub <id> --json`. `--confirm` detaches only after every
+checkpoint, Hub-owned file and runtime validates. Native discovery then needs no
+old root or mapping. `c2c hub cleanup-legacy --hub <id> --json` lists exact verified
+local files; its separate `--confirm` deletes only that plan after detach. Unknown
+retired data is retained. Credentials, global settings, repos and migration-gate
+backups are never cleanup targets. Preserve state on any ownership conflict.

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveHub } from "../../src/hub/store.js";
+import { fixtureHub as resolveHub } from "../helpers.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { saveWorkspaceDisplayName, workspaceRegistrationFile } from "../../src/config/naming.js";
 import { connectorNameFor, persistHubEndpoint, readLastEndpoint, writeLastEndpoint } from "../../src/config/endpoint.js";
@@ -184,7 +184,7 @@ describe("runtime naming", () => {
     for (const name of [" ", "bad\nname", "--other-option", "a".repeat(129)]) {
       expect(() => normalizeTunnelName(name)).toThrow(/INVALID_NAME/);
     }
-    expect(() => connectorNameFor({ workspaceId: hubId, workspaceName: "Demo", hadEndpointBefore: false, explicitName: " " })).toThrow(/INVALID_NAME/);
+    expect(() => connectorNameFor({ hubName: "Demo", hadEndpointBefore: false, explicitName: " " })).toThrow(/INVALID_NAME/);
   });
 
   it("persists the connector name across local setup, reruns, display changes and endpoint repair", () => {

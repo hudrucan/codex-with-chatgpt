@@ -1,9 +1,9 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import type { Server } from "node:http";
 import { randomBytes } from "node:crypto";
-import { Workspace } from "../workspace/manager.js";
+import { resolveHub, type Hub } from "../hub/store.js";
 import { WorkspaceRegistry } from "../workspace/registry.js";
-import { AuthStore, finalizeAuthHandoff } from "../auth/store.js";
+import { AuthStore } from "../auth/store.js";
 import { createOAuthRouter } from "../auth/oauth.js";
 import { bearerAuth } from "../auth/middleware.js";
 import { PairingManager } from "../pairing/manager.js";
@@ -31,7 +31,7 @@ function tunnelForHub(hubId: string, logger: Logger): TunnelProvider {
 }
 
 export interface BridgeOptions {
-  workspaceRoot: string;
+  hubId: string;
   port?: number;
   host?: string;
   logger?: Logger;
@@ -44,7 +44,7 @@ export interface BridgeOptions {
 }
 
 export interface Bridge {
-  workspace: Workspace;
+  hub: Hub;
   readonly hubId: string;
   port: number;
   host: string;
@@ -83,18 +83,16 @@ function listen(app: express.Express, host: string, preferredPort: number): Prom
 
 export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
   const logger = opts.logger ?? nullLogger;
-  const workspace = new Workspace(opts.workspaceRoot);
+  const hub = resolveHub(opts.hubId);
   const host = opts.host ?? DEFAULT_HOST;
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") {
     throw new Error("The bridge only binds to loopback addresses. Public exposure goes through the tunnel.");
   }
 
-  const registry = WorkspaceRegistry.forWorkspace(workspace);
-  const hubId = registry.hubId;
-  registry.add(workspace.root);
-
-  finalizeAuthHandoff(hubId, workspace, { file: opts.authStoreFile });
-  const authStore = new AuthStore(hubId, { file: opts.authStoreFile, requireFinalized: true });
+  const hubId = hub.hubId;
+  const registry = new WorkspaceRegistry(hubId);
+  const startup = registry.list()[0];
+  const authStore = new AuthStore(hubId, { file: opts.authStoreFile });
   const pairing = new PairingManager(hubId, { ttlMs: opts.pairingTtlMs });
   const tunnel = opts.tunnelProvider ?? tunnelForHub(hubId, logger);
   const adminToken = `c2c_admin_${randomBytes(24).toString("base64url")}`;
@@ -115,7 +113,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
   // ---- Health (public but minimal) ---------------------------------------
 
   app.get("/health", (_req, res) => {
-    res.json({ service: SERVICE_NAME, version: VERSION, hubId, workspaceId: workspace.id, status: "ok" });
+    res.json({ service: SERVICE_NAME, version: VERSION, hubId, workspaceId: startup?.workspaceId, status: "ok" });
   });
 
   // ---- OAuth + discovery ---------------------------------------------------
@@ -124,7 +122,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
     createOAuthRouter({
       store: authStore,
       pairing,
-      workspaceName: workspace.name,
+      workspaceName: hub.displayName,
       getBaseUrl,
       logger,
     })
@@ -169,9 +167,9 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
       service: SERVICE_NAME,
       version: VERSION,
       hubId,
-      workspaceId: workspace.id,
-      workspaceName: workspace.name,
-      workspaceRoot: workspace.root,
+      workspaceId: startup?.workspaceId,
+      workspaceName: hub.displayName,
+      workspaceRoot: startup?.root,
       port,
       publicUrl: publicBaseUrl,
       tunnel: tunnel.status(),
@@ -220,7 +218,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
 
   const { server, port } = await listen(app, host, opts.port ?? DEFAULT_PORT);
   const startedAt = new Date().toISOString();
-  logger.info(`Bridge listening on ${host}:${port} for workspace ${workspace.name} (${workspace.id})`);
+  logger.info(`Bridge listening on ${host}:${port} for workspace ${hub.displayName} (${hubId})`);
 
   const persistRuntime = (): void => {
     if (opts.persistRuntime === false) return;
@@ -228,8 +226,8 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
       stateVersion: 1, hubId,
       service: SERVICE_NAME,
       version: VERSION,
-      workspaceId: workspace.id,
-      workspaceRoot: workspace.root,
+      workspaceId: startup?.workspaceId,
+      workspaceRoot: startup?.root,
       pid: process.pid,
       port,
       adminToken,
@@ -251,7 +249,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
   };
 
   return {
-    workspace,
+    hub,
     hubId,
     port,
     host,

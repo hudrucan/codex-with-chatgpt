@@ -1,3 +1,4 @@
+import { fixtureHub, fixtureRegistry, fixtureWorkspace } from "../helpers.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -54,8 +55,8 @@ beforeAll(async () => {
   // Deliberately track a secret to verify per-repo git filtering as well.
   git(other, "add", "-f", ".env");
   fs.symlinkSync(root, path.join(other, "escape"), "junction");
-  bridge = await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false });
-  registry = WorkspaceRegistry.forWorkspace(bridge.workspace);
+  bridge = await startBridge({ hubId: fixtureHub(root).hubId, port: 0, persistRuntime: false });
+  registry = fixtureRegistry(fixtureWorkspace(bridge));
   primary = registry.list()[0];
   client = await connect(["workspace.read", "workspace.search", "git.read"]);
 });
@@ -69,7 +70,7 @@ afterAll(async () => {
 describe("multiple workspaces through one existing MCP connection", () => {
   it("automatically registers the bridge root and preserves single-repo calls", async () => {
     expect(primary.root).toBe(root);
-    expect((await call("workspace_info")).data.workspaceId).toBe(bridge.workspace.id);
+    expect((await call("workspace_info")).data.workspaceId).toBe(fixtureWorkspace(bridge).id);
     const { result, data } = await call("list_workspaces");
     expect(result.structuredContent).toEqual(data);
     expect(data).toEqual({ workspaces: [{ workspaceId: primary.workspaceId, alias: primary.alias }] });

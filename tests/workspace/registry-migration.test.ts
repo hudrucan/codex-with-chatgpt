@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveHub, hubMappingFile } from "../../src/hub/store.js";
+import { resolveHub, hubMappingFile } from "../../src/migration/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
-import { WorkspaceRegistry } from "../../src/workspace/registry.js";
+import { LegacyWorkspaceRegistry as WorkspaceRegistry } from "../../src/migration/adoption.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 let state: string;

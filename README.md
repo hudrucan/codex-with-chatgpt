@@ -41,24 +41,25 @@ hostname and naming options, see [lifecycle](docs/lifecycle.md).
 
 | Action | Command |
 | --- | --- |
-| Start/reuse | `c2c start -w <repo> --tunnel` |
-| Status | `c2c status -w <repo> --json` |
-| Diagnose/repair | `c2c doctor -w <repo> --json`; add `--no-fix` for diagnosis only |
-| Restart | `c2c restart -w <repo> --tunnel` |
-| Revoke tokens | `c2c unpair -w <repo>` |
-| Stop process | `c2c stop -w <repo>` |
-| Disconnect and retain resources | `c2c disconnect -w <repo> --json` |
+| Start/reuse | `c2c start --tunnel` |
+| Status | `c2c status --json` |
+| Diagnose/repair | `c2c doctor --json`; add `--no-fix` for diagnosis only |
+| Restart | `c2c restart --tunnel` |
+| Revoke tokens | `c2c unpair` |
+| Stop process | `c2c stop` |
+| Disconnect and retain resources | `c2c disconnect --json` |
 | Explicit update | `c2c update --json` |
 
 ## Multiple repos
 
 ```bash
-c2c workspace add /path/to/backend -w /path/to/hub-root --alias backend
-c2c workspace list -w /path/to/hub-root --json
-c2c workspace remove backend -w /path/to/hub-root
+c2c workspace add /path/to/backend --alias backend
+c2c workspace list --json
+c2c workspace remove backend
 ```
 
-`-w` selects the connection owner. MCP calls select a registered alias or ID,
+One configured Hub is selected automatically; multiple Hubs require `--hub <id>`.
+MCP calls select a registered alias or ID,
 for example `read_file({ "workspace": "backend", "path": "src/index.ts" })`.
 See [multi-repo access](docs/multi-repo.md) for selection rules and registry details.
 

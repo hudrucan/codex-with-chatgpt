@@ -1,6 +1,8 @@
 # Setup and connection lifecycle
 
-The canonical startup workspace resolves the resource owner's stable Hub ID.
+A stable Hub ID owns the connection independently of registered repos.
+A single configured Hub is selected automatically; multiple Hubs require
+`--hub <id>`, available from `c2c hub list --json`.
 Display names and additional read targets do not transfer ownership of OAuth
 tokens, runtime state, connectors or tunnel UUIDs.
 
@@ -8,14 +10,14 @@ tokens, runtime state, connectors or tunnel UUIDs.
 
 Ask Codex to set up Desk C2C Hub using the [Skill](../skill/SKILL.md). It resolves
 names from explicit user values, saved settings, project-derived suggestions
-and defaults. New setups ask one grouped decision for the workspace display
+and defaults. New setups ask one grouped decision for the Hub display
 name, tunnel name, hostname and connector name. Saved setups reuse their values
 unless a conflict needs resolution.
 
 For a fixed hostname, provide a domain configured in Cloudflare:
 
 ```bash
-node bin/c2c.js setup -w /path/to/repo --workspace-name "My Repo" --tunnel-name "my-repo" --zone example.com --hostname code.example.com --connector-name "My Repo" --json
+node bin/c2c.js setup -w /path/to/repo --hub-name "My Hub" --tunnel-name "my-repo" --zone example.com --hostname code.example.com --connector-name "My Repo" --json
 ```
 
 Replace the example values. Omit Named Tunnel options for a temporary Quick
@@ -23,11 +25,15 @@ Tunnel. `--no-tunnel` is local development only and does not establish a public
 ChatGPT connection. The Skill completes authorization and verifies actual MCP
 results before reporting `MCP READY`.
 
-`setup --workspace-name` writes external `workspaces/<workspaceId>.json` with
-`workspaceId`, canonical `workspaceRoot` and `displayName`. Name precedence is
-external display choice, `.c2c.json` `name`, then root basename. Setup does not
-write repository configuration. A running bridge captures its display name;
-`WORKSPACE_NAME_RESTART_REQUIRED` requires an explicit restart and setup rerun.
+Fresh setup creates an independent Hub and registers the selected repo. With
+one healthy connected Hub, register another repo using `c2c workspace add`
+and verify through `list_workspaces`/`workspace_info`; no new tunnel, connector
+or OAuth setup is needed.
+
+`setup --workspace-name` changes only a repo label in external workspace state.
+It does not rename or own the Hub. `setup --hub-name` changes the Hub display
+name; `HUB_NAME_RESTART_REQUIRED` requires an explicit restart if the running
+Hub captured a different label. No command writes repository configuration.
 
 ## Tunnel and hostname changes
 
@@ -61,7 +67,7 @@ the plugin, selecting a workspace currently registered to this Hub when it has m
 entries, then acknowledge the observed binding:
 
 ```bash
-c2c connector bind -w <repo> --name "<desired-name>" --mcp-url "<desired-url>" --connector-id "<observed-plugin-id>" --verified-workspace "<observed-workspace-id>" --json
+c2c connector bind --name "<desired-name>" --mcp-url "<desired-url>" --connector-id "<observed-plugin-id>" --verified-workspace "<observed-workspace-id>" --json
 ```
 
 The acknowledgement rejects stale name/URL/workspace values. It is a trusted
@@ -72,13 +78,13 @@ fields on their own; a local health check does not prove a ChatGPT binding.
 
 | Command | Behavior |
 | --- | --- |
-| `start -w <repo> --tunnel` | Start or reuse the bridge and establish public access |
-| `status -w <repo> --json` | Inspect connection state |
-| `doctor -w <repo> --json` | Diagnose and repair; add `--no-fix` for diagnosis only |
-| `restart -w <repo> --tunnel` | Explicitly restart and reconnect |
-| `unpair -w <repo>` | Revoke tokens, retaining the running bridge |
-| `stop -w <repo>` | Stop the bridge without revoking tokens or removing resources |
-| `disconnect -w <repo> --json` | Revoke access, confirm shutdown and retain resources, configuration and registrations |
+| `start --tunnel` | Start or reuse the bridge and establish public access |
+| `status --json` | Inspect connection state |
+| `doctor --json` | Diagnose and repair; add `--no-fix` for diagnosis only |
+| `restart --tunnel` | Explicitly restart and reconnect |
+| `unpair` | Revoke tokens, retaining the running bridge |
+| `stop` | Stop the bridge without revoking tokens or removing resources |
+| `disconnect --json` | Revoke access, confirm shutdown and retain resources, configuration and registrations |
 
 Run these commands with `c2c`. Doctor respects an intentional disconnect;
 explicit setup/start/restart reconnects. Matching owned resources are reused.
@@ -90,7 +96,7 @@ For diagnostics and lock recovery, see [troubleshooting](troubleshooting.md).
 `c2c update --json` verifies the exact `hudrucan/desk-c2c-hub` origin and a clean
 branch checkout, then pulls with `--ff-only`. It does not stash or reset changes.
 Build and reinstall the complete Skill directory after an update. Explicitly
-restart and verify active connections; disconnected workspaces stay stopped.
+restart and verify active connections; disconnected Hubs stay stopped.
 Updates run only when requested.
 
 Experimental resource removal is isolated in the

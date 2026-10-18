@@ -1,8 +1,6 @@
-import path from "node:path";
 import { z } from "zod";
 import { hubIdSchema } from "../hub/store.js";
 import { resourceFile, withHubResource } from "../hub/resource-state.js";
-import { getStateDir, readJsonIfExists } from "./paths.js";
 import { userFacingName } from "./naming.js";
 
 export const CHATGPT_DEVELOPER_MODE_URL = "https://chatgpt.com/#settings/Security";
@@ -25,30 +23,23 @@ const fields = {
   disconnected: z.boolean().optional(),
   savedAt: z.string().datetime(),
 };
-const legacySchema = z.object({ workspaceId: z.string().regex(/^[a-f0-9]{12}$/), ...fields }).strict();
-const schema = z.object({ version: z.literal(1), hubId: hubIdSchema, ...fields }).strict();
+export const endpointSchema = z.object({ version: z.literal(1), hubId: hubIdSchema, ...fields }).strict();
 const emptySchema = z.object({ version: z.literal(1), hubId: hubIdSchema, empty: z.literal(true) }).strict();
-const stateSchema = z.union([schema, emptySchema]);
-export type LastEndpoint = z.infer<typeof schema>;
+export const endpointStateSchema = z.union([endpointSchema, emptySchema]);
+export type LastEndpoint = z.infer<typeof endpointSchema>;
 const fieldsSchema = z.object(fields);
 type EndpointBinding = z.infer<typeof fieldsSchema>;
 
 export function endpointFile(hubId: string): string { return resourceFile("endpoint", hubId); }
 
 export function readLastEndpoint(hubId: string): LastEndpoint | null {
-  return withHubResource(hubId, "endpoint", stateSchema, legacySchema, { version: 1, hubId, empty: true },
+  return withHubResource(hubId, "endpoint", endpointStateSchema,
     (current) => "empty" in current ? null : current);
 }
 
 export function writeLastEndpoint(endpoint: Omit<LastEndpoint, "savedAt" | "version"> & { version?: 1; savedAt?: string }): LastEndpoint {
-  return withHubResource(endpoint.hubId, "endpoint", stateSchema, legacySchema, { version: 1, hubId: endpoint.hubId, empty: true },
-    (_current, save) => schema.parse(save({ ...endpoint, version: 1, savedAt: new Date().toISOString() })));
-}
-
-/** Read-only compatibility for the existing legacy destroy path. */
-export function legacyEndpointFile(owner: string): string { return path.join(getStateDir(), "endpoints", `${owner}.json`); }
-export function readLegacyEndpoint(owner: string): z.infer<typeof legacySchema> | null {
-  return readJsonIfExists<z.infer<typeof legacySchema>>(legacyEndpointFile(owner));
+  return withHubResource(endpoint.hubId, "endpoint", endpointStateSchema,
+    (_current, save) => endpointSchema.parse(save({ ...endpoint, version: 1, savedAt: new Date().toISOString() })));
 }
 
 export function normalizePublicUrl(url: string): string {
@@ -85,8 +76,7 @@ export function sanitizeConnectorLabel(name: string): string {
  * A new Hub uses its display label.
  */
 export function connectorNameFor(opts: {
-  workspaceName: string;
-  workspaceId: string;
+  hubName: string;
   previousName?: string | null;
   hadEndpointBefore: boolean;
   explicitName?: string;
@@ -94,7 +84,7 @@ export function connectorNameFor(opts: {
   if (opts.explicitName !== undefined) return userFacingName(opts.explicitName, "Connector name");
   if (opts.previousName?.trim()) return opts.previousName.trim();
   if (opts.hadEndpointBefore) return LEGACY_CONNECTOR_NAME;
-  return `${DEFAULT_CONNECTOR_NAME} · ${sanitizeConnectorLabel(opts.workspaceName)}`;
+  return `${DEFAULT_CONNECTOR_NAME} · ${sanitizeConnectorLabel(opts.hubName)}`;
 }
 
 /** Names survive address rotation, local-only setup, and display-name changes. */
@@ -110,8 +100,7 @@ export function persistHubEndpoint(opts: {
   const previous = opts.previous === undefined ? readLastEndpoint(opts.hubId) : opts.previous;
   if (previous && previous.hubId !== opts.hubId) throw new Error("CONNECTOR_BINDING_CONFLICT: Endpoint belongs to another Hub.");
   const connectorName = connectorNameFor({
-    workspaceName: opts.hubName,
-    workspaceId: opts.hubId,
+    hubName: opts.hubName,
     previousName: previous?.desiredConnectorName ?? previous?.connectorName,
     hadEndpointBefore: Boolean(previous),
     explicitName: opts.connectorName,
@@ -133,7 +122,7 @@ export function persistHubEndpoint(opts: {
 }
 
 export function reclaimUserMessage(connectorName: string): string {
-  return `This project's ChatGPT connection needs reconciliation for "${connectorName}". I will verify its saved ID and address before any rename or delete; other projects' connections stay unchanged.`;
+  return `This Hub's ChatGPT connection needs reconciliation for "${connectorName}". I will verify its saved ID and address before any rename or delete; other Hubs' connections stay unchanged.`;
 }
 
 export function boundConnector(endpoint: EndpointBinding | null): { name: string; mcpUrl: string; id?: string } | null {

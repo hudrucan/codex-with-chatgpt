@@ -30,32 +30,29 @@ describe("connectorAction", () => {
 });
 
 describe("connectorNameFor", () => {
-  it("keeps a stored name for the same workspace", () => {
+  it("keeps a stored name for the same Hub", () => {
     expect(
       connectorNameFor({
-        workspaceName: "EchoMind",
-        workspaceId: "abc123abc123",
+        hubName: "EchoMind",
         previousName: "Codex with ChatGPT",
         hadEndpointBefore: true,
       })
     ).toBe(LEGACY_CONNECTOR_NAME);
   });
 
-  it("keeps the legacy title when this workspace was used before the name field existed", () => {
+  it("keeps the legacy title when this Hub was used before the name field existed", () => {
     expect(
       connectorNameFor({
-        workspaceName: "EchoMind",
-        workspaceId: "abc123abc123",
+        hubName: "EchoMind",
         hadEndpointBefore: true,
       })
     ).toBe(LEGACY_CONNECTOR_NAME);
   });
 
-  it("gives a new workspace its own connector title", () => {
+  it("gives a new Hub its own connector title", () => {
     expect(
       connectorNameFor({
-        workspaceName: "Landing",
-        workspaceId: "def456def456",
+        hubName: "Landing",
         hadEndpointBefore: false,
       })
     ).toBe(`${DEFAULT_CONNECTOR_NAME} · Landing`);

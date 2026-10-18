@@ -1,3 +1,5 @@
+import { createHub } from "../../src/hub/store.js";
+import { fixtureRegistry } from "../helpers.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,7 +15,7 @@ beforeEach(() => {
   state = isolateStateDir();
   root = makeTmpDir("registry-a");
   other = makeTmpDir("registry-b");
-  registry = WorkspaceRegistry.forWorkspace(new Workspace(root));
+  registry = new WorkspaceRegistry(createHub("Registry").hubId);
 });
 afterEach(() => {
   for (const dir of [state, root, other]) cleanup(dir);
@@ -28,7 +30,7 @@ describe("external workspace registry", () => {
     const before = fs.readFileSync(path.join(root, ".c2c.json"), "utf8");
     const entry = registry.add(link);
     expect(entry).toEqual({ workspaceId: new Workspace(root).id, alias: expect.stringMatching(/^registry-a-.*-[a-f0-9]{12}$/), root });
-    expect(WorkspaceRegistry.forWorkspace(new Workspace(root)).add(root)).toEqual(entry);
+    expect(fixtureRegistry(new Workspace(root)).add(root)).toEqual(entry);
     expect(registry.list()).toEqual([entry]);
     expect(registry.resolve().id).toBe(entry.workspaceId);
     expect(registry.resolve(entry.alias).name).toBe("Legacy display");
@@ -110,7 +112,7 @@ describe("external workspace registry", () => {
       { workspaceId: new Workspace(other).id, alias: "legacy", root: other },
     ] }));
     const legacy = fs.readFileSync(legacyFile, "utf8");
-    const anotherOwner = WorkspaceRegistry.forWorkspace(new Workspace(other));
+    const anotherOwner = new WorkspaceRegistry(createHub("Other").hubId);
     expect(registry.list()).toEqual([]);
     expect(anotherOwner.list()).toEqual([]);
     const a = registry.add(root, "shared");
@@ -128,7 +130,7 @@ describe("external workspace registry", () => {
       expect(() => new WorkspaceRegistry(owner)).toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE_OWNER" }));
     }
     registry.add(root);
-    const anotherOwner = WorkspaceRegistry.forWorkspace(new Workspace(other));
+    const anotherOwner = new WorkspaceRegistry(createHub("Other").hubId);
     anotherOwner.add(other);
     fs.copyFileSync(anotherOwner.file, registry.file);
     expect(() => registry.resolve()).toThrow(expect.objectContaining({ code: "WORKSPACE_REGISTRY_INVALID" }));

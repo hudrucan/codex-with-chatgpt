@@ -7,7 +7,7 @@ import { startBridge } from "../bridge/server.js";
 import { findBridgeObservation, findLiveBridge, type RuntimeState } from "../bridge/runtime.js";
 import { adminFetch, ensureBridge, stopBridge } from "../process/daemon.js";
 import { Workspace } from "../workspace/manager.js";
-import { resolveHub, type Hub } from "../hub/store.js";
+import { resolveHub, createHub, listHubs, renameHub, type Hub } from "../hub/store.js";
 import { WorkspaceRegistry } from "../workspace/registry.js";
 import { AuthStore } from "../auth/store.js";
 import { detectTunnelBinaries } from "../tunnel/detect.js";
@@ -51,11 +51,15 @@ import {
   reclaimUserMessage,
 } from "../config/endpoint.js";
 import { pullFork, verifyForkOrigin } from "../config/update.js";
-import { acquireWorkspaceLock, destroyWorkspace, disconnectWorkspace, lifecycleFile } from "../lifecycle/workspace.js";
+import { acquireHubLock, destroyHub, disconnectHub, lifecycleFile } from "../lifecycle/hub.js";
+import { adoptLegacyWorkspace, finalizeAuthHandoff, hasLegacyInstall, handoffLegacyWorkspace } from "../migration/adoption.js";
+import { detachHub, legacyCleanup } from "../migration/finalize.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
 
-// Leave child options with their subcommand (workspace and workspace add share -w).
-const program = new Command().enablePositionalOptions();
+// Keep parent options before subcommands; Hub selectors are also accepted by subcommands.
+const program = new Command().enablePositionalOptions().option("--hub <id>", "select a configured Hub by stable identity");
+let commandHubSelector: string | undefined;
+function selectedHub(): Hub { return resolveHub(commandHubSelector); }
 
 const say = (msg: string): void => {
   process.stdout.write(msg + "\n");
@@ -67,8 +71,7 @@ function resolveWorkspace(option?: string): string {
   return path.resolve(option ?? process.cwd());
 }
 
-function tunnelChoicePayload(workspace: Workspace, zoneHint?: string): Record<string, unknown> {
-  const hub = resolveHub(workspace);
+function tunnelChoicePayload(hub: Hub, zoneHint?: string): Record<string, unknown> {
   const state = readTunnelState(hub.hubId);
   const zone = parseZoneInput(zoneHint ?? "") ?? state.zone ?? null;
   return {
@@ -111,9 +114,9 @@ interface PairingResponse {
 
 interface AdminInfo {
   hubId?: string;
-  workspaceId: string;
+  workspaceId?: string;
   workspaceName: string;
-  workspaceRoot: string;
+  workspaceRoot?: string;
   port: number;
   publicUrl: string | null;
   tunnel: { running: boolean; url: string | null; provider: string };
@@ -124,18 +127,18 @@ interface AdminInfo {
 }
 
 async function ensureBridgeAndTunnel(
-  workspaceRoot: string,
+  hubId: string,
   opts: { tunnel: boolean }
 ): Promise<{ hub: Hub; runtime: RuntimeState; info: AdminInfo; mcpUrl: string | null }> {
-  const hub = resolveHub(new Workspace(workspaceRoot));
+  const hub = resolveHub(hubId);
   readTunnelState(hub.hubId);
   readLastEndpoint(hub.hubId);
-  const { runtime } = await ensureBridge(workspaceRoot);
+  const { runtime } = await ensureBridge(hub.hubId);
   let info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
-  const configuredName = new Workspace(workspaceRoot).name;
+  const configuredName = hub.displayName;
   if (info.workspaceName !== configuredName) {
     throw new Error(
-      `WORKSPACE_NAME_RESTART_REQUIRED: Running name "${info.workspaceName}" differs from configured name "${configuredName}". ` +
+      `HUB_NAME_RESTART_REQUIRED: Running name "${info.workspaceName}" differs from configured name "${configuredName}". ` +
       "Run c2c restart (with --tunnel to restore the public connection), then retry setup. Auth and workspace identity are retained."
     );
   }
@@ -164,11 +167,19 @@ program
 let releaseLifecycleLock: (() => void) | undefined;
 program.hook("preAction", (_command, action) => {
   const name = action.name();
-  if (!["setup", "start", "restart", "doctor", "choose", "bind", "disconnect", "unpair", "destroy"].includes(name)) return;
-  const workspace = new Workspace(resolveWorkspace(action.opts().workspace));
-  releaseLifecycleLock = acquireWorkspaceLock(workspace.id);
-  if (name !== "destroy" && fs.existsSync(lifecycleFile(workspace.id))) throw new Error("DESTROY_PENDING: Finish destroy before starting or reconciling this workspace.");
-  if (["start", "restart", "bind"].includes(name) && readTunnelState(resolveHub(workspace).hubId).pending) throw new Error("TUNNEL_ROLLBACK_PENDING: Recover the named setup operation first.");
+  commandHubSelector = action.optsWithGlobals().hub;
+  if (!["setup", "start", "restart", "doctor", "choose", "bind", "unpair", "pair", "stop", "add", "remove"].includes(name)) return;
+  let hub: Hub;
+  if (name === "setup") {
+    const opts = action.opts();
+    const workspace = new Workspace(resolveWorkspace(opts.workspace));
+    if (!listHubs().length && !commandHubSelector && hasLegacyInstall()) throw new Error("HUB_MIGRATION_REQUIRED: An existing legacy installation needs explicit c2c hub migrate before setup.");
+    hub = listHubs().length || commandHubSelector ? selectedHub() : createHub(opts.hubName ?? opts.workspaceName ?? workspace.name);
+    commandHubSelector = hub.hubId;
+  } else hub = selectedHub();
+  releaseLifecycleLock = acquireHubLock(hub.hubId);
+  if (fs.existsSync(lifecycleFile(hub.hubId))) throw new Error("DESTROY_PENDING: Finish this Hub's destroy before normal operations.");
+  if (["start", "restart", "bind"].includes(name) && readTunnelState(hub.hubId).pending) throw new Error("TUNNEL_ROLLBACK_PENDING: Recover the named setup operation first.");
 });
 program.hook("postAction", () => { releaseLifecycleLock?.(); releaseLifecycleLock = undefined; });
 process.on("exit", () => { releaseLifecycleLock?.(); });
@@ -183,12 +194,12 @@ function acceptUnusedWorkspaceOption(command: Command): Command {
 program
   .command("serve", { hidden: true })
   .description("Run the bridge in the foreground (internal)")
-  .requiredOption("--workspace <path>")
+  .requiredOption("--hub <id>")
   .option("--port <port>", "preferred port")
-  .action(async (opts: { workspace: string; port?: string }) => {
-    const logger = new Logger({ name: "bridge", console: true });
+  .action(async (opts: { hub: string; port?: string }) => {
+    const logger = new Logger({ name: `bridge-${opts.hub}`, console: true });
     const bridge = await startBridge({
-      workspaceRoot: resolveWorkspace(opts.workspace),
+      hubId: opts.hub,
       port: opts.port ? parseInt(opts.port, 10) : undefined,
       logger,
     });
@@ -197,21 +208,20 @@ program
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
-    say(`bridge ready on ${bridge.localBaseUrl()} (workspace ${bridge.workspace.name})`);
+    say(`bridge ready on ${bridge.localBaseUrl()} (Hub ${bridge.hub.displayName})`);
   });
 
 // ---------------------------------------------------------------- start
 
 program
   .command("start")
-  .description("Start (or reuse) the bridge for this workspace")
-  .option("-w, --workspace <path>", "workspace root (defaults to current directory)")
+  .description("Start (or reuse) the bridge for this Hub")
+  .option("-w, --workspace <path>", "ignored compatibility option; select the Hub with --hub")
   .option("--tunnel", "also establish the secure public connection", false)
   .option("--json", "machine-readable output", false)
   .action(async (opts: { workspace?: string; tunnel: boolean; json: boolean }) => {
-    const root = resolveWorkspace(opts.workspace);
     try {
-      const { hub, runtime, info, mcpUrl } = await ensureBridgeAndTunnel(root, { tunnel: opts.tunnel });
+      const { hub, runtime, info, mcpUrl } = await ensureBridgeAndTunnel(selectedHub().hubId, { tunnel: opts.tunnel });
       const previous = readLastEndpoint(hub.hubId);
       const connectorName = persistHubEndpoint({
         hubId: hub.hubId, hubName: hub.displayName, port: runtime.port,
@@ -222,8 +232,8 @@ program
         say(JSON.stringify({ ok: true, port: runtime.port, workspaceId: info.workspaceId, mcpUrl, connectorName }));
         return;
       }
-      check(`Workspace detected(${info.workspaceName})`);
-      check("Workspace Bridge started");
+      check(`Hub selected(${info.workspaceName})`);
+      check("Hub bridge started");
       if (mcpUrl) check("Secure connection established");
     } catch (error) {
       handleCliError(error, opts.json);
@@ -234,6 +244,7 @@ program
 
 interface SetupOptions {
   workspace?: string;
+  hubName?: string;
   workspaceName?: string;
   connectorName?: string;
   tunnelName?: string;
@@ -247,7 +258,7 @@ async function configureSetupNames(root: string, opts: SetupOptions): Promise<vo
   if (opts.connectorName !== undefined) userFacingName(opts.connectorName, "Connector name");
   if (opts.tunnelName !== undefined) normalizeTunnelName(opts.tunnelName);
   if (opts.hostname !== undefined) normalizeNamedTunnelHostname(opts.hostname);
-  const configureNamed = opts.tunnelName !== undefined || opts.hostname !== undefined || opts.zone !== undefined || Boolean(readTunnelState(resolveHub(new Workspace(root)).hubId).pending);
+  const configureNamed = opts.tunnelName !== undefined || opts.hostname !== undefined || opts.zone !== undefined || Boolean(readTunnelState(selectedHub().hubId).pending);
   if (configureNamed && !opts.tunnel) {
     throw new Error("NAMING_CONFLICT: Named tunnel options cannot be combined with --no-tunnel.");
   }
@@ -256,8 +267,9 @@ async function configureSetupNames(root: string, opts: SetupOptions): Promise<vo
     saveWorkspaceDisplayName(workspace, opts.workspaceName);
     workspace = new Workspace(root);
   }
+  if (opts.hubName !== undefined) renameHub(selectedHub().hubId, opts.hubName);
   if (!configureNamed) return;
-  const hub = resolveHub(workspace);
+  const hub = selectedHub();
   const previous = readTunnelState(hub.hubId);
   readLastEndpoint(hub.hubId);
   const result = await provisionNamedTunnel({
@@ -270,8 +282,7 @@ async function configureSetupNames(root: string, opts: SetupOptions): Promise<vo
   if (!result.ok || result.fallback) throw new Error(result.error ?? "Named tunnel provisioning failed.");
   if (previous.preference !== result.state.preference || previous.tunnelName !== result.state.tunnelName || previous.hostname !== result.state.hostname) {
     if (await findLiveBridge(hub.hubId)) {
-      await stopBridge(root);
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await stopBridge(selectedHub().hubId);
     }
   }
 }
@@ -281,6 +292,7 @@ program
   .description("First-time setup: bridge + secure connection + pairing code")
   .option("-w, --workspace <path>")
   .option("--no-tunnel", "local-only setup (development)")
+  .option("--hub-name <name>", "Hub display name")
   .option("--workspace-name <name>", "save the local display name in external C2C workspace state")
   .option("--connector-name <name>", "save the exact ChatGPT connector display name")
   .option("--tunnel-name <name>", "Cloudflare Named Tunnel resource name (uses the saved zone unless --zone is given)")
@@ -297,8 +309,9 @@ program
         say("");
       }
       await configureSetupNames(root, opts);
+      const registration = new WorkspaceRegistry(selectedHub().hubId).add(root);
       const sandbox = trySandboxAllow();
-      const { hub, runtime, info, mcpUrl } = await ensureBridgeAndTunnel(root, { tunnel: opts.tunnel });
+      const { hub, runtime, info, mcpUrl } = await ensureBridgeAndTunnel(selectedHub().hubId, { tunnel: opts.tunnel });
       const previousEndpoint = readLastEndpoint(hub.hubId);
       const connectorName = persistHubEndpoint({
         hubId: hub.hubId,
@@ -308,19 +321,23 @@ program
         mcpUrl: mcpUrl ?? previousEndpoint?.mcpUrl ?? null,
         connectorName: opts.connectorName,
       });
-      const pairingResult = await adminFetch<PairingResponse>(runtime, "POST", "/admin/pairing");
+      const needsPairing = info.tokenCount === 0;
+      const pairingResult = needsPairing ? await adminFetch<PairingResponse>(runtime, "POST", "/admin/pairing") : undefined;
       const tunnelState = readTunnelState(hub.hubId);
       if (opts.json) {
         say(
           JSON.stringify({
             ok: true,
+            hubId: hub.hubId,
+            registeredWorkspace: registration,
+            needsPairing,
             workspaceId: info.workspaceId,
             workspaceName: info.workspaceName,
             ...connectorReconciliation(readLastEndpoint(hub.hubId)),
             mcpUrl: mcpUrl ?? `http://127.0.0.1:${runtime.port}/mcp`,
             local: mcpUrl === null,
-            pairingCode: pairingResult.code,
-            pairingExpiresAt: pairingResult.expiresAt,
+            pairingCode: pairingResult?.code,
+            pairingExpiresAt: pairingResult?.expiresAt,
             sandbox,
             tunnel: {
               mode: isNamedTunnelReady(tunnelState) ? "named" : "quick",
@@ -332,14 +349,15 @@ program
         );
         return;
       }
-      check(`Workspace detected(${info.workspaceName})`);
-      check("Workspace Bridge started");
+      check(`Hub selected(${info.workspaceName})`);
+      check("Hub bridge started");
       if (mcpUrl) check("Secure connection established");
       say("");
       say(`Connection address: ${mcpUrl ?? `http://127.0.0.1:${runtime.port}/mcp`}`);
-      say(`Pairing code: ${pairingResult.code}(${Math.round((pairingResult.expiresAt - Date.now()) / 60000)} minutes remaining)`);
+      if (pairingResult) say(`Pairing code: ${pairingResult.code} (${Math.round((pairingResult.expiresAt - Date.now()) / 60000)} minutes remaining)`);
       say("");
-      say("Next: add this address in ChatGPT connector settings (OAuth), then enter the pairing code on the authorization page.");
+      if (needsPairing) say("Next: authorize the existing or initial ChatGPT connector using the pairing code.");
+      else check("Existing Hub authorization retained; verify the registered repo through MCP");
       say("The Codex Skill completes this step automatically.");
     } catch (error) {
       handleCliError(error, opts.json);
@@ -356,8 +374,7 @@ connectorCmd.command("bind")
   .option("--json", "machine-readable output", false)
   .action((opts: { workspace?: string; name: string; mcpUrl: string; connectorId: string; verifiedWorkspace: string; json: boolean }) => {
     try {
-      const workspace = new Workspace(resolveWorkspace(opts.workspace));
-      const registry = WorkspaceRegistry.forWorkspace(workspace);
+      const registry = new WorkspaceRegistry(selectedHub().hubId);
       if (!registry.choices().some((entry) => entry.workspaceId === opts.verifiedWorkspace)) {
         throw new Error("CONNECTOR_BINDING_CONFLICT: workspace_info is not registered to this Hub.");
       }
@@ -371,26 +388,24 @@ connectorCmd.command("bind")
 
 program
   .command("stop")
-  .description("Stop the bridge for this workspace")
+  .description("Stop the bridge for this Hub")
   .option("-w, --workspace <path>")
   .action(async (opts: { workspace?: string }) => {
-    const stopped = await stopBridge(resolveWorkspace(opts.workspace));
+    const stopped = await stopBridge(selectedHub().hubId);
     if (stopped) check("Bridge stopped");
     else say("No bridge is running.");
   });
 
 program
   .command("restart")
-  .description("Restart the bridge for this workspace")
+  .description("Restart the bridge for this Hub")
   .option("-w, --workspace <path>")
   .option("--tunnel", "re-establish the secure public connection", false)
   .option("--json", "machine-readable output", false)
   .action(async (opts: { workspace?: string; tunnel: boolean; json: boolean }) => {
-    const root = resolveWorkspace(opts.workspace);
-    await stopBridge(root);
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await stopBridge(selectedHub().hubId);
     try {
-      const { hub, runtime, info, mcpUrl } = await ensureBridgeAndTunnel(root, { tunnel: opts.tunnel });
+      const { hub, runtime, info, mcpUrl } = await ensureBridgeAndTunnel(selectedHub().hubId, { tunnel: opts.tunnel });
       const previous = readLastEndpoint(hub.hubId);
       const connectorName = persistHubEndpoint({
         hubId: hub.hubId,
@@ -414,13 +429,11 @@ program
 
 program
   .command("status")
-  .description("Show bridge status for this workspace")
+  .description("Show bridge status for this Hub")
   .option("-w, --workspace <path>")
   .option("--json", "machine-readable output", false)
   .action(async (opts: { workspace?: string; json: boolean }) => {
-    const root = resolveWorkspace(opts.workspace);
-    const workspace = new Workspace(root);
-    const hub = resolveHub(workspace);
+    const hub = selectedHub();
     readTunnelState(hub.hubId);
     const endpoint = readLastEndpoint(hub.hubId);
     const observation = await findBridgeObservation(hub.hubId);
@@ -443,8 +456,8 @@ program
       say(JSON.stringify({
         ok: true, running: true, ...info, hubId: hub.hubId,
         ...connectorReconciliation(endpoint),
-        configuredWorkspaceName: workspace.name,
-        workspaceNameRestartRequired: workspace.name !== info.workspaceName,
+        configuredWorkspaceName: hub.displayName,
+        workspaceNameRestartRequired: hub.displayName !== info.workspaceName,
       }));
       return;
     }
@@ -466,7 +479,6 @@ program
   .option("--no-fix", "diagnose only, do not repair")
   .option("--json", "machine-readable output", false)
   .action(async (opts: { workspace?: string; fix: boolean; json: boolean }) => {
-    const root = resolveWorkspace(opts.workspace);
     const report: Record<string, { ok: boolean; detail?: string }> = {};
     const results: string[] = [];
 
@@ -494,16 +506,8 @@ program
       }
     }
 
-    // Workspace
-    let workspace: Workspace | null = null;
-    try {
-      workspace = new Workspace(root);
-      report.workspace = { ok: true, detail: workspace.name };
-    } catch (error) {
-      report.workspace = { ok: false, detail: (error as Error).message };
-    }
-
-    const hub = workspace ? resolveHub(workspace) : null;
+    const hub = selectedHub();
+    report.hub = { ok: true, detail: hub.displayName };
     if (hub && readLastEndpoint(hub.hubId)?.disconnected) {
       if (opts.json) say(JSON.stringify({ report, repairs: [], disconnected: true, chatgptRepair: { needed: false }, namedRepair: { needed: false } }));
       else say("Intentionally disconnected. Run c2c setup or c2c start --tunnel to reconnect; resources were retained.");
@@ -517,8 +521,8 @@ program
     let runtime: RuntimeState | null = null;
     let bridgeUnknown = false;
     let workspaceNameRestartRequired = false;
-    if (workspace) {
-      const observation = await findBridgeObservation(resolveHub(workspace).hubId);
+    if (hub) {
+      const observation = await findBridgeObservation(hub.hubId);
       if (observation.state === "healthy") {
         runtime = observation.runtime;
       } else if (observation.state === "unknown") {
@@ -526,7 +530,7 @@ program
         report.bridge = { ok: false, detail: `State is uncertain (${observation.reason}); automatic repair was skipped` };
       } else if (opts.fix) {
         try {
-          runtime = (await ensureBridge(root)).runtime;
+          runtime = (await ensureBridge(selectedHub().hubId)).runtime;
           results.push("Started the bridge automatically");
         } catch (error) {
           report.bridge = { ok: false, detail: (error as Error).message };
@@ -555,10 +559,9 @@ program
     // a full quit reclaims it — restore a tunnel and tell the Skill to update
     // the existing ChatGPT connector (never treat that as "local mode").
     const lastEndpoint = hub ? readLastEndpoint(hub.hubId) : null;
-    const connectorName = workspace
+    const connectorName = hub
       ? connectorNameFor({
-          workspaceName: hub!.displayName,
-          workspaceId: hub!.hubId,
+          hubName: hub!.displayName,
           previousName: lastEndpoint?.desiredConnectorName ?? lastEndpoint?.connectorName,
           hadEndpointBefore: Boolean(lastEndpoint),
         })
@@ -599,18 +602,17 @@ program
 
     if (runtime) {
       let info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
-      workspaceNameRestartRequired = workspace !== null && info.workspaceName !== workspace.name;
+      workspaceNameRestartRequired = info.workspaceName !== hub.displayName;
       if (workspaceNameRestartRequired) {
         report.workspaceName = {
           ok: false,
-          detail: `WORKSPACE_NAME_RESTART_REQUIRED: Running name "${info.workspaceName}", configured name "${workspace!.name}". Run c2c restart --tunnel to apply it; auth and workspace identity are retained.`,
+          detail: `HUB_NAME_RESTART_REQUIRED: Running name "${info.workspaceName}", configured name "${hub.displayName}". Run c2c restart --tunnel to apply it; auth and workspace identity are retained.`,
         };
       }
       if (namedReady && !namedCredentialFailure && opts.fix && !workspaceNameRestartRequired && runtime.hubId && info.tunnel.provider !== "cloudflare-named") {
-        await stopBridge(root);
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        try {
-          runtime = (await ensureBridge(root)).runtime;
+        await stopBridge(selectedHub().hubId);
+          try {
+          runtime = (await ensureBridge(selectedHub().hubId)).runtime;
           info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
           results.push("Switched to the fixed-hostname connection");
         } catch (error) {
@@ -664,7 +666,7 @@ program
         report.tunnel = { ok: true, detail: currentUrl };
         const nextMcp = mcpUrlFromPublic(currentUrl);
 
-        const boundName = nextMcp
+        const boundName = nextMcp && opts.fix
           ? persistHubEndpoint({
               hubId: hub!.hubId,
               hubName: hub!.displayName,
@@ -796,7 +798,7 @@ program
   .option("--json", "machine-readable output", false)
   .action(async (opts: { workspace?: string; json: boolean }) => {
     try {
-      const { runtime } = await ensureBridge(resolveWorkspace(opts.workspace));
+      const { runtime } = await ensureBridge(selectedHub().hubId);
       const pairing = await adminFetch<PairingResponse>(runtime, "POST", "/admin/pairing");
       if (opts.json) say(JSON.stringify({ ok: true, pairingCode: pairing.code, expiresAt: pairing.expiresAt }));
       else {
@@ -810,29 +812,27 @@ program
 
 program
   .command("unpair")
-  .description("Revoke ChatGPT's access to this workspace immediately")
+  .description("Revoke ChatGPT's access to this Hub immediately")
   .option("-w, --workspace <path>")
   .action(async (opts: { workspace?: string }) => {
-    const root = resolveWorkspace(opts.workspace);
-    const workspace = new Workspace(root);
-    const observation = await findBridgeObservation(resolveHub(workspace).hubId);
+    const observation = await findBridgeObservation(selectedHub().hubId);
     if (observation.state === "unknown") throw new Error("LIFECYCLE_BUSY: Cannot verify the bridge before revoking access.");
     if (observation.state === "healthy") {
       await adminFetch(observation.runtime, "POST", "/admin/revoke-all");
     } else {
       // bridge not running: revoke directly in the persisted store
-      new AuthStore(resolveHub(workspace).hubId).revokeAll();
+      new AuthStore(selectedHub().hubId).revokeAll();
     }
     check("Revoked ChatGPT access to this project (all tokens revoked)");
   });
 
 program.command("disconnect")
-  .description("Revoke access and stop this workspace; keep connector, DNS, tunnel and saved configuration")
+  .description("Revoke access and stop this Hub; keep connector, DNS, tunnel and saved configuration")
   .option("-w, --workspace <path>")
   .option("--json", "machine-readable output", false)
   .action(async (opts: { workspace?: string; json: boolean }) => {
     try {
-      await disconnectWorkspace(resolveWorkspace(opts.workspace));
+      await disconnectHub(selectedHub().hubId);
       if (opts.json) say(JSON.stringify({ ok: true, disconnected: true, resourcesRetained: true }));
       else check("Disconnected; connector, DNS, tunnel and configuration retained");
     } catch (error) { handleCliError(error, opts.json); }
@@ -847,7 +847,7 @@ program.command("destroy")
   .option("--json", "machine-readable output", false)
   .action(async (opts: { workspace?: string; confirm: boolean; connectorRemoved?: string; desiredConnectorAbsent: boolean; json: boolean }) => {
     try {
-      const result = await destroyWorkspace(resolveWorkspace(opts.workspace), opts);
+      const result = await destroyHub(commandHubSelector ?? selectedHub().hubId, opts);
       if (opts.json) say(JSON.stringify(result));
       else say(JSON.stringify(result, null, 2));
     } catch (error) { handleCliError(error, opts.json); }
@@ -862,12 +862,7 @@ program
   .option("-n, --lines <n>", "number of lines", "50")
   .option("--verbose", "include debug detail", false)
   .action((opts: { workspace?: string; lines: string; verbose: boolean }) => {
-    const workspace = new Workspace(resolveWorkspace(opts.workspace));
-    const candidates = [
-      path.join(getStateDir(), "logs", "bridge.log"),
-      path.join(getStateDir(), "logs", `bridge-${resolveHub(workspace).hubId}.out.log`),
-      path.join(getStateDir(), "logs", `bridge-${workspace.id}.out.log`),
-    ];
+    const candidates = [path.join(getStateDir(), "logs", `bridge-${selectedHub().hubId}.out.log`),path.join(getStateDir(), "logs", `bridge-${selectedHub().hubId}.log`)];
     let shown = false;
     for (const file of candidates) {
       if (!fs.existsSync(file)) continue;
@@ -897,46 +892,55 @@ const workspaceCmd = program
     }
   });
 
-function ownerRegistry(option?: string): WorkspaceRegistry {
-  const owner = new Workspace(resolveWorkspace(option ?? workspaceCmd.opts().workspace));
-  return WorkspaceRegistry.forWorkspace(owner);
-}
-
+function selectedRegistry(): WorkspaceRegistry { return new WorkspaceRegistry(selectedHub().hubId); }
 workspaceCmd.command("list")
-  .description("List local workspaces registered to this bridge owner")
-  .option("-w, --workspace <path>", "bridge owner root (defaults to current directory)")
+  .description("List repos registered to the selected Hub")
   .option("--json", "machine-readable output", false)
-  .action((opts: { workspace?: string; json: boolean }) => {
-    try {
-      const workspaces = ownerRegistry(opts.workspace).list();
-      if (opts.json) say(JSON.stringify({ workspaces }));
-      else for (const entry of workspaces) say(`${entry.alias} (${entry.workspaceId}) ${entry.root}`);
-    } catch (error) { handleCliError(error, opts.json); }
+  .action((opts: { json: boolean }) => {
+    const workspaces=selectedRegistry().list();
+    if(opts.json)say(JSON.stringify({hubId:selectedHub().hubId,workspaces}));
+    else for(const entry of workspaces)say(`${entry.alias} (${entry.workspaceId}) ${entry.root}`);
   });
-
 workspaceCmd.command("add <path>")
-  .description("Grant this bridge owner read access to a canonical local workspace")
-  .option("-w, --workspace <path>", "bridge owner root (defaults to current directory)")
-  .option("--alias <alias>", "unique lowercase alias; defaults to directory name plus workspace ID")
+  .description("Grant the selected Hub read access to a canonical repo")
+  .option("--alias <alias>", "unique lowercase alias")
   .option("--json", "machine-readable output", false)
-  .action((repoPath: string, opts: { workspace?: string; alias?: string; json: boolean }) => {
-    try {
-      const entry = ownerRegistry(opts.workspace).add(resolveWorkspace(repoPath), opts.alias);
-      if (opts.json) say(JSON.stringify({ ok: true, ...entry }));
-      else check(`Registered ${entry.alias} (${entry.workspaceId}): ${entry.root}`);
-    } catch (error) { handleCliError(error, opts.json); }
+  .action((repoPath:string,opts:{alias?:string;json:boolean})=>{
+    const entry=selectedRegistry().add(resolveWorkspace(repoPath),opts.alias);
+    if(opts.json)say(JSON.stringify({ok:true,...entry}));else check(`Registered ${entry.alias} (${entry.workspaceId})`);
+  });
+workspaceCmd.command("remove <alias-or-id>")
+  .description("Remove a Hub read grant without changing connection resources")
+  .option("--json", "machine-readable output", false)
+  .action((selector:string,opts:{json:boolean})=>{
+    const entry=selectedRegistry().remove(selector);
+    if(opts.json)say(JSON.stringify({ok:true,...entry}));else check(`Removed ${entry.alias} (${entry.workspaceId})`);
   });
 
-workspaceCmd.command("remove <alias-or-id>")
-  .description("Remove workspace read access without changing connection resources")
-  .option("-w, --workspace <path>", "bridge owner root (defaults to current directory)")
-  .option("--json", "machine-readable output", false)
-  .action((selector: string, opts: { workspace?: string; json: boolean }) => {
-    try {
-      const entry = ownerRegistry(opts.workspace).remove(selector);
-      if (opts.json) say(JSON.stringify({ ok: true, ...entry }));
-      else check(`Removed ${entry.alias} (${entry.workspaceId})`);
-    } catch (error) { handleCliError(error, opts.json); }
+const hubCmd=program.command("hub").description("Inspect Hubs and explicitly finalize local upgrades");
+hubCmd.command("list").option("--json", "machine-readable output",false).action((opts:{json:boolean})=>{
+  const hubs=listHubs().map(({hubId,displayName})=>({hubId,displayName}));
+  say(opts.json?JSON.stringify({hubs}):hubs.map(h=>`${h.displayName} (${h.hubId})`).join("\n"));
+});
+hubCmd.command("migrate").requiredOption("-w, --workspace <path>","verified legacy install root")
+  .option("--handoff","stop only the verified legacy process without revocation and finalize auth",false)
+  .option("--finalize-auth","require a stopped legacy writer and finalize auth",false)
+  .option("--json","machine-readable output",false)
+  .action(async(opts:{workspace:string;handoff:boolean;finalizeAuth:boolean;json:boolean})=>{
+    if(opts.handoff){say(JSON.stringify({hubId:await handoffLegacyWorkspace(resolveWorkspace(opts.workspace)),next:"c2c hub detach --hub <id>"}));return;}
+    const result=adoptLegacyWorkspace(resolveWorkspace(opts.workspace));
+    if(opts.finalizeAuth)finalizeAuthHandoff(result.hub.hubId,new Workspace(resolveWorkspace(opts.workspace)));
+    say(JSON.stringify({hubId:result.hub.hubId,next:"c2c hub detach --hub <id>"}));
+  });
+hubCmd.command("detach").option("--confirm","detach only after validating all checkpoints",false)
+  .option("--json","machine-readable output",false).action(async(opts:{confirm:boolean;json:boolean})=>{
+    if(!commandHubSelector)throw new Error("HUB_SELECTION_REQUIRED: Select the exact migration Hub with --hub.");
+    say(JSON.stringify(await detachHub(commandHubSelector,opts.confirm)));
+  });
+hubCmd.command("cleanup-legacy").option("--confirm","delete only the verified local legacy plan",false)
+  .option("--json","machine-readable output",false).action(async(opts:{confirm:boolean;json:boolean})=>{
+    if(!commandHubSelector)throw new Error("HUB_SELECTION_REQUIRED: Select the exact migration Hub with --hub.");
+    say(JSON.stringify(await legacyCleanup(commandHubSelector,opts.confirm)));
   });
 
 // ---------------------------------------------------------------- sandbox-allow (Codex writable_roots, macOS + Windows)
@@ -1096,7 +1100,7 @@ acceptUnusedWorkspaceOption(
     }
   });
 
-const tunnelCmd = program.command("tunnel").description("Choose or inspect the public connection for this workspace");
+const tunnelCmd = program.command("tunnel").description("Choose or inspect the public connection for this Hub");
 
 tunnelCmd
   .command("status", { isDefault: true })
@@ -1106,8 +1110,7 @@ tunnelCmd
   .option("--json", "machine-readable output", false)
   .action((opts: { workspace?: string; zone?: string; json: boolean }) => {
     try {
-      const workspace = new Workspace(resolveWorkspace(opts.workspace));
-      const payload = tunnelChoicePayload(workspace, opts.zone);
+      const payload = tunnelChoicePayload(selectedHub(), opts.zone);
       if (opts.json) {
         say(JSON.stringify(payload));
         return;
@@ -1130,10 +1133,8 @@ tunnelCmd
   .option("--tunnel-name <name>", "Cloudflare Named Tunnel resource name (otherwise keep the saved name)")
   .option("--json", "machine-readable output", false)
   .action(async (opts: { mode: string; workspace?: string; zone?: string; hostname?: string; tunnelName?: string; json: boolean }) => {
-    const root = resolveWorkspace(opts.workspace);
     try {
-      const workspace = new Workspace(root);
-      const hub = resolveHub(workspace);
+      const hub = selectedHub();
       const mode = opts.mode.trim().toLowerCase();
       const previous = readTunnelState(hub.hubId);
       if (mode === "quick") {
@@ -1142,9 +1143,9 @@ tunnelCmd
         }
         const state = chooseQuickTunnel(hub.hubId);
         if (await findLiveBridge(hub.hubId)) {
-          if (previous.preference === "named") await stopBridge(root);
+          if (previous.preference === "named") await stopBridge(selectedHub().hubId);
         }
-        const payload = { ...tunnelChoicePayload(workspace), state };
+        const payload = { ...tunnelChoicePayload(hub), state };
         if (opts.json) say(JSON.stringify(payload));
         else check("Selected a temporary address");
         return;
@@ -1180,9 +1181,9 @@ tunnelCmd
         return;
       }
       const changed = previous.preference !== result.state.preference || previous.tunnelName !== result.state.tunnelName || previous.hostname !== result.state.hostname;
-      if (changed && await findLiveBridge(hub.hubId)) await stopBridge(root);
+      if (changed && await findLiveBridge(hub.hubId)) await stopBridge(selectedHub().hubId);
       const payload = {
-        ...tunnelChoicePayload(workspace),
+        ...tunnelChoicePayload(hub),
         ok: result.ok,
         fallback: result.fallback,
         userMessage: result.userMessage,
@@ -1235,6 +1236,13 @@ function handleCliError(error: unknown, json: boolean): void {
   process.exitCode = 1;
 }
 
+function addHubOptions(command: Command): void {
+  for (const child of command.commands) {
+    if (!child.options.some(option => option.long === "--hub")) child.option("--hub <id>", "select a configured Hub by stable identity");
+    addHubOptions(child);
+  }
+}
+addHubOptions(program);
 program.parseAsync(process.argv).catch((error: Error) => {
   handleCliError(error, process.argv.includes("--json"));
   process.exit(1);

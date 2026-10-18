@@ -1,3 +1,4 @@
+import { fixtureHub } from "../helpers.js";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -6,7 +7,7 @@ import type { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { startBridge } from "../../src/bridge/server.js";
 import { Workspace } from "../../src/workspace/manager.js";
-import { resolveHub } from "../../src/hub/store.js";
+import { fixtureHub as resolveHub } from "../helpers.js";
 import { findBinary } from "../../src/tunnel/detect.js";
 import {
   CloudflaredQuickTunnel,
@@ -367,7 +368,7 @@ describe("tunnel preference state", () => {
       expect(result.state.hostname).toBe("c2c-demo.example.com");
       expect(result.state.tunnelName).toBe("c2c-demo");
       expect(isNamedTunnelReady(readTunnelState(hubId))).toBe(true);
-      const bridge = await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false });
+      const bridge = await startBridge({ hubId: fixtureHub(root).hubId, port: 0, persistRuntime: false });
       try { expect(bridge.tunnel.name).toBe("cloudflare-named"); }
       finally { await bridge.close(); }
     });

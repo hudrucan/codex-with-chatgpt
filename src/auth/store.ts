@@ -4,8 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { hubIdSchema, withHubControlPlane } from "../hub/store.js";
 import { ensureDir, getStateDir, writeSecureJson } from "../config/paths.js";
-import { assertAuthHandoffQuiescent } from "../bridge/runtime.js";
-import type { Workspace } from "../workspace/manager.js";
+import { stateFile } from "../config/state-files.js";
 
 export const SUPPORTED_SCOPES = [
   "workspace.read",
@@ -46,16 +45,13 @@ export interface TokenRecord {
   revoked: boolean;
 }
 
-const clientSchema = z.object({ clientId: z.string().min(1), clientName: z.string().optional(),
+export const clientSchema = z.object({ clientId: z.string().min(1), clientName: z.string().optional(),
   redirectUris: z.array(z.string()), createdAt: z.string().datetime() }).strict();
-const tokenFields = { hash: z.string().regex(/^[a-f0-9]{64}$/), kind: z.enum(["access", "refresh"]),
+export const tokenFields = { hash: z.string().regex(/^[a-f0-9]{64}$/), kind: z.enum(["access", "refresh"]),
   clientId: z.string(), scopes: z.array(z.string()), issuedAt: z.number().finite(),
   expiresAt: z.number().finite(), revoked: z.boolean() };
 const tokenSchema = z.object({ ...tokenFields, hubId: hubIdSchema }).strict();
-const legacySchema = z.object({ clients: z.array(clientSchema), tokens: z.array(
-  z.object({ ...tokenFields, workspaceId: z.string().regex(/^[a-f0-9]{12}$/) }).strict()
-) }).strict();
-const authSchema = z.object({ version: z.literal(1), hubId: hubIdSchema,
+export const authSchema = z.object({ version: z.literal(1), hubId: hubIdSchema,
   clients: z.array(clientSchema), tokens: z.array(tokenSchema) }).strict();
 type PersistedAuthState = z.infer<typeof authSchema>;
 
@@ -63,7 +59,7 @@ export class AuthStateError extends Error {
   constructor(message: string) { super(`AUTH_STATE_CONFLICT: ${message}`); this.name = "AuthStateError"; }
 }
 
-function withAuthLock<T>(file: string, operation: () => T): T {
+export function withAuthLock<T>(file: string, operation: () => T): T {
   ensureDir(path.dirname(file));
   const lock = `${file}.lock`;
   let fd: number;
@@ -73,7 +69,7 @@ function withAuthLock<T>(file: string, operation: () => T): T {
   finally { fs.closeSync(fd); fs.unlinkSync(lock); }
 }
 
-function readAuthJson(file: string): unknown | undefined {
+export function readAuthJson(file: string): unknown | undefined {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -81,17 +77,17 @@ function readAuthJson(file: string): unknown | undefined {
   }
 }
 
-function requireUniqueRecords(data: { clients: ClientRegistration[]; tokens: { hash: string }[] }): void {
+export function requireUniqueRecords(data: { clients: ClientRegistration[]; tokens: { hash: string }[] }): void {
   if (new Set(data.clients.map((client) => client.clientId)).size !== data.clients.length ||
       new Set(data.tokens.map((token) => token.hash)).size !== data.tokens.length) throw new Error("Duplicate auth records");
 }
 
-function canonical(value: unknown): string {
+export function canonical(value: unknown): string {
   return JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 }
 
-function parseHubAuth(hubId: string, raw: unknown): PersistedAuthState | undefined {
+export function parseHubAuth(hubId: string, raw: unknown): PersistedAuthState | undefined {
   try {
     if (raw === undefined) return undefined;
     const current = authSchema.parse(raw);
@@ -99,42 +95,6 @@ function parseHubAuth(hubId: string, raw: unknown): PersistedAuthState | undefin
     if (current.hubId !== hubId || current.tokens.some((token) => token.hubId !== hubId)) throw new Error("Wrong owner");
     return current;
   } catch { throw new AuthStateError("Hub auth ownership or format is invalid."); }
-}
-
-function translateLegacyAuth(hubId: string, ownerId: string, raw: unknown): PersistedAuthState {
-  try {
-    if (raw === undefined) return { version: 1, hubId, clients: [], tokens: [] };
-    const legacy = legacySchema.parse(raw);
-    requireUniqueRecords(legacy);
-    if (legacy.tokens.some((token) => token.workspaceId !== ownerId)) throw new Error("Wrong legacy owner");
-    return { version: 1, hubId, clients: legacy.clients,
-      tokens: legacy.tokens.map(({ workspaceId: _owner, ...token }) => ({ ...token, hubId })) };
-  } catch { throw new AuthStateError("Legacy auth ownership or format is invalid."); }
-}
-
-/** Replace a provisional snapshot only after all verified auth writers have exited. */
-export function finalizeAuthHandoff(hubId: string, owner: Workspace, opts: { file?: string } = {}): void {
-  withHubControlPlane(hubId, ({ hub, authHandoffFinalized, completeAuthHandoff }) => {
-    if (hub.legacyOwnerWorkspaceId && hub.legacyOwnerWorkspaceId !== owner.id) {
-      throw new AuthStateError("Legacy owner does not match this Hub.");
-    }
-    if (authHandoffFinalized) return;
-    const file = opts.file ?? path.join(getStateDir(), "auth", `${hubId}.json`);
-    const legacyFile = path.join(getStateDir(), "auth", `${owner.id}.json`);
-    withAuthLock(file, () => withAuthLock(legacyFile, () => {
-      const current = parseHubAuth(hubId, readAuthJson(file));
-      const legacy = readAuthJson(legacyFile);
-      assertAuthHandoffQuiescent(hub, owner, legacy !== undefined);
-      if (legacy === undefined && current && (current.clients.length || current.tokens.length)) {
-        throw new AuthStateError("Legacy auth source is missing; refusing to discard a populated provisional snapshot.");
-      }
-      const expected = translateLegacyAuth(hubId, owner.id, legacy);
-      writeSecureJson(file, expected);
-      if (canonical(readAuthJson(legacyFile)) !== canonical(legacy)) throw new AuthStateError("Legacy auth changed during finalization.");
-      assertAuthHandoffQuiescent(hub, owner, legacy !== undefined);
-      completeAuthHandoff();
-    }));
-  });
 }
 
 export type VerifyTokenResult =
@@ -173,35 +133,15 @@ export class AuthStore {
 
   constructor(
     readonly hubId: string,
-    opts: { file?: string; requireFinalized?: boolean } = {}
+    opts: { file?: string } = {}
   ) {
     if (!hubIdSchema.safeParse(hubId).success) throw new AuthStateError("Auth owner must be a Hub ID.");
-    this.file = opts.file ?? path.join(getStateDir(), "auth", `${hubId}.json`);
-    const data = withHubControlPlane(hubId, ({ hub, authInitialized, authHandoffFinalized, completeAuthAdoption }) => {
-      if (opts.requireFinalized && !authHandoffFinalized) throw new Error("AUTH_HANDOFF_REQUIRED: Finalize the legacy auth handoff before serving OAuth.");
-      return withAuthLock(this.file, () => {
-        const raw = readAuthJson(this.file);
-        let current = parseHubAuth(hubId, raw);
-        if (authInitialized) {
-          if (!current && hub.legacyOwnerWorkspaceId) throw new AuthStateError("Initialized Hub auth state is missing; recovery is required.");
-          if (!current) {
-            current = { version: 1, hubId, clients: [], tokens: [] };
-            writeSecureJson(this.file, current);
-          }
-          return current;
-        }
-        const legacyFile = path.join(getStateDir(), "auth", `${hub.legacyOwnerWorkspaceId}.json`);
-        return withAuthLock(legacyFile, () => {
-          const legacyRaw = readAuthJson(legacyFile);
-          const expected = translateLegacyAuth(hubId, hub.legacyOwnerWorkspaceId!, legacyRaw);
-          if (current && canonical(current) !== canonical(expected)) throw new AuthStateError("Hub and legacy auth stores conflict; merging is forbidden.");
-          if (!current) writeSecureJson(this.file, expected);
-          if (canonical(readAuthJson(legacyFile)) !== canonical(legacyRaw)) throw new AuthStateError("Legacy auth changed during adoption.");
-          completeAuthAdoption();
-          return expected;
-        });
-      });
-    });
+    this.file = opts.file ?? stateFile("auth", `${hubId}.json`);
+    const data = withHubControlPlane(hubId, () => withAuthLock(this.file, () => {
+      const current = parseHubAuth(hubId, readAuthJson(this.file));
+      if (!current) throw new AuthStateError("Authoritative Hub auth state is missing; explicit recovery is required.");
+      return current;
+    }));
     const now = Date.now();
     for (const client of data.clients) this.clients.set(client.clientId, client);
     for (const token of data.tokens) if (!token.revoked && token.expiresAt > now) this.tokens.set(token.hash, token);
@@ -365,7 +305,7 @@ export class AuthStore {
   }
 
   static deleteStateFile(hubId: string): void {
-    const file = path.join(getStateDir(), "auth", `${hubId}.json`);
+    const file = stateFile("auth", `${hubId}.json`);
     try {
       fs.rmSync(file, { force: true });
     } catch {

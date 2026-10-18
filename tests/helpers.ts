@@ -1,3 +1,6 @@
+import { createHub as createFixtureHub, listHubs as fixtureHubs } from "../src/hub/store.js";
+import { Workspace as FixtureWorkspace } from "../src/workspace/manager.js";
+import { WorkspaceRegistry as FixtureRegistry } from "../src/workspace/registry.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -92,4 +95,28 @@ export function legacyAuthFixture(stateDir: string, workspaceId: string, stopped
     }));
   }
   return { file, data, client, accessToken, refreshToken, contents: fs.readFileSync(file, "utf8") };
+}
+
+// Explicit native Hub fixtures; repository identity is only a test lookup key.
+const nativeFixtures = new Map<string, import("../src/hub/store.js").Hub>();
+export function fixtureHub(value: string | Pick<import("../src/workspace/manager.js").Workspace, "id" | "name">) {
+  const workspace = typeof value === "string" ? new FixtureWorkspace(value) : value;
+  const key = `${process.env.C2C_STATE_DIR}:${workspace.id}`;
+  let hub = nativeFixtures.get(key);
+  if (!hub) { hub = fixtureHubs().find(candidate => new FixtureRegistry(candidate.hubId).choices().some(entry => entry.workspaceId === workspace.id)) ?? createFixtureHub(workspace.name); nativeFixtures.set(key, hub); }
+  if (typeof value === "string" || "root" in value) {
+    const root = typeof value === "string" ? value : String(value.root);
+    if (fs.existsSync(root) && fs.existsSync(path.join(process.env.C2C_STATE_DIR!,"hubs",`${hub.hubId}.json`))) new FixtureRegistry(hub.hubId).add(root);
+  }
+  return hub;
+}
+export function fixtureRegistry(workspace: import("../src/workspace/manager.js").Workspace) {
+  return new FixtureRegistry(fixtureHub(workspace).hubId);
+}
+export function fixtureWorkspace(bridge: {hubId:string}) {
+  return new FixtureWorkspace(new FixtureRegistry(bridge.hubId).list()[0].root);
+}
+export function fixtureAuthFile(hubId: string, file: string): string {
+  fs.mkdirSync(path.dirname(file),{recursive:true});
+  fs.copyFileSync(path.join(process.env.C2C_STATE_DIR!,"auth",`${hubId}.json`),file);return file;
 }

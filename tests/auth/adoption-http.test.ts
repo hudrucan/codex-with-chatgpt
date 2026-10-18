@@ -1,3 +1,5 @@
+import { adoptLegacyWorkspace, finalizeAuthHandoff } from "../../src/migration/adoption.js";
+import { detachHub } from "../../src/migration/finalize.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
@@ -13,7 +15,9 @@ let legacy: ReturnType<typeof legacyAuthFixture>;
 beforeEach(async () => {
   state = isolateStateDir(); root = makeTmpDir("auth-http-adoption");
   legacy = legacyAuthFixture(state, new Workspace(root).id, root);
-  bridge = await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false });
+  const {hub,registry}=adoptLegacyWorkspace(root);registry.add(root);
+  finalizeAuthHandoff(hub.hubId,new Workspace(root));await detachHub(hub.hubId,true);
+  bridge = await startBridge({ hubId: hub.hubId, port: 0, persistRuntime: false });
 });
 afterEach(async () => { await bridge?.close(); [state, root].forEach(cleanup); delete process.env.C2C_STATE_DIR; });
 

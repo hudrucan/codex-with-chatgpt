@@ -1,7 +1,7 @@
 # Desk C2C Hub architecture
 
 ```text
-ChatGPT MCP client → HTTPS tunnel → loopback bridge → owner's registered repos
+ChatGPT MCP client → HTTPS tunnel → loopback bridge → Hub's registered repos
                                      │
                               OAuth / pairing
                                      │
@@ -19,11 +19,12 @@ the read-only data plane. Successful setup or reconnect ends at `MCP READY`.
 | `mcp/` | Read-only tools and stateless Streamable HTTP transport |
 | `auth/` | OAuth discovery, client registration, PKCE, token rotation/revocation and token hashes |
 | `pairing/` | Expiring one-time pairing codes, attempt limits and rate limiting |
-| `hub/` | Stable internal identity, checked legacy connection mappings and initialization checkpoints |
+| `hub/` | Independent identity, deterministic discovery and explicit selection |
+| `migration/` | Explicit one-shot adoption, detach and verified local cleanup |
 | `workspace/` | Hub-scoped registry, canonical containment, ignore rules, detection, reads, search and git |
 | `tunnel/` | Quick/Named cloudflared processes, provisioning, naming and rollback |
 | `process/` | Daemon spawn/reuse and local admin requests |
-| `lifecycle/` | Workspace operation locks and connection lifecycle |
+| `lifecycle/` | Hub operation locks, resource receipts and connection lifecycle |
 | `config/` | External state, display names, desired/bound endpoint, UI preferences and explicit updates |
 | `cli/` | `c2c` commands driving the bridge and lifecycle |
 | `logger/` | Local diagnostics with credential redaction |
@@ -40,16 +41,17 @@ registered alias or ID within the configured Hub's registry, then applies the
 selected workspace's path and content policies. See [multi-repo access](multi-repo.md)
 for selectors and schemas, and [security](security.md) for authorization boundaries.
 
-A random, persistent `hubId` identifies the Hub independently of repositories.
-The startup root's `workspaceId` resolves that Hub through a checked local mapping.
-OAuth clients/tokens, pairing, runtime discovery, tunnel state and endpoint/connector
-bindings use the Hub ID. A verified
-live legacy bridge is reused in place until it exits; its runtime is not copied.
-Resource cleanup remains keyed by the startup workspace. Local state adoption
-preserves remote resources and verified bindings without reprovisioning them. The listener
-prefers port 48765 and falls back to a free port on collision. Runtime discovery
-distinguishes a matching healthy bridge, a stopped process and uncertain state
-before automatic repair.
+A random, persistent `hub-<uuid>` identifies the Hub independently of repos.
+Zero configured Hubs require setup; one is selected automatically; multiple Hubs
+require an exact `--hub` selector. OAuth clients/tokens, pairing, runtime,
+tunnel/endpoint bindings, lifecycle receipts and registry grants belong to the Hub.
+A repo is an explicit read grant and can be removed without changing resources.
+No original repo path is needed to start, stop or inspect the Hub.
+
+The listener prefers port 48765 and falls back to a free port on collision.
+Runtime discovery reads only `runtime/<hubId>.json` and distinguishes healthy,
+stopped and uncertain processes before repair. Native runtime and MCP never
+import legacy state. Upgrade compatibility is isolated in `migration/`.
 
 ## Public connection and binding
 

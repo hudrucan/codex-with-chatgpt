@@ -1,3 +1,4 @@
+import { fixtureHub, fixtureWorkspace, fixtureAuthFile } from "../helpers.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -12,12 +13,13 @@ import {
 import { ensureBridge } from "../../src/process/daemon.js";
 import { SERVICE_NAME, VERSION } from "../../src/version.js";
 import fs from "node:fs";
-import { resolveHub } from "../../src/hub/store.js";
+import { fixtureHub as resolveHub } from "../helpers.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 function stubRuntime(workspaceId: string, workspaceRoot: string, pid: number, port: number): RuntimeState {
   return {
+    stateVersion: 1, hubId: resolveHub({id: workspaceId,name: "Runtime"}).hubId,
     service: SERVICE_NAME,
     version: VERSION,
     workspaceId,
@@ -57,7 +59,7 @@ describe("findBridgeObservation", () => {
     dirs.push(root);
     write(root, "a.txt", "a");
     const workspace = new Workspace(root);
-    write(process.env.C2C_STATE_DIR!, `runtime/${workspace.id}.json`, JSON.stringify(stubRuntime(workspace.id, workspace.root, 999_999_999, 1)));
+    write(process.env.C2C_STATE_DIR!, `runtime/${resolveHub(workspace).hubId}.json`, JSON.stringify(stubRuntime(workspace.id, workspace.root, 999_999_999, 1)));
     const observation = await findBridgeObservation(resolveHub(workspace).hubId);
     expect(observation.state).toBe("stopped");
     if (observation.state === "stopped") expect(observation.reason).toBe("pid_missing");
@@ -77,12 +79,12 @@ describe("findBridgeObservation", () => {
     child.unref();
     try {
       if (!child.pid) throw new Error("failed to spawn helper");
-      write(process.env.C2C_STATE_DIR!, `runtime/${workspace.id}.json`, JSON.stringify(stubRuntime(workspace.id, workspace.root, child.pid, 1)));
+      write(process.env.C2C_STATE_DIR!, `runtime/${resolveHub(workspace).hubId}.json`, JSON.stringify(stubRuntime(workspace.id, workspace.root, child.pid, 1)));
       const observation = await findBridgeObservation(resolveHub(workspace).hubId);
       expect(observation.state).toBe("unknown");
       if (observation.state === "unknown") expect(observation.reason).toBe("probe_failed");
       expect(await findLiveBridge(resolveHub(workspace).hubId)).toBeNull();
-      await expect(ensureBridge(root)).rejects.toThrow(/uncertain/);
+      await expect(ensureBridge(resolveHub(workspace).hubId)).rejects.toThrow(/uncertain/);
     } finally {
       if (child.pid) {
         try {
@@ -102,19 +104,19 @@ describe("findBridgeObservation", () => {
     const auth = path.join(makeTmpDir("obs-auth"), "store.json");
     dirs.push(path.dirname(auth));
     const bridge = await startBridge({
-      workspaceRoot: root,
+      hubId: fixtureHub(root).hubId,
       port: 0,
       persistRuntime: true,
-      authStoreFile: auth,
+      authStoreFile: fixtureAuthFile(fixtureHub(root).hubId, auth),
     });
     try {
       const observation = await findBridgeObservation(bridge.hubId);
       expect(observation.state).toBe("healthy");
       expect(readRuntimeState(bridge.hubId)).toMatchObject({ stateVersion: 1, hubId: bridge.hubId });
       expect(fs.existsSync(runtimeFile(bridge.hubId))).toBe(true);
-      expect(fs.existsSync(path.join(process.env.C2C_STATE_DIR!, "runtime", `${bridge.workspace.id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(process.env.C2C_STATE_DIR!, "runtime", `${fixtureWorkspace(bridge).id}.json`))).toBe(false);
       const health = await fetch(`${bridge.localBaseUrl()}/health`).then((response) => response.json());
-      expect(health).toMatchObject({ hubId: bridge.hubId, workspaceId: bridge.workspace.id });
+      expect(health).toMatchObject({ hubId: bridge.hubId, workspaceId: fixtureWorkspace(bridge).id });
       expect(await findLiveBridge(bridge.hubId)).not.toBeNull();
     } finally {
       await bridge.close();

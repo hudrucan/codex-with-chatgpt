@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { ensureDir, getStateDir, writeSecureJson } from "../config/paths.js";
+import { ensureDir, writeSecureJson } from "../config/paths.js";
+import { stateFile } from "../config/state-files.js";
 import { Workspace } from "./manager.js";
-import { hubIdSchema, resolveHub } from "../hub/store.js";
+import { hubIdSchema } from "../hub/store.js";
 
 const workspaceIdSchema = z.string().regex(/^[a-f0-9]{12}$/);
 // Reserve the ID namespace so alias and ID selectors can never be ambiguous.
@@ -15,12 +16,7 @@ const registrationSchema = z.object({
   alias: aliasSchema,
   root: z.string().refine((root) => path.isAbsolute(root) && !root.includes("\0")),
 }).strict();
-const legacyRegistrySchema = z.object({
-  version: z.literal(1),
-  ownerWorkspaceId: workspaceIdSchema,
-  workspaces: z.array(registrationSchema),
-}).strict();
-const registrySchema = z.object({
+export const registrySchema = z.object({
   version: z.literal(2),
   hubId: hubIdSchema,
   workspaces: z.array(registrationSchema),
@@ -54,56 +50,11 @@ export class WorkspaceRegistry {
     if (!hubIdSchema.safeParse(hubId).success) {
       throw new WorkspaceRegistryError("INVALID_WORKSPACE_OWNER", "Registry owner must be a Hub ID.");
     }
-    this.file = path.join(getStateDir(), "workspace-registries", `${hubId}.json`);
-  }
-
-  static forWorkspace(workspace: Workspace): WorkspaceRegistry {
-    const hub = resolveHub(workspace, (hub) => new WorkspaceRegistry(hub.hubId).adoptLegacy(workspace.id));
-    return new WorkspaceRegistry(hub.hubId);
-  }
-
-  private adoptLegacy(ownerWorkspaceId: string): void {
-    const legacyFile = path.join(getStateDir(), "workspace-registries", `${ownerWorkspaceId}.json`);
-    ensureDir(path.dirname(legacyFile));
-    const lock = `${legacyFile}.lock`;
-    let fd: number;
-    try { fd = fs.openSync(lock, "wx", 0o600); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      throw new WorkspaceRegistryError("WORKSPACE_REGISTRY_BUSY", "Legacy registry is locked; adoption is deferred.");
-    }
-    try {
-      let raw: string | undefined;
-      try { raw = fs.readFileSync(legacyFile, "utf8"); }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          throw new WorkspaceRegistryError("WORKSPACE_REGISTRY_INVALID", "Cannot read the legacy owner registry.");
-        }
-      }
-      let entries: WorkspaceRegistration[] = [];
-      if (raw !== undefined) {
-        try {
-          const legacy = legacyRegistrySchema.parse(JSON.parse(raw));
-          if (legacy.ownerWorkspaceId !== ownerWorkspaceId) throw new Error("Legacy owner mismatch");
-          entries = sortedRegistrations(legacy.workspaces);
-        } catch {
-          throw new WorkspaceRegistryError("WORKSPACE_REGISTRY_INVALID", "Legacy registry ownership or contents are invalid; adoption is denied.");
-        }
-      }
-      this.mutate((existing) => {
-        // A retry may find an already written copy. Never merge or overwrite it.
-        if (fs.existsSync(this.file) && JSON.stringify(existing) !== JSON.stringify(entries)) {
-          throw new WorkspaceRegistryError("WORKSPACE_REGISTRY_INVALID", "Hub registry conflicts with pending legacy adoption.");
-        }
-        if (!fs.existsSync(this.file)) existing.push(...entries);
-      });
-    } finally {
-      fs.closeSync(fd);
-      fs.unlinkSync(lock);
-    }
+    this.file = stateFile("workspace-registries", `${hubId}.json`);
   }
 
   list(): WorkspaceRegistration[] {
+    stateFile("workspace-registries", `${this.hubId}.json`);
     let raw: string;
     try {
       raw = fs.readFileSync(this.file, "utf8");

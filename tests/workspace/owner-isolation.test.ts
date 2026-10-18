@@ -1,3 +1,4 @@
+import { fixtureHub, fixtureRegistry, fixtureWorkspace } from "../helpers.js";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
@@ -49,16 +50,16 @@ it("isolates the grants of two simultaneously running bridge owners in the same 
       }));
       return { file, contents: fs.readFileSync(file, "utf8"), token: legacyAuthFixture(state, owner.id, root).accessToken };
     });
-    for (const root of ownerRoots) bridges.push(await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false }));
-    for (let index = 0; index < bridges.length; index++) clients.push(await connect(bridges[index], legacyOwned[index].token));
+    for (const root of ownerRoots) bridges.push(await startBridge({ hubId: fixtureHub(root).hubId, port: 0, persistRuntime: false }));
+    for (let index = 0; index < bridges.length; index++) clients.push(await connect(bridges[index]));
     expect(bridges[0].port).not.toBe(bridges[1].port);
-    const registries = bridges.map((bridge) => WorkspaceRegistry.forWorkspace(bridge.workspace));
+    const registries = bridges.map((bridge) => fixtureRegistry(fixtureWorkspace(bridge)));
     for (let index = 0; index < 2; index++) {
       const { data } = await call(clients[index], "list_workspaces");
       expect(data).toEqual({ workspaces: registries[index].choices() });
       expect(data.workspaces).toHaveLength(1);
-      expect(data.workspaces[0].workspaceId).toBe(bridges[index].workspace.id);
-      expect((await call(clients[index], "workspace_info")).data.workspaceId).toBe(bridges[index].workspace.id);
+      expect(data.workspaces[0].workspaceId).toBe(fixtureWorkspace(bridges[index]).id);
+      expect((await call(clients[index], "workspace_info")).data.workspaceId).toBe(fixtureWorkspace(bridges[index]).id);
       expect((await call(clients[index], "workspace_info", { workspace: new Workspace(repoRoots[index]).id })).data.error).toBe("WORKSPACE_NOT_FOUND");
     }
     const entries = registries.map((registry, index) => registry.add(repoRoots[index], `repo-${index}`));
@@ -78,7 +79,7 @@ it("isolates the grants of two simultaneously running bridge owners in the same 
       for (const [name, args] of tools) {
         const own = await call(clients[index], name, { ...args, workspace: entries[index].alias });
         expect(own.result.isError ?? false, name).toBe(false);
-        for (const selector of [entries[foreign].alias, entries[foreign].workspaceId, bridges[foreign].workspace.id]) {
+        for (const selector of [entries[foreign].alias, entries[foreign].workspaceId, fixtureWorkspace(bridges[foreign]).id]) {
           const denied = await call(clients[index], name, { ...args, workspace: selector });
           expect(denied.result.isError, name).toBe(true);
           expect(denied.data.error, name).toBe("WORKSPACE_NOT_FOUND");

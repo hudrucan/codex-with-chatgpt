@@ -2,13 +2,11 @@
 
 ## Trust boundaries
 
-1. **Hub identity** owns the read grants. A one-to-one local mapping binds each
-   configured startup workspace to its Hub. A bridge reads only canonical roots
-   registered in `workspace-registries/<hubId>.json`; another Hub cannot use or
-   discover those grants. Malformed or conflicting Hub mappings fail closed.
-   Tokens and pairing sessions are bound to `hubId`. Auth adoption preserves
-   client registrations and token hashes; it does not rotate raw credentials
-   or change tunnel/connector identities.
+1. **Hub identity** owns auth, runtime, connection resources and read grants.
+   A bridge reads only canonical roots registered to its Hub; no repo path or
+   label selects another Hub. Ambiguous Hub selection fails closed. Tokens and
+   pairing sessions are bound to `hubId`. Removing a repo does not change resource
+   ownership or authorize another Hub.
 2. **Workspace content is untrusted.** README, comments, diffs may contain
    prompt injection. Workspace-content tool descriptions carry an explicit warning
    and tools never grant capabilities based on file content.
@@ -25,7 +23,7 @@
 | OAuth CSRF | `state` round-tripped verbatim; authorization requests are server-side records keyed by random ids |
 | Code interception | PKCE S256 mandatory (plain rejected); authorization codes are one-time, 5-minute TTL, bound to client + redirect URI |
 | Token theft | Opaque high-entropy tokens; stored only as SHA-256 hashes; access tokens live 1 h; refresh tokens rotate on every use (replay of the old one fails); revocation endpoint + `c2c unpair` |
-| Cross-owner repo access | Registries and alias namespaces are keyed by the mapped Hub ID; MCP accepts no owner override and resolves registered aliases/IDs independently on every tool call |
+| Cross-owner repo access | Registries and alias namespaces are keyed by the Hub ID; MCP accepts no owner override and resolves registered aliases/IDs independently on every tool call |
 | Workspace traversal | `realpath` canonicalization of the deepest existing ancestor; containment check against the canonical root; case-insensitive comparison on macOS/Windows; rejects `..`, absolute escapes, backslash tricks, null bytes |
 | Symlink escape | Canonicalization resolves symlinks before the containment check (file and directory symlinks both covered by tests) |
 | Sensitive files | Deny-by-default patterns (.env*, keys, SSH, cloud creds, keychains…) enforced at resolve time — reads, listings, and search all pass through the same gate; `git diff` adds pathspec excludes; `.env.example` allowed |
@@ -49,27 +47,21 @@ State lives under the OS-convention app dir
 files 0600. Named-hostname preference and tunnel metadata live there too
 (`tunnels/<hubId>.json`) — never in the project. Only SHA-256 hashes of
 tokens are persisted — a stolen token-hash file does not yield usable bearer tokens.
-Hub records live in `hubs/<hubId>.json`; `hub-mappings/` stores checked connection
-mappings. Read grants live in `workspace-registries/<hubId>.json`, with matching
-Hub ownership metadata and canonical roots. Updates use exclusive local locks
-and atomic replacement; no repository configuration is written. See
-[multi-repo access](multi-repo.md#registry-storage) for state formats and adoption
-rules. `auth/<hubId>.json` stores a versioned Hub owner, client registrations
-and Hub-bound token hashes. Adoption requires a verified one-to-one mapping and
-an `authInitialized` checkpoint; conflicting pending copies are rejected without
-merging, and the legacy source is retained. `authInitialized` records a provisional
-snapshot; `authHandoffFinalized` records the quiescent writer handoff. Hub startup
-requires finalization after verified legacy process exit, replacing the snapshot
-with the complete final legacy state. Finalized Hubs never import that source
-again. Current token hashes survive; rotated-away credentials stay absent.
-`runtime/<hubId>.json` identifies the running Hub; healthy mapped legacy runtimes
-are reused without copying their live state. `tunnels/<hubId>.json` and
-`endpoints/<hubId>.json` carry versioned Hub ownership. Verified owner mapping,
-atomic copies and `tunnelInitialized`/`endpointInitialized` checkpoints prevent
-merging or re-importing stale sources. Legacy sources are retained; adoption
-performs no Cloudflare or ChatGPT mutation. An unconfigured endpoint has an
-explicit empty marker; missing initialized state fails closed. Connector binding
-requires observed ID/name/URL and a workspace currently registered to that Hub.
+Hub records live in `hubs/<hubId>.json`. Read grants live in
+`workspace-registries/<hubId>.json`, with matching Hub ownership and canonical
+roots. Auth, runtime, tunnel, endpoint and lifecycle files are keyed by the same
+Hub ID. Updates use exclusive local locks and atomic replacement. Missing or
+foreign authoritative state fails closed. Connector binding requires the observed
+connector ID/name/URL and actual MCP evidence from a registered workspace.
+
+Native runtime never reads legacy sources. Explicit migration verifies exact
+legacy ownership, checkpoints adoption and finalizes auth only after the legacy
+writer exits. Detach requires complete validated Hub state and no live legacy
+writer or pending rollback. Cleanup is a separate, dry-run-first local operation:
+only validated legacy-owner files may be removed, after detach. Native state,
+credentials, repos, global settings and migration-gate backups are excluded.
+State-path symlinks are rejected before destructive access. Partial destroy
+retains its Hub receipt for exact-resource recovery; Hub identity is removed last.
 
 **Storage limitation**: client registrations and token hashes are file-based rather
 than OS-keychain-based. Raw tokens are never written anywhere. Keychain integration is not implemented.
