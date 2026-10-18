@@ -47,7 +47,7 @@ back to every core permission.
 State lives under the OS-convention app dir
 (`~/Library/Application Support/codex-with-chatgpt` on macOS), directories 0700,
 files 0600. Named-hostname preference and tunnel metadata live there too
-(`tunnels/<workspaceId>.json`) — never in the project. Only SHA-256 hashes of
+(`tunnels/<hubId>.json`) — never in the project. Only SHA-256 hashes of
 tokens are persisted — a stolen token-hash file does not yield usable bearer tokens.
 Hub records live in `hubs/<hubId>.json`; `hub-mappings/` stores checked connection
 mappings. Read grants live in `workspace-registries/<hubId>.json`, with matching
@@ -57,10 +57,19 @@ and atomic replacement; no repository configuration is written. See
 rules. `auth/<hubId>.json` stores a versioned Hub owner, client registrations
 and Hub-bound token hashes. Adoption requires a verified one-to-one mapping and
 an `authInitialized` checkpoint; conflicting pending copies are rejected without
-merging, and the legacy source is retained. Raw access/refresh tokens remain valid.
+merging, and the legacy source is retained. `authInitialized` records a provisional
+snapshot; `authHandoffFinalized` records the quiescent writer handoff. Hub startup
+requires finalization after verified legacy process exit, replacing the snapshot
+with the complete final legacy state. Finalized Hubs never import that source
+again. Current token hashes survive; rotated-away credentials stay absent.
 `runtime/<hubId>.json` identifies the running Hub; healthy mapped legacy runtimes
-are reused without copying their live state. Tunnel and endpoint storage retain
-startup-workspace keys.
+are reused without copying their live state. `tunnels/<hubId>.json` and
+`endpoints/<hubId>.json` carry versioned Hub ownership. Verified owner mapping,
+atomic copies and `tunnelInitialized`/`endpointInitialized` checkpoints prevent
+merging or re-importing stale sources. Legacy sources are retained; adoption
+performs no Cloudflare or ChatGPT mutation. An unconfigured endpoint has an
+explicit empty marker; missing initialized state fails closed. Connector binding
+requires observed ID/name/URL and a workspace currently registered to that Hub.
 
 **Storage limitation**: client registrations and token hashes are file-based rather
 than OS-keychain-based. Raw tokens are never written anywhere. Keychain integration is not implemented.

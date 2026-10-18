@@ -3,7 +3,7 @@ import type { Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { Workspace } from "../workspace/manager.js";
 import { WorkspaceRegistry } from "../workspace/registry.js";
-import { AuthStore } from "../auth/store.js";
+import { AuthStore, finalizeAuthHandoff } from "../auth/store.js";
 import { createOAuthRouter } from "../auth/oauth.js";
 import { bearerAuth } from "../auth/middleware.js";
 import { PairingManager } from "../pairing/manager.js";
@@ -18,8 +18,8 @@ import { DEFAULT_HOST, DEFAULT_PORT } from "../config/paths.js";
 import { SERVICE_NAME, VERSION } from "../version.js";
 import { writeRuntimeState, clearRuntimeState, type HubRuntimeState } from "./runtime.js";
 
-function tunnelForWorkspace(workspaceId: string, logger: Logger): TunnelProvider {
-  const binding = namedTunnelBinding(readTunnelState(workspaceId));
+function tunnelForHub(hubId: string, logger: Logger): TunnelProvider {
+  const binding = namedTunnelBinding(readTunnelState(hubId));
   if (binding) {
     return new CloudflaredNamedTunnel({
       tunnelName: binding.tunnelName,
@@ -93,9 +93,10 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
   const hubId = registry.hubId;
   registry.add(workspace.root);
 
-  const authStore = new AuthStore(hubId, { file: opts.authStoreFile });
+  finalizeAuthHandoff(hubId, workspace, { file: opts.authStoreFile });
+  const authStore = new AuthStore(hubId, { file: opts.authStoreFile, requireFinalized: true });
   const pairing = new PairingManager(hubId, { ttlMs: opts.pairingTtlMs });
-  const tunnel = opts.tunnelProvider ?? tunnelForWorkspace(workspace.id, logger);
+  const tunnel = opts.tunnelProvider ?? tunnelForHub(hubId, logger);
   const adminToken = `c2c_admin_${randomBytes(24).toString("base64url")}`;
 
   let publicBaseUrl: string | null = null;

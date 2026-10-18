@@ -4,6 +4,8 @@ import path from "node:path";
 import { z } from "zod";
 import { hubIdSchema, withHubControlPlane } from "../hub/store.js";
 import { ensureDir, getStateDir, writeSecureJson } from "../config/paths.js";
+import { assertAuthHandoffQuiescent } from "../bridge/runtime.js";
+import type { Workspace } from "../workspace/manager.js";
 
 export const SUPPORTED_SCOPES = [
   "workspace.read",
@@ -89,6 +91,52 @@ function canonical(value: unknown): string {
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 }
 
+function parseHubAuth(hubId: string, raw: unknown): PersistedAuthState | undefined {
+  try {
+    if (raw === undefined) return undefined;
+    const current = authSchema.parse(raw);
+    requireUniqueRecords(current);
+    if (current.hubId !== hubId || current.tokens.some((token) => token.hubId !== hubId)) throw new Error("Wrong owner");
+    return current;
+  } catch { throw new AuthStateError("Hub auth ownership or format is invalid."); }
+}
+
+function translateLegacyAuth(hubId: string, ownerId: string, raw: unknown): PersistedAuthState {
+  try {
+    if (raw === undefined) return { version: 1, hubId, clients: [], tokens: [] };
+    const legacy = legacySchema.parse(raw);
+    requireUniqueRecords(legacy);
+    if (legacy.tokens.some((token) => token.workspaceId !== ownerId)) throw new Error("Wrong legacy owner");
+    return { version: 1, hubId, clients: legacy.clients,
+      tokens: legacy.tokens.map(({ workspaceId: _owner, ...token }) => ({ ...token, hubId })) };
+  } catch { throw new AuthStateError("Legacy auth ownership or format is invalid."); }
+}
+
+/** Replace a provisional snapshot only after all verified auth writers have exited. */
+export function finalizeAuthHandoff(hubId: string, owner: Workspace, opts: { file?: string } = {}): void {
+  withHubControlPlane(hubId, ({ hub, authHandoffFinalized, completeAuthHandoff }) => {
+    if (hub.legacyOwnerWorkspaceId && hub.legacyOwnerWorkspaceId !== owner.id) {
+      throw new AuthStateError("Legacy owner does not match this Hub.");
+    }
+    if (authHandoffFinalized) return;
+    const file = opts.file ?? path.join(getStateDir(), "auth", `${hubId}.json`);
+    const legacyFile = path.join(getStateDir(), "auth", `${owner.id}.json`);
+    withAuthLock(file, () => withAuthLock(legacyFile, () => {
+      const current = parseHubAuth(hubId, readAuthJson(file));
+      const legacy = readAuthJson(legacyFile);
+      assertAuthHandoffQuiescent(hub, owner, legacy !== undefined);
+      if (legacy === undefined && current && (current.clients.length || current.tokens.length)) {
+        throw new AuthStateError("Legacy auth source is missing; refusing to discard a populated provisional snapshot.");
+      }
+      const expected = translateLegacyAuth(hubId, owner.id, legacy);
+      writeSecureJson(file, expected);
+      if (canonical(readAuthJson(legacyFile)) !== canonical(legacy)) throw new AuthStateError("Legacy auth changed during finalization.");
+      assertAuthHandoffQuiescent(hub, owner, legacy !== undefined);
+      completeAuthHandoff();
+    }));
+  });
+}
+
 export type VerifyTokenResult =
   | { ok: true; record: TokenRecord }
   | { ok: false; reason: "unknown" | "expired" | "revoked" | "wrong_kind" };
@@ -125,18 +173,15 @@ export class AuthStore {
 
   constructor(
     readonly hubId: string,
-    opts: { file?: string } = {}
+    opts: { file?: string; requireFinalized?: boolean } = {}
   ) {
     if (!hubIdSchema.safeParse(hubId).success) throw new AuthStateError("Auth owner must be a Hub ID.");
     this.file = opts.file ?? path.join(getStateDir(), "auth", `${hubId}.json`);
-    const data = withHubControlPlane(hubId, ({ hub, authInitialized, completeAuthAdoption }) => {
+    const data = withHubControlPlane(hubId, ({ hub, authInitialized, authHandoffFinalized, completeAuthAdoption }) => {
+      if (opts.requireFinalized && !authHandoffFinalized) throw new Error("AUTH_HANDOFF_REQUIRED: Finalize the legacy auth handoff before serving OAuth.");
       return withAuthLock(this.file, () => {
         const raw = readAuthJson(this.file);
-        let current: PersistedAuthState | undefined;
-        try {
-          if (raw !== undefined) { current = authSchema.parse(raw); requireUniqueRecords(current); }
-          if (current && (current.hubId !== hubId || current.tokens.some((token) => token.hubId !== hubId))) throw new Error("Wrong owner");
-        } catch { throw new AuthStateError("Hub auth ownership or format is invalid."); }
+        let current = parseHubAuth(hubId, raw);
         if (authInitialized) {
           if (!current && hub.legacyOwnerWorkspaceId) throw new AuthStateError("Initialized Hub auth state is missing; recovery is required.");
           if (!current) {
@@ -148,16 +193,7 @@ export class AuthStore {
         const legacyFile = path.join(getStateDir(), "auth", `${hub.legacyOwnerWorkspaceId}.json`);
         return withAuthLock(legacyFile, () => {
           const legacyRaw = readAuthJson(legacyFile);
-          let expected: PersistedAuthState = { version: 1, hubId, clients: [], tokens: [] };
-          try {
-            if (legacyRaw !== undefined) {
-              const legacy = legacySchema.parse(legacyRaw);
-              requireUniqueRecords(legacy);
-              if (legacy.tokens.some((token) => token.workspaceId !== hub.legacyOwnerWorkspaceId)) throw new Error("Wrong legacy owner");
-              expected = { version: 1, hubId, clients: legacy.clients,
-                tokens: legacy.tokens.map(({ workspaceId: _owner, ...token }) => ({ ...token, hubId })) };
-            }
-          } catch { throw new AuthStateError("Legacy auth ownership or format is invalid."); }
+          const expected = translateLegacyAuth(hubId, hub.legacyOwnerWorkspaceId!, legacyRaw);
           if (current && canonical(current) !== canonical(expected)) throw new AuthStateError("Hub and legacy auth stores conflict; merging is forbidden.");
           if (!current) writeSecureJson(this.file, expected);
           if (canonical(readAuthJson(legacyFile)) !== canonical(legacyRaw)) throw new AuthStateError("Legacy auth changed during adoption.");

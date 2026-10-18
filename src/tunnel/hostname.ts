@@ -1,25 +1,25 @@
 import { normalizeNamedTunnelHostname } from "./cloudflared-named.js";
 
-/** DNS-safe label from a workspace name. Non-ASCII names fall back to the id. */
-export function hostnameSlug(workspaceName: string, workspaceId: string): string {
-  const ascii = workspaceName
+/** DNS-safe Hub label; use an internal identity fallback only when no ASCII label exists. */
+export function hostnameSlug(displayName: string, internalId: string): string {
+  const ascii = displayName
     .normalize("NFKD")
     .replace(/[^\x00-\x7F]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 30);
-  const label = ascii || `ws-${workspaceId.slice(0, 8)}`;
+  const label = ascii || `hub-${internalId.replace(/^hub-/, "").replace(/-/g, "").slice(0, 8)}`;
   return `c2c-${label}`;
 }
 
 export function suggestedNamedHostname(
   zone: string,
-  workspaceName: string,
-  workspaceId: string
+  displayName: string,
+  internalId: string
 ): string {
   const zoneHost = normalizeNamedTunnelHostname(zone);
-  return `${hostnameSlug(workspaceName, workspaceId)}.${zoneHost}`;
+  return `${hostnameSlug(displayName, internalId)}.${zoneHost}`;
 }
 
 export function parseZoneInput(input: string): string | null {

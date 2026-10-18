@@ -1,9 +1,12 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
+import { startBridge } from "../../src/bridge/server.js";
+import { Workspace } from "../../src/workspace/manager.js";
+import { resolveHub } from "../../src/hub/store.js";
 import { findBinary } from "../../src/tunnel/detect.js";
 import {
   CloudflaredQuickTunnel,
@@ -291,8 +294,8 @@ describe("named hostname helpers", () => {
     expect(suggestedNamedHostname("Example.COM", "My App", "abcdef123456")).toBe("c2c-my-app.example.com");
   });
 
-  it("falls back to the workspace id when the name is not ASCII", () => {
-    expect(hostnameSlug("🌊", "abcdef123456")).toBe("c2c-ws-abcdef12");
+  it("uses an internal identity fallback when the Hub name has no ASCII label", () => {
+    expect(hostnameSlug("🌊", "hub-550e8400-e29b-41d4-a716-446655440000")).toBe("c2c-hub-550e8400");
   });
 
   it("parses a typed domain", () => {
@@ -324,18 +327,24 @@ ID                                   NAME          CREATED
 });
 
 describe("tunnel preference state", () => {
-  it("asks once, then remembers a quick choice", () => {
+  let hubId: string;
+  let root: string;
+  beforeEach(() => {
     stateDirs.push(isolateStateDir());
-    const unset = readTunnelState("ws1");
+    root = makeTmpDir("tunnel-owner");
+    stateDirs.push(root);
+    hubId = resolveHub({ id: new Workspace(root).id, name: "Demo" }).hubId;
+  });
+  it("asks once, then remembers a quick choice", () => {
+    const unset = readTunnelState(hubId);
     expect(needsTunnelChoice(unset)).toBe(true);
-    const saved = chooseQuickTunnel("ws1");
+    const saved = chooseQuickTunnel(hubId);
     expect(saved.preference).toBe("quick");
-    expect(needsTunnelChoice(readTunnelState("ws1"))).toBe(false);
+    expect(needsTunnelChoice(readTunnelState(hubId))).toBe(false);
     expect(isNamedTunnelReady(saved)).toBe(false);
   });
 
   it("provisions a named hostname through the account adapter and stores it outside the project", () => {
-    stateDirs.push(isolateStateDir());
     const account: CloudflaredAccount = {
       hasCert: () => true,
       login: async () => undefined,
@@ -348,21 +357,23 @@ describe("tunnel preference state", () => {
       deleteTunnel: async () => undefined,
     };
     return provisionNamedTunnel({
-      workspaceId: "abcdef123456",
-      workspaceName: "Demo",
+      hubId,
+      hubName: "Demo",
       zone: "example.com",
       account,
-    }).then((result) => {
+    }).then(async (result) => {
       expect(result.fallback).toBe(false);
       expect(result.state.preference).toBe("named");
       expect(result.state.hostname).toBe("c2c-demo.example.com");
-      expect(result.state.tunnelName).toBe("c2c-abcdef123456");
-      expect(isNamedTunnelReady(readTunnelState("abcdef123456"))).toBe(true);
+      expect(result.state.tunnelName).toBe("c2c-demo");
+      expect(isNamedTunnelReady(readTunnelState(hubId))).toBe(true);
+      const bridge = await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false });
+      try { expect(bridge.tunnel.name).toBe("cloudflare-named"); }
+      finally { await bridge.close(); }
     });
   });
 
   it("retains creation intent when the remote create outcome is uncertain", () => {
-    stateDirs.push(isolateStateDir());
     const account: CloudflaredAccount = {
       hasCert: () => true,
       login: async () => undefined,
@@ -377,14 +388,14 @@ describe("tunnel preference state", () => {
       deleteTunnel: async () => undefined,
     };
     return provisionNamedTunnel({
-      workspaceId: "ws2",
-      workspaceName: "Demo",
+      hubId,
+      hubName: "Demo",
       zone: "example.com",
       account,
     }).then((result) => {
       expect(result.ok).toBe(false);
       expect(result.fallback).toBe(false);
-      expect(result.state.pending?.tunnelName).toBe("c2c-ws2");
+      expect(result.state.pending?.tunnelName).toBe("c2c-demo");
       expect(result.error).toContain("TUNNEL_ROLLBACK_PENDING");
     });
   });

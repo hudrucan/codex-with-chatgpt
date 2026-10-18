@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { findBinary } from "./detect.js";
-import { suggestedNamedHostname } from "./hostname.js";
+import { hostnameSlug, suggestedNamedHostname } from "./hostname.js";
 import { normalizeNamedTunnelHostname } from "./cloudflared-named.js";
 import { CloudflareApi, assertDnsOwnership, type DnsRecord } from "./cloudflare-api.js";
 import { userFacingName } from "../config/naming.js";
@@ -331,16 +331,16 @@ export interface ProvisionNamedResult {
 }
 
 export async function provisionNamedTunnel(opts: {
-  workspaceId: string;
-  workspaceName: string;
+  hubId: string;
+  hubName: string;
   zone?: string;
   hostname?: string;
   tunnelName?: string;
   account?: CloudflaredAccount;
 }): Promise<ProvisionNamedResult> {
   const account = opts.account ?? new ProcessCloudflaredAccount();
-  let previous = readTunnelState(opts.workspaceId);
-  if (previous.workspaceId !== opts.workspaceId) return { ok: false, state: previous, fallback: false, error: "OWNERSHIP_CONFLICT: Saved tunnel belongs to another workspace." };
+  let previous = readTunnelState(opts.hubId);
+  if (previous.hubId !== opts.hubId) return { ok: false, state: previous, fallback: false, error: "OWNERSHIP_CONFLICT: Saved tunnel belongs to another Hub." };
   if (previous.pending) {
     try {
       previous = await rollbackNamedTunnel(previous, account);
@@ -353,9 +353,9 @@ export async function provisionNamedTunnel(opts: {
   let zone: string;
   try {
     zone = normalizeNamedTunnelHostname(opts.zone ?? previous.zone ?? "");
-    tunnelName = normalizeTunnelName(opts.tunnelName ?? previous.tunnelName ?? `c2c-${opts.workspaceId}`);
+    tunnelName = normalizeTunnelName(opts.tunnelName ?? previous.tunnelName ?? hostnameSlug(opts.hubName, opts.hubId));
     hostname = normalizeNamedTunnelHostname(
-      opts.hostname ?? previous.hostname ?? suggestedNamedHostname(zone, opts.workspaceName, opts.workspaceId)
+      opts.hostname ?? previous.hostname ?? suggestedNamedHostname(zone, opts.hubName, opts.hubId)
     );
     if (hostname !== zone && !hostname.endsWith(`.${zone}`)) {
       throw new Error(`INVALID_HOSTNAME: "${hostname}" must belong to "${zone}".`);
@@ -371,7 +371,7 @@ export async function provisionNamedTunnel(opts: {
     const owned = previous.tunnelId ? tunnels.find((tunnel) => tunnel.id === previous.tunnelId) : undefined;
     const existing = tunnels.find((tunnel) => tunnel.name === tunnelName);
     if (existing && existing.id !== previous.tunnelId) {
-      throw new TunnelNamingConflict(`Tunnel "${tunnelName}" exists but does not match this workspace's saved Tunnel ID.`);
+      throw new TunnelNamingConflict(`Tunnel "${tunnelName}" exists but does not match this Hub's saved Tunnel ID.`);
     }
     if (previous.tunnelId && (!owned || owned.name !== previous.tunnelName)) {
       throw new TunnelNamingConflict("Saved tunnel is missing or no longer matches its saved name. Restore the existing resource before retrying.");
@@ -398,7 +398,7 @@ export async function provisionNamedTunnel(opts: {
     if (!owned || changedHost) await account.routeDns(tunnel.id, hostname);
     if (changedHost) await account.deleteDns(previous.zone!, previous.hostname!, tunnel.id);
     const state = writeTunnelState({
-      workspaceId: opts.workspaceId, preference: "named", askedAt: new Date().toISOString(),
+      hubId: opts.hubId, preference: "named", askedAt: new Date().toISOString(),
       provider: "cloudflare-named", tunnelName, tunnelId: tunnel.id, hostname, zone,
       configuredAt: new Date().toISOString(),
     });
@@ -407,20 +407,23 @@ export async function provisionNamedTunnel(opts: {
     if (staged) {
       try { await rollbackNamedTunnel(staged, account); }
       catch (rollbackError) {
-        return { ok: false, state: readTunnelState(opts.workspaceId), fallback: false,
+        return { ok: false, state: readTunnelState(opts.hubId), fallback: false,
           error: `TUNNEL_ROLLBACK_PENDING: ${(error as Error).message}; ${(rollbackError as Error).message}` };
       }
     }
     if (staged || error instanceof TunnelNamingConflict || opts.tunnelName !== undefined || opts.hostname !== undefined || previous.tunnelName) {
       return { ok: false, state: previous, fallback: false, error: (error as Error).message };
     }
-    return fallbackState(opts.workspaceId, "provision_failed", (error as Error).message);
+    return fallbackState(opts.hubId, "provision_failed", (error as Error).message);
   }
 }
 
 /** Retry rollback before accepting another provisioning request. Never forget a
  * partially completed remote operation, even when cleanup also fails. */
 export async function rollbackNamedTunnel(state: TunnelState, account: CloudflaredAccount): Promise<TunnelState> {
+  if (JSON.stringify(readTunnelState(state.hubId)) !== JSON.stringify(state)) {
+    throw new Error("TUNNEL_STATE_CONFLICT: Rollback must match the owning Hub's persisted journal.");
+  }
   const pending = state.pending;
   if (!pending) return state;
   if (!pending.tunnelId) throw new Error(`Creation outcome for "${pending.tunnelName}" is uncertain; verify Cloudflare ownership manually before recovery.`);
@@ -442,12 +445,12 @@ export async function rollbackNamedTunnel(state: TunnelState, account: Cloudflar
   return writeTunnelState(previous);
 }
 
-export function chooseQuickTunnel(workspaceId: string, fallbackReason?: string): TunnelState {
-  const previous = readTunnelState(workspaceId);
+export function chooseQuickTunnel(hubId: string, fallbackReason?: string): TunnelState {
+  const previous = readTunnelState(hubId);
   if (previous.pending) throw new Error("TUNNEL_ROLLBACK_PENDING: Resolve the pending operation before switching connection type.");
   return writeTunnelState({
     ...previous,
-    workspaceId,
+    hubId,
     preference: "quick",
     askedAt: new Date().toISOString(),
     provider: "cloudflare-quick",
@@ -455,8 +458,8 @@ export function chooseQuickTunnel(workspaceId: string, fallbackReason?: string):
   });
 }
 
-function fallbackState(workspaceId: string, reason: string, error: string): ProvisionNamedResult {
-  const state = chooseQuickTunnel(workspaceId, reason);
+function fallbackState(hubId: string, reason: string, error: string): ProvisionNamedResult {
+  const state = chooseQuickTunnel(hubId, reason);
   return {
     ok: true,
     state,

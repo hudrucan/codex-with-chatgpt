@@ -5,9 +5,10 @@ import { Workspace } from "../workspace/manager.js";
 import { AuthStore } from "../auth/store.js";
 import { adminFetch } from "../process/daemon.js";
 import { findBridgeObservation } from "../bridge/runtime.js";
-import { boundConnector, readLastEndpoint, writeLastEndpoint, connectorReconciliation, endpointFile, connectorNameFor } from "../config/endpoint.js";
+import { boundConnector, readLastEndpoint as readHubEndpoint, writeLastEndpoint, connectorReconciliation,
+  readLegacyEndpoint as readLastEndpoint, legacyEndpointFile as endpointFile, connectorNameFor } from "../config/endpoint.js";
 import { ensureDir, getStateDir, readJsonIfExists, writeSecureJson } from "../config/paths.js";
-import { readTunnelState, tunnelStateFile } from "../tunnel/state.js";
+import { readLegacyTunnelState as readTunnelState, legacyTunnelStateFile as tunnelStateFile } from "../tunnel/state.js";
 import { ProcessCloudflaredAccount, type CloudflaredAccount } from "../tunnel/named-provision.js";
 import { assertDnsOwnership } from "../tunnel/cloudflare-api.js";
 
@@ -29,13 +30,13 @@ export async function disconnectWorkspace(root: string, opts: { remember?: boole
   const workspace = new Workspace(root);
   const hub = resolveHub(workspace);
   const observed = await findBridgeObservation(hub.hubId);
-  const endpoint = readLastEndpoint(workspace.id);
-  if (endpoint && endpoint.workspaceId !== workspace.id) throw new Error("OWNERSHIP_CONFLICT: Endpoint belongs to another workspace.");
+  const endpoint = opts.remember === false ? null : readHubEndpoint(hub.hubId);
+  if (endpoint && endpoint.hubId !== hub.hubId) throw new Error("OWNERSHIP_CONFLICT: Endpoint belongs to another Hub.");
   const disconnected = endpoint ?? {
-    workspaceId: workspace.id, port: observed.runtime?.port ?? 0,
+    hubId: hub.hubId, port: observed.runtime?.port ?? 0,
     publicUrl: observed.runtime?.publicUrl ?? null,
     mcpUrl: observed.runtime?.publicUrl ? `${observed.runtime.publicUrl}/mcp` : null,
-    desiredConnectorName: connectorNameFor({ workspaceId: workspace.id, workspaceName: workspace.name, hadEndpointBefore: false }),
+    desiredConnectorName: connectorNameFor({ workspaceId: hub.hubId, workspaceName: hub.displayName, hadEndpointBefore: false }),
     bindingVersion: 1 as const, boundMcpUrl: null,
   };
   if (observed.state === "unknown") throw new Error("LIFECYCLE_BUSY: Cannot verify the running bridge; access state was retained.");

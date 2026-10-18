@@ -25,7 +25,7 @@ The bridge automatically registers its canonical startup root when it starts.
 Registration changes take effect on the next tool call. Removing the startup
 root revokes its grant too; starting that bridge again registers the root again.
 Disconnect retains registrations. Grants do not transfer ownership of tokens,
-tunnels, runtime state or connector bindings; those belong to the startup owner.
+tunnels, runtime state or connector bindings; those belong to the configured Hub.
 See [lifecycle](lifecycle.md) for connection operations.
 
 ## Identity and aliases
@@ -94,7 +94,7 @@ see [security](security.md).
 ## Registry storage
 
 Hub identity lives in `hubs/<hubId>.json` in the external C2C state directory.
-`hubId` is an opaque random UUID with a `hub_` prefix, independent of repo paths
+`hubId` is an opaque random UUID with a `hub-` prefix, independent of repo paths
 and display names. The initial display name uses the configured workspace's name;
 resolving that connection again preserves the Hub's identity and display name.
 The optional `legacyOwnerWorkspaceId` links an existing connection to its Hub.
@@ -102,7 +102,7 @@ The optional `legacyOwnerWorkspaceId` links an existing connection to its Hub.
 ```json
 {
   "version": 1,
-  "hubId": "hub_550e8400-e29b-41d4-a716-446655440000",
+  "hubId": "hub-550e8400-e29b-41d4-a716-446655440000",
   "displayName": "My Hub",
   "createdAt": "2026-10-18T08:00:00.000Z",
   "legacyOwnerWorkspaceId": "abcdef012345"
@@ -116,7 +116,7 @@ mapping and whether registry initialization completed:
 {
   "version": 1,
   "legacyOwnerWorkspaceId": "abcdef012345",
-  "hubId": "hub_550e8400-e29b-41d4-a716-446655440000",
+  "hubId": "hub-550e8400-e29b-41d4-a716-446655440000",
   "registryInitialized": true
 }
 ```
@@ -129,7 +129,7 @@ selection uses `-w`, and MCP selectors remain workspace aliases or IDs.
 ```json
 {
   "version": 2,
-  "hubId": "hub_550e8400-e29b-41d4-a716-446655440000",
+  "hubId": "hub-550e8400-e29b-41d4-a716-446655440000",
   "workspaces": [
     { "workspaceId": "0123456789ab", "alias": "backend", "root": "/canonical/local/repo" }
   ]
@@ -147,7 +147,8 @@ resume only when the destination matches the verified source.
 Registries from other owners and the unowned `workspace-registry.json` are never
 adopted. Missing Hub targets, malformed state, duplicate owner claims and
 conflicting mappings deny access. Hub metadata and registration do not change
-OAuth scopes, auth/runtime/tunnel/endpoint storage keys or connector bindings.
+OAuth scopes or remote connector bindings. Auth, runtime, tunnel and endpoint
+state are keyed by Hub ID.
 Resource cleanup remains keyed by the configured startup workspace.
 
 Registry writes use an exclusive Hub-local `.lock` file and atomic replacement;

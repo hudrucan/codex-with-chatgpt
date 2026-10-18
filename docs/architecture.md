@@ -42,10 +42,11 @@ for selectors and schemas, and [security](security.md) for authorization boundar
 
 A random, persistent `hubId` identifies the Hub independently of repositories.
 The startup root's `workspaceId` resolves that Hub through a checked local mapping.
-OAuth clients/tokens, pairing and runtime discovery use the Hub ID. A verified
+OAuth clients/tokens, pairing, runtime discovery, tunnel state and endpoint/connector
+bindings use the Hub ID. A verified
 live legacy bridge is reused in place until it exits; its runtime is not copied.
-Tunnel/endpoint and resource lifecycle ownership still use the startup workspace
-key. Registry and auth adoption do not reprovision those resources. The listener
+Resource cleanup remains keyed by the startup workspace. Local state adoption
+preserves remote resources and verified bindings without reprovisioning them. The listener
 prefers port 48765 and falls back to a free port on collision. Runtime discovery
 distinguishes a matching healthy bridge, a stopped process and uncertain state
 before automatic repair.
@@ -55,7 +56,8 @@ before automatic repair.
 Quick Tunnel addresses may change on restart. Named Tunnel UUID, name, zone and
 hostname are persisted outside the repo. Desired endpoint settings and the last
 verified ChatGPT binding are stored separately. Doctor keeps reconciliation
-pending until actual MCP verification and `connector bind` acknowledge the target.
+pending until actual MCP verification from a workspace registered to the Hub and
+`connector bind` acknowledge the exact connector ID, name and endpoint.
 See [lifecycle](lifecycle.md) for naming, reconnect and disconnect operations.
 
 ## Development checks

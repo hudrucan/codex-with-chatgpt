@@ -1,17 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveHub } from "../../src/hub/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { saveWorkspaceDisplayName, workspaceRegistrationFile } from "../../src/config/naming.js";
-import { connectorNameFor, persistWorkspaceEndpoint, readLastEndpoint, writeLastEndpoint } from "../../src/config/endpoint.js";
+import { connectorNameFor, persistHubEndpoint, readLastEndpoint, writeLastEndpoint } from "../../src/config/endpoint.js";
 import { normalizeTunnelName, provisionNamedTunnel, TunnelNamingConflict, type CloudflaredAccount, type ListedTunnel } from "../../src/tunnel/named-provision.js";
 import { readTunnelState, writeTunnelState } from "../../src/tunnel/state.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 describe("runtime naming", () => {
   const dirs: string[] = [];
+  let hubId: string;
   const previousStateDir = process.env.C2C_STATE_DIR;
-  beforeEach(() => { dirs.push(isolateStateDir()); });
+  beforeEach(() => { dirs.push(isolateStateDir()); hubId = resolveHub({ id: "abcdef123456", name: "Demo" }).hubId; });
   afterEach(() => {
     for (const dir of dirs.splice(0)) cleanup(dir);
     if (previousStateDir === undefined) delete process.env.C2C_STATE_DIR;
@@ -42,7 +44,7 @@ describe("runtime naming", () => {
   it("honors an explicit tunnel name and hostname without a hash suffix", async () => {
     const account = accountFixture();
     const result = await provisionNamedTunnel({
-      workspaceId: "abcdef123456", workspaceName: "Desk C2C Hub", zone: "example.com",
+      hubId, hubName: "Desk C2C Hub", zone: "example.com",
       tunnelName: "desk-c2c", hostname: "code.example.com", account,
     });
     expect(result).toMatchObject({ ok: true, fallback: false, state: { tunnelName: "desk-c2c", hostname: "code.example.com" } });
@@ -50,20 +52,20 @@ describe("runtime naming", () => {
     expect(account.routeDns).toHaveBeenCalledWith(result.state.tunnelId, "code.example.com");
   });
 
-  it("keeps legacy naming when no explicit or persisted name exists", async () => {
+  it("suggests tunnel names from the Hub display name without exposing its ID", async () => {
     const result = await provisionNamedTunnel({
-      workspaceId: "abcdef123456", workspaceName: "Demo", zone: "example.com", account: accountFixture(),
+      hubId, hubName: "Demo", zone: "example.com", account: accountFixture(),
     });
-    expect(result.state).toMatchObject({ tunnelName: "c2c-abcdef123456", hostname: "c2c-demo.example.com" });
+    expect(result.state).toMatchObject({ tunnelName: "c2c-demo", hostname: "c2c-demo.example.com" });
   });
 
   it("reuses persisted names on rerun even after the workspace display name changes", async () => {
     const account = accountFixture();
     const first = await provisionNamedTunnel({
-      workspaceId: "ws", workspaceName: "Original", zone: "example.com",
+      hubId, hubName: "Original", zone: "example.com",
       tunnelName: "desk-c2c", hostname: "code.example.com", account,
     });
-    const rerun = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Renamed Project", account });
+    const rerun = await provisionNamedTunnel({ hubId, hubName: "Renamed Project", account });
     expect(rerun.ok).toBe(true);
     expect(rerun.state).toMatchObject({
       tunnelName: first.state.tunnelName, tunnelId: first.state.tunnelId,
@@ -75,67 +77,67 @@ describe("runtime naming", () => {
 
   it("allows explicit names to override saved values without inventing a suffix", async () => {
     const account = accountFixture();
-    await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", zone: "example.com", account });
+    await provisionNamedTunnel({ hubId, hubName: "Demo", zone: "example.com", account });
     const result = await provisionNamedTunnel({
-      workspaceId: "ws", workspaceName: "Demo", tunnelName: "chosen-tunnel", hostname: "chosen.example.com", account,
+      hubId, hubName: "Demo", tunnelName: "chosen-tunnel", hostname: "chosen.example.com", account,
     });
     expect(result.state).toMatchObject({ tunnelName: "chosen-tunnel", hostname: "chosen.example.com" });
   });
 
   it("rejects an existing name without a matching workspace binding and preserves state", async () => {
     const account = accountFixture([{ id: "foreign-resource", name: "desk-c2c" }]);
-    const previous = readTunnelState("ws");
+    const previous = readTunnelState(hubId);
     const result = await provisionNamedTunnel({
-      workspaceId: "ws", workspaceName: "Demo", zone: "example.com", tunnelName: "desk-c2c", account,
+      hubId, hubName: "Demo", zone: "example.com", tunnelName: "desk-c2c", account,
     });
     expect(result).toMatchObject({ ok: false, fallback: false, error: expect.stringContaining("TUNNEL_NAMING_CONFLICT") });
     expect(account.createTunnel).not.toHaveBeenCalled();
     expect(account.routeDns).not.toHaveBeenCalled();
-    expect(readTunnelState("ws")).toEqual(previous);
+    expect(readTunnelState(hubId)).toEqual(previous);
   });
 
   it("rejects the same name with a different Cloudflare resource ID", async () => {
     const previous = writeTunnelState({
-      workspaceId: "ws", preference: "named", tunnelName: "desk-c2c", tunnelId: "expected-resource",
+      hubId, preference: "named", tunnelName: "desk-c2c", tunnelId: "expected-resource",
       hostname: "code.example.com", zone: "example.com",
     });
     const result = await provisionNamedTunnel({
-      workspaceId: "ws", workspaceName: "Demo", account: accountFixture([{ id: "foreign-resource", name: "desk-c2c" }]),
+      hubId, hubName: "Demo", account: accountFixture([{ id: "foreign-resource", name: "desk-c2c" }]),
     });
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/saved Tunnel ID|Saved tunnel/);
-    expect(readTunnelState("ws")).toEqual(previous);
+    expect(readTunnelState(hubId)).toEqual(previous);
   });
 
   it("does not erase persisted names or fall back when repair provisioning fails", async () => {
     const account = accountFixture();
     await provisionNamedTunnel({
-      workspaceId: "ws", workspaceName: "Demo", zone: "example.com", tunnelName: "desk-c2c", hostname: "code.example.com", account,
+      hubId, hubName: "Demo", zone: "example.com", tunnelName: "desk-c2c", hostname: "code.example.com", account,
     });
-    const previous = readTunnelState("ws");
+    const previous = readTunnelState(hubId);
     account.listTunnels.mockRejectedValueOnce(new Error("Account unavailable"));
-    const result = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", account });
+    const result = await provisionNamedTunnel({ hubId, hubName: "Demo", account });
     expect(result).toMatchObject({ ok: false, fallback: false, error: "Account unavailable" });
-    expect(readTunnelState("ws")).toEqual(previous);
+    expect(readTunnelState(hubId)).toEqual(previous);
   });
 
   it("reports DNS conflicts instead of claiming a chosen hostname was applied", async () => {
     const account = accountFixture();
     account.routeDns.mockRejectedValueOnce(new TunnelNamingConflict("Hostname already has a different route"));
     const result = await provisionNamedTunnel({
-      workspaceId: "ws", workspaceName: "Demo", zone: "example.com", tunnelName: "desk-c2c", hostname: "code.example.com", account,
+      hubId, hubName: "Demo", zone: "example.com", tunnelName: "desk-c2c", hostname: "code.example.com", account,
     });
     expect(result).toMatchObject({ ok: false, fallback: false, error: expect.stringContaining("Hostname") });
-    expect(readTunnelState("ws").preference).toBe("unset");
+    expect(readTunnelState(hubId).preference).toBe("unset");
   });
 
   it("renames in place and rolls back both names when routing fails", async () => {
     const account = accountFixture();
-    const first = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", zone: "example.com", account });
+    const first = await provisionNamedTunnel({ hubId, hubName: "Demo", zone: "example.com", account });
     account.routeDns.mockRejectedValueOnce(new Error("DNS failed"));
-    const failed = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", tunnelName: "renamed", hostname: "new.example.com", account });
+    const failed = await provisionNamedTunnel({ hubId, hubName: "Demo", tunnelName: "renamed", hostname: "new.example.com", account });
     expect(failed.ok).toBe(false);
-    expect(readTunnelState("ws")).toEqual(first.state);
+    expect(readTunnelState(hubId)).toEqual(first.state);
     expect(await account.listTunnels()).toEqual([{ id: first.state.tunnelId, name: first.state.tunnelName }]);
     expect(account.createTunnel).toHaveBeenCalledTimes(1);
     expect(await account.dns("example.com", "new.example.com")).toBeNull();
@@ -143,8 +145,8 @@ describe("runtime naming", () => {
 
   it("cleans the old hostname only after routing the new one", async () => {
     const account = accountFixture();
-    const first = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", zone: "example.com", account });
-    const next = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", hostname: "new.example.com", account });
+    const first = await provisionNamedTunnel({ hubId, hubName: "Demo", zone: "example.com", account });
+    const next = await provisionNamedTunnel({ hubId, hubName: "Demo", hostname: "new.example.com", account });
     expect(next.ok).toBe(true);
     expect(next.state.tunnelId).toBe(first.state.tunnelId);
     expect(account.deleteDns).toHaveBeenCalledWith("example.com", first.state.hostname, first.state.tunnelId);
@@ -156,24 +158,24 @@ describe("runtime naming", () => {
     const account = accountFixture();
     account.routeDns.mockRejectedValueOnce(new Error("DNS timed out"));
     account.deleteDns.mockRejectedValueOnce(new Error("cleanup offline"));
-    const failed = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", zone: "example.com", tunnelName: "chosen", account });
+    const failed = await provisionNamedTunnel({ hubId, hubName: "Demo", zone: "example.com", tunnelName: "chosen", account });
     expect(failed.error).toContain("TUNNEL_ROLLBACK_PENDING");
-    expect(readTunnelState("ws").pending?.tunnelId).toBeTruthy();
-    const retry = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", zone: "example.com", tunnelName: "chosen", account });
+    expect(readTunnelState(hubId).pending?.tunnelId).toBeTruthy();
+    const retry = await provisionNamedTunnel({ hubId, hubName: "Demo", zone: "example.com", tunnelName: "chosen", account });
     expect(retry.ok).toBe(true);
     expect(account.deleteTunnel).toHaveBeenCalledTimes(1);
-    expect(readTunnelState("ws").pending).toBeUndefined();
+    expect(readTunnelState(hubId).pending).toBeUndefined();
     expect(await account.listTunnels()).toHaveLength(1);
   });
 
   it("rolls back a partially deleted old DNS route when cleanup reports failure", async () => {
     const account = accountFixture();
-    const first = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", zone: "example.com", account });
+    const first = await provisionNamedTunnel({ hubId, hubName: "Demo", zone: "example.com", account });
     const remove = account.deleteDns.getMockImplementation()!;
     account.deleteDns.mockImplementationOnce(async (...args) => { await remove(...args); throw new Error("delete response lost"); });
-    const next = await provisionNamedTunnel({ workspaceId: "ws", workspaceName: "Demo", hostname: "new.example.com", account });
+    const next = await provisionNamedTunnel({ hubId, hubName: "Demo", hostname: "new.example.com", account });
     expect(next.ok).toBe(false);
-    expect(readTunnelState("ws")).toEqual(first.state);
+    expect(readTunnelState(hubId)).toEqual(first.state);
     expect(await account.dns("example.com", first.state.hostname!)).not.toBeNull();
     expect(await account.dns("example.com", "new.example.com")).toBeNull();
   });
@@ -182,22 +184,23 @@ describe("runtime naming", () => {
     for (const name of [" ", "bad\nname", "--other-option", "a".repeat(129)]) {
       expect(() => normalizeTunnelName(name)).toThrow(/INVALID_NAME/);
     }
-    expect(() => connectorNameFor({ workspaceId: "ws", workspaceName: "Demo", hadEndpointBefore: false, explicitName: " " })).toThrow(/INVALID_NAME/);
+    expect(() => connectorNameFor({ workspaceId: hubId, workspaceName: "Demo", hadEndpointBefore: false, explicitName: " " })).toThrow(/INVALID_NAME/);
   });
 
   it("persists the connector name across local setup, reruns, display changes and endpoint repair", () => {
-    const endpoint = { workspaceId: "ws", workspaceName: "Demo", port: 1234, publicUrl: null, mcpUrl: null };
-    expect(persistWorkspaceEndpoint({ ...endpoint, connectorName: "Desk C2C Hub" })).toBe("Desk C2C Hub");
-    expect(persistWorkspaceEndpoint({ ...endpoint, workspaceName: "Changed" })).toBe("Desk C2C Hub");
-    expect(persistWorkspaceEndpoint({ ...endpoint, publicUrl: "https://new.example.com", mcpUrl: "https://new.example.com/mcp" })).toBe("Desk C2C Hub");
-    expect(readLastEndpoint("ws")?.desiredConnectorName).toBe("Desk C2C Hub");
-    expect(persistWorkspaceEndpoint({ ...endpoint, connectorName: "Explicit Replacement" })).toBe("Explicit Replacement");
+    const endpoint = { hubId, hubName: "Demo", port: 1234, publicUrl: null, mcpUrl: null };
+    expect(persistHubEndpoint({ ...endpoint, connectorName: "Desk C2C Hub" })).toBe("Desk C2C Hub");
+    expect(persistHubEndpoint({ ...endpoint, hubName: "Changed" })).toBe("Desk C2C Hub");
+    expect(persistHubEndpoint({ ...endpoint, publicUrl: "https://new.example.com", mcpUrl: "https://new.example.com/mcp" })).toBe("Desk C2C Hub");
+    expect(readLastEndpoint(hubId)?.desiredConnectorName).toBe("Desk C2C Hub");
+    expect(persistHubEndpoint({ ...endpoint, connectorName: "Explicit Replacement" })).toBe("Explicit Replacement");
   });
 
   it("does not rename legacy connectors whose state predates the name field", () => {
-    const endpoint = { workspaceId: "ws", workspaceName: "Demo", port: 1234, publicUrl: null, mcpUrl: null };
-    writeLastEndpoint(endpoint);
-    expect(persistWorkspaceEndpoint(endpoint)).toBe("Codex with ChatGPT");
+    const endpoint = { hubId, hubName: "Demo", port: 1234, publicUrl: null, mcpUrl: null };
+    const { hubName: _name, ...saved } = endpoint;
+    writeLastEndpoint(saved);
+    expect(persistHubEndpoint(endpoint)).toBe("Codex with ChatGPT");
   });
 
   it("does not create .c2c.json when saving a local display name", () => {

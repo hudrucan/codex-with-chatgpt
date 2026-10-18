@@ -3,6 +3,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hubFile, hubMappingFile, resolveHub } from "../../src/hub/store.js";
+import { readTunnelState, tunnelStateFile } from "../../src/tunnel/state.js";
+import { readLastEndpoint, endpointFile } from "../../src/config/endpoint.js";
+import { ProcessCloudflaredAccount } from "../../src/tunnel/named-provision.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
@@ -18,7 +21,7 @@ describe("persistent Hub identity", () => {
   it("creates an opaque stable identity and deterministic owner mapping outside the repo", () => {
     const workspace = new Workspace(root);
     const first = resolveHub(workspace);
-    expect(first).toEqual({ version: 1, hubId: expect.stringMatching(/^hub_[a-f0-9-]{36}$/),
+    expect(first).toEqual({ version: 1, hubId: expect.stringMatching(/^hub-[a-f0-9-]{36}$/),
       displayName: workspace.name, createdAt: expect.any(String), legacyOwnerWorkspaceId: workspace.id });
     expect(new Date(first.createdAt).toISOString()).toBe(first.createdAt);
     expect(first.hubId).not.toContain(workspace.id);
@@ -37,7 +40,7 @@ describe("persistent Hub identity", () => {
   });
 
   it("accepts independent Hub records without a legacy owner but does not auto-adopt them", () => {
-    const id = `hub_${randomUUID()}`;
+    const id = `hub-${randomUUID()}`;
     write(state, `hubs/${id}.json`, JSON.stringify({ version: 1, hubId: id, displayName: "Independent", createdAt: new Date().toISOString() }));
     expect(resolveHub(new Workspace(root)).hubId).not.toBe(id);
   });
@@ -58,7 +61,7 @@ describe("persistent Hub identity", () => {
     expect(fs.readdirSync(path.join(state, "hubs"))).toEqual(hubNames);
   });
 
-  it.each(["malformed mapping", "malformed Hub", "wrong filename", "missing hub", "wrong owner", "duplicate claim", "duplicate mapping"])(
+  it.each(["malformed mapping", "malformed Hub", "old prefix", "wrong filename", "missing hub", "wrong owner", "duplicate claim", "duplicate mapping"])(
     "fails closed on %s state without creating another Hub",
     (kind) => {
       const workspace = new Workspace(root);
@@ -66,11 +69,12 @@ describe("persistent Hub identity", () => {
       const foreign = new Workspace(other);
       if (kind === "malformed mapping") fs.writeFileSync(hubMappingFile(workspace.id), "{");
       if (kind === "malformed Hub") fs.writeFileSync(hubFile(hub.hubId), "{");
-      if (kind === "wrong filename") write(state, `hubs/hub_invalid.json`, JSON.stringify(hub));
+      if (kind === "old prefix") fs.writeFileSync(hubFile(hub.hubId), JSON.stringify({ ...hub, hubId: hub.hubId.replace("hub-", "hub_") }));
+      if (kind === "wrong filename") write(state, `hubs/hub-invalid.json`, JSON.stringify(hub));
       if (kind === "missing hub") fs.unlinkSync(hubFile(hub.hubId));
       if (kind === "wrong owner") fs.writeFileSync(hubFile(hub.hubId), JSON.stringify({ ...hub, legacyOwnerWorkspaceId: foreign.id }));
       if (kind === "duplicate claim") {
-        const id = `hub_${randomUUID()}`;
+        const id = `hub-${randomUUID()}`;
         write(state, `hubs/${id}.json`, JSON.stringify({ ...hub, hubId: id }));
       }
       if (kind === "duplicate mapping") write(state, `hub-mappings/${foreign.id}.json`, JSON.stringify({ ...mapping(workspace.id), legacyOwnerWorkspaceId: foreign.id }));
@@ -91,5 +95,98 @@ describe("persistent Hub identity", () => {
     write(state, "hub-mappings/.lock", "");
     expect(() => resolveHub(new Workspace(root))).toThrow(/HUB_STATE_BUSY/);
     expect(fs.existsSync(path.join(state, "hubs"))).toBe(false);
+  });
+});
+
+function resourceFixture(resource: "tunnel" | "endpoint", owner: Workspace) {
+  const fields = resource === "tunnel" ? {
+    preference: "named", provider: "cloudflare-named", askedAt: "2026-10-01T00:00:00.000Z",
+    tunnelName: `existing-${owner.id}`, tunnelId: "11111111-1111-4111-8111-111111111111",
+    hostname: `${owner.id}.example.com`, zone: "example.com", configuredAt: "2026-10-01T00:00:00.000Z",
+    fallbackReason: "previous-fallback", pending: { tunnelId: "22222222-2222-4222-8222-222222222222",
+      tunnelName: "pending", hostname: "pending.example.com", zone: "example.com", created: true },
+  } : {
+    port: 1234, publicUrl: `https://${owner.id}.example.com`, mcpUrl: `https://${owner.id}.example.com/mcp`,
+    desiredConnectorName: "Desired name", connectorName: "Verified name", connectorId: `plugin_${owner.id}`,
+    boundMcpUrl: "https://bound.example.com/mcp", bindingVersion: 1, disconnected: true, savedAt: "2026-10-01T00:00:00.000Z",
+  };
+  const contents = JSON.stringify({ workspaceId: owner.id, ...fields });
+  const source = write(state, `${resource}s/${owner.id}.json`, contents);
+  return { fields, source, contents,
+    file: (id: string) => resource === "tunnel" ? tunnelStateFile(id) : endpointFile(id),
+    read: (id: string) => resource === "tunnel" ? readTunnelState(id) : readLastEndpoint(id),
+  };
+}
+
+describe.each(["tunnel", "endpoint"] as const)("Hub-owned %s adoption", (resource) => {
+  it("preserves the complete legacy binding and journal without remote mutations", () => {
+    const owner = new Workspace(root), hub = resolveHub(owner);
+    const legacy = resourceFixture(resource, owner);
+    const mutations = ["login", "createTunnel", "routeDns", "deleteDns", "renameTunnel", "deleteTunnel"] as const;
+    const spies = mutations.map((name) => vi.spyOn(ProcessCloudflaredAccount.prototype, name).mockRejectedValue(new Error("Unexpected remote mutation")));
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected remote request"));
+    expect(legacy.read(hub.hubId)).toEqual({ version: 1, hubId: hub.hubId, ...legacy.fields });
+    expect(mapping(owner.id)[`${resource}Initialized`]).toBe(true);
+    expect(fs.readFileSync(legacy.source, "utf8")).toBe(legacy.contents);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("retries a copied state after checkpoint failure and never reimports stale legacy state", () => {
+    const owner = new Workspace(root), hub = resolveHub(owner);
+    const legacy = resourceFixture(resource, owner);
+    const original = fs.renameSync;
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to) === hubMappingFile(owner.id)) throw new Error("checkpoint interrupted");
+      return original(from, to);
+    });
+    expect(() => legacy.read(hub.hubId)).toThrow(/checkpoint interrupted/);
+    expect(mapping(owner.id)[`${resource}Initialized`]).not.toBe(true);
+    expect(fs.existsSync(legacy.file(hub.hubId))).toBe(true);
+    rename.mockRestore();
+    const adopted = legacy.read(hub.hubId);
+    expect(adopted).toEqual({ version: 1, hubId: hub.hubId, ...legacy.fields });
+    expect(mapping(owner.id)[`${resource}Initialized`]).toBe(true);
+    fs.writeFileSync(legacy.source, "{stale legacy state");
+    expect(legacy.read(hub.hubId)).toEqual(adopted);
+    fs.unlinkSync(legacy.file(hub.hubId));
+    expect(() => legacy.read(hub.hubId)).toThrow(/STATE_CONFLICT/);
+    expect(fs.existsSync(legacy.file(hub.hubId))).toBe(false);
+  });
+
+  it("refuses conflicting pending state without merging or changing either file", () => {
+    const owner = new Workspace(root), hub = resolveHub(owner);
+    const legacy = resourceFixture(resource, owner);
+    const fields = resource === "tunnel" ? { ...legacy.fields, tunnelName: "different-tunnel" } : { ...legacy.fields, connectorId: "different_connector" };
+    const contents = JSON.stringify({ version: 1, hubId: hub.hubId, ...fields });
+    write(state, `${resource}s/${hub.hubId}.json`, contents);
+    expect(() => legacy.read(hub.hubId)).toThrow(/STATE_CONFLICT/);
+    expect(fs.readFileSync(legacy.file(hub.hubId), "utf8")).toBe(contents);
+    expect(fs.readFileSync(legacy.source, "utf8")).toBe(legacy.contents);
+    expect(mapping(owner.id)[`${resource}Initialized`]).not.toBe(true);
+  });
+
+  it("keeps two owners isolated and rejects a Hub file copied from another owner", () => {
+    const a = new Workspace(root), b = new Workspace(other);
+    const hubA = resolveHub(a), hubB = resolveHub(b);
+    const legacyA = resourceFixture(resource, a), legacyB = resourceFixture(resource, b);
+    expect(legacyA.read(hubA.hubId)).toEqual({ version: 1, hubId: hubA.hubId, ...legacyA.fields });
+    const savedB = legacyB.read(hubB.hubId);
+    expect(savedB).toEqual({ version: 1, hubId: hubB.hubId, ...legacyB.fields });
+    fs.copyFileSync(legacyB.file(hubB.hubId), legacyA.file(hubA.hubId));
+    const before = fs.readFileSync(legacyA.file(hubA.hubId), "utf8");
+    expect(() => legacyA.read(hubA.hubId)).toThrow(/STATE_CONFLICT/);
+    expect(fs.readFileSync(legacyA.file(hubA.hubId), "utf8")).toBe(before);
+    expect(legacyB.read(hubB.hubId)).toEqual(savedB);
+  });
+
+  it.each(["foreign owner", "malformed"])("rejects %s legacy state before creating Hub state", (kind) => {
+    const owner = new Workspace(root), hub = resolveHub(owner);
+    const legacy = resourceFixture(resource, owner);
+    const contents = kind === "malformed" ? "{" : JSON.stringify({ ...legacy.fields, workspaceId: new Workspace(other).id });
+    fs.writeFileSync(legacy.source, contents);
+    expect(() => legacy.read(hub.hubId)).toThrow(/STATE_CONFLICT/);
+    expect(fs.existsSync(legacy.file(hub.hubId))).toBe(false);
+    expect(fs.readFileSync(legacy.source, "utf8")).toBe(contents);
   });
 });

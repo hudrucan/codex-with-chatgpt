@@ -47,7 +47,7 @@ it("isolates the grants of two simultaneously running bridge owners in the same 
         version: 1, ownerWorkspaceId: owner.id,
         workspaces: [{ workspaceId: owner.id, alias: `legacy-owner-${index}`, root }],
       }));
-      return { file, contents: fs.readFileSync(file, "utf8"), token: legacyAuthFixture(state, owner.id).accessToken };
+      return { file, contents: fs.readFileSync(file, "utf8"), token: legacyAuthFixture(state, owner.id, root).accessToken };
     });
     for (const root of ownerRoots) bridges.push(await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false }));
     for (let index = 0; index < bridges.length; index++) clients.push(await connect(bridges[index], legacyOwned[index].token));

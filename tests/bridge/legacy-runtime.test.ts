@@ -2,12 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findBridgeObservation, runtimeFile } from "../../src/bridge/runtime.js";
+import { findBridgeObservation, runtimeFile, writeRuntimeState } from "../../src/bridge/runtime.js";
 import { ensureBridge, stopBridge } from "../../src/process/daemon.js";
+import { AuthStore, finalizeAuthHandoff } from "../../src/auth/store.js";
+import { startBridge } from "../../src/bridge/server.js";
 import { resolveHub } from "../../src/hub/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { SERVICE_NAME, VERSION } from "../../src/version.js";
-import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
+import { cleanup, isolateStateDir, makeTmpDir, write, legacyAuthFixture } from "../helpers.js";
 
 let state: string;
 let root: string;
@@ -63,6 +65,20 @@ describe("live legacy runtime compatibility", () => {
     expect(legacy.shutdowns()).toBe(0);
     expect(fs.existsSync(runtimeFile(hub.hubId))).toBe(false);
     expect(fs.readFileSync(legacy.file, "utf8")).toBe(contents);
+  });
+
+  it.each(["legacy", "Hub"])("refuses finalization and Hub startup while a %s auth writer is active", async (kind) => {
+    const workspace = new Workspace(root), hub = resolveHub(workspace);
+    const auth = legacyAuthFixture(state, workspace.id);
+    new AuthStore(hub.hubId);
+    const before = fs.readFileSync(path.join(state, "auth", `${hub.hubId}.json`), "utf8");
+    const legacy = await legacyRuntime(workspace.id);
+    if (kind === "Hub") writeRuntimeState({ ...legacy.runtime, hubId: hub.hubId, stateVersion: 1 });
+    expect(() => finalizeAuthHandoff(hub.hubId, workspace)).toThrow(/AUTH_HANDOFF_BUSY/);
+    await expect(startBridge({ workspaceRoot: root, port: 0, persistRuntime: false })).rejects.toThrow(/AUTH_HANDOFF_BUSY/);
+    expect(fs.readFileSync(path.join(state, "auth", `${hub.hubId}.json`), "utf8")).toBe(before);
+    expect(fs.readFileSync(auth.file, "utf8")).toBe(auth.contents);
+    expect(legacy.shutdowns()).toBe(0);
   });
 
   it("does not let a dead legacy PID block the Hub even if its old port serves another owner", async () => {

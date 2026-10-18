@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { SERVICE_NAME, VERSION } from "../src/version.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -71,7 +72,7 @@ export function pkceVerifierAndChallenge(): { verifier: string; challenge: strin
 }
 
 /** Persist an exact legacy auth fixture without using the Hub-owned AuthStore. */
-export function legacyAuthFixture(stateDir: string, workspaceId: string) {
+export function legacyAuthFixture(stateDir: string, workspaceId: string, stoppedRoot?: string) {
   const client = { clientId: `c2c_client_${randomBytes(12).toString("base64url")}`, clientName: "Existing client",
     redirectUris: ["http://127.0.0.1:19999/callback"], createdAt: new Date().toISOString() };
   const accessToken = `c2c_at_${randomBytes(32).toString("base64url")}`;
@@ -84,5 +85,11 @@ export function legacyAuthFixture(stateDir: string, workspaceId: string) {
   }));
   const data = { clients: [client], tokens };
   const file = write(stateDir, `auth/${workspaceId}.json`, JSON.stringify(data));
+  if (stoppedRoot) {
+    write(stateDir, `runtime/${workspaceId}.json`, JSON.stringify({
+      service: SERVICE_NAME, version: VERSION, workspaceId, workspaceRoot: stoppedRoot, pid: 999_999_999,
+      port: 1, adminToken: "stopped-fixture-admin", publicUrl: null, startedAt: new Date().toISOString(),
+    }));
+  }
   return { file, data, client, accessToken, refreshToken, contents: fs.readFileSync(file, "utf8") };
 }

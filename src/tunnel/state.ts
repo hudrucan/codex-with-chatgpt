@@ -1,38 +1,44 @@
 import path from "node:path";
-import { getStateDir, readJsonIfExists, writeSecureJson } from "../config/paths.js";
+import { z } from "zod";
+import { getStateDir, readJsonIfExists } from "../config/paths.js";
+import { hubIdSchema } from "../hub/store.js";
+import { resourceFile, withHubResource } from "../hub/resource-state.js";
 
-export type TunnelPreference = "unset" | "quick" | "named";
+const fields = {
+  preference: z.enum(["unset", "quick", "named"]),
+  askedAt: z.string().datetime().optional(),
+  provider: z.enum(["cloudflare-quick", "cloudflare-named"]).optional(),
+  tunnelName: z.string().min(1).optional(),
+  tunnelId: z.string().min(1).optional(),
+  hostname: z.string().min(1).optional(),
+  zone: z.string().min(1).optional(),
+  configuredAt: z.string().datetime().optional(),
+  fallbackReason: z.string().optional(),
+  pending: z.object({ tunnelId: z.string().min(1).optional(), tunnelName: z.string().min(1),
+    hostname: z.string().min(1), zone: z.string().min(1), created: z.boolean() }).strict().optional(),
+};
+const legacySchema = z.object({ workspaceId: z.string().regex(/^[a-f0-9]{12}$/), ...fields }).strict();
+const schema = z.object({ version: z.literal(1), hubId: hubIdSchema, ...fields }).strict();
+export type TunnelState = z.infer<typeof schema>;
+export type TunnelPreference = TunnelState["preference"];
 
-export interface TunnelState {
-  workspaceId: string;
-  preference: TunnelPreference;
-  askedAt?: string;
-  provider?: "cloudflare-quick" | "cloudflare-named";
-  tunnelName?: string;
-  tunnelId?: string;
-  hostname?: string;
-  zone?: string;
-  configuredAt?: string;
-  fallbackReason?: string;
-  pending?: { tunnelId?: string; tunnelName: string; hostname: string; zone: string; created: boolean };
+export function tunnelStateFile(hubId: string): string { return resourceFile("tunnel", hubId); }
+
+function access<R>(hubId: string, operation: (current: TunnelState, save: (value: TunnelState) => TunnelState) => R): R {
+  const empty: TunnelState = { version: 1, hubId, preference: "unset" };
+  return withHubResource(hubId, "tunnel", schema, legacySchema, empty, operation);
 }
 
-export function tunnelStateFile(workspaceId: string): string {
-  return path.join(getStateDir(), "tunnels", `${workspaceId}.json`);
+export function readTunnelState(hubId: string): TunnelState { return access(hubId, (current) => current); }
+
+export function writeTunnelState(state: Omit<TunnelState, "version"> & { version?: 1 }): TunnelState {
+  return access(state.hubId, (_current, save) => save({ ...state, version: 1 }));
 }
 
-export function readTunnelState(workspaceId: string): TunnelState {
-  return (
-    readJsonIfExists<TunnelState>(tunnelStateFile(workspaceId)) ?? {
-      workspaceId,
-      preference: "unset",
-    }
-  );
-}
-
-export function writeTunnelState(state: TunnelState): TunnelState {
-  writeSecureJson(tunnelStateFile(state.workspaceId), state);
-  return state;
+/** Read-only compatibility for the existing legacy destroy path. */
+export function legacyTunnelStateFile(owner: string): string { return path.join(getStateDir(), "tunnels", `${owner}.json`); }
+export function readLegacyTunnelState(owner: string): z.infer<typeof legacySchema> {
+  return readJsonIfExists<z.infer<typeof legacySchema>>(legacyTunnelStateFile(owner)) ?? { workspaceId: owner, preference: "unset" };
 }
 
 export function needsTunnelChoice(state: TunnelState): boolean {

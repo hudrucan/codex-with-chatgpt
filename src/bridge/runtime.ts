@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { getStateDir, writeSecureJson } from "../config/paths.js";
-import { hubIdSchema, readConfiguredHub } from "../hub/store.js";
+import { hubIdSchema, readConfiguredHub, type Hub } from "../hub/store.js";
 import { Workspace } from "../workspace/manager.js";
 import { SERVICE_NAME, VERSION } from "../version.js";
 
@@ -79,6 +79,26 @@ export type BridgeObservation =
 function observePid(pid: number): "present" | "missing" | "unknown" {
   try { process.kill(pid, 0); return "present"; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? "missing" : "unknown"; }
+}
+
+/** Called under the Hub control-plane lock, before copying authoritative auth. */
+export function assertAuthHandoffQuiescent(hub: Hub, owner: Workspace, hasLegacyAuth: boolean): void {
+  if (hub.legacyOwnerWorkspaceId !== owner.id) throw new Error("AUTH_HANDOFF_CONFLICT: Legacy owner does not match this Hub.");
+  const current = readRuntimeState(hub.hubId);
+  if (current && observePid(current.pid) !== "missing") {
+    throw new Error("AUTH_HANDOFF_BUSY: A Hub runtime may still be writing auth.");
+  }
+  const legacy = readRuntime(path.join(getStateDir(), "runtime", `${owner.id}.json`));
+  if (!legacy) {
+    if (hasLegacyAuth) throw new Error("AUTH_HANDOFF_REQUIRED: Retain the verified legacy runtime record until its process exit is confirmed.");
+    return;
+  }
+  if (legacy.workspaceId !== owner.id || legacy.workspaceRoot !== owner.root) {
+    throw new Error("AUTH_HANDOFF_CONFLICT: Legacy runtime belongs to another owner.");
+  }
+  if (observePid(legacy.pid) !== "missing") {
+    throw new Error("AUTH_HANDOFF_BUSY: Stop the legacy bridge and confirm its process has exited before finalizing auth.");
+  }
 }
 
 async function observe(file: string, hubId: string, legacyOwner?: string): Promise<BridgeObservation> {

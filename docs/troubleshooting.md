@@ -20,6 +20,8 @@ check the new address and reconcile the owned ChatGPT plugin.
 | Diagnostic | Recovery |
 | --- | --- |
 | Healthy legacy bridge | Reuse the verified running process; do not create another bridge or copy its runtime state |
+| `TUNNEL_STATE_CONFLICT` / `ENDPOINT_STATE_CONFLICT` | Preserve both files and the Hub mapping/checkpoint; verify the exact owner and interrupted copy; never merge, reset or create a replacement resource to bypass the conflict |
+| `TUNNEL_STATE_BUSY` / `ENDPOINT_STATE_BUSY` | Verify no local writer is active before removing only the reported owner's state lock |
 | `AUTH_STATE_CONFLICT` | Preserve both auth files and the Hub mapping/checkpoint; verify ownership and the interrupted copy before retrying, without merging or resetting credentials |
 | `RUNTIME_STATE_INVALID` / uncertain runtime | Preserve state and verify Hub/legacy identity and PID; never stop or replace an unverified process |
 | Bridge stopped | Doctor can start it; explicit `start --tunnel` also reconnects |

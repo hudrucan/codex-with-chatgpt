@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthStore } from "../../src/auth/store.js";
+import { AuthStore, finalizeAuthHandoff } from "../../src/auth/store.js";
 import { hubMappingFile, resolveHub } from "../../src/hub/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, isolateStateDir, legacyAuthFixture, makeTmpDir, write } from "../helpers.js";
@@ -90,5 +90,89 @@ describe("Hub-owned auth state", () => {
     expect(fs.readFileSync(legacy.file, "utf8")).toBe(legacy.contents);
     fs.writeFileSync(hubMappingFile(owner.id), "{");
     expect(() => new AuthStore(hub.hubId)).toThrow(/HUB_STATE_INVALID/);
+  });
+});
+
+function rotatedLegacy(owner: Workspace, original: ReturnType<typeof legacyAuthFixture>) {
+  const current = legacyAuthFixture(state, owner.id, owner.root);
+  current.data.clients = original.data.clients;
+  for (const token of current.data.tokens) token.clientId = original.client.clientId;
+  fs.writeFileSync(current.file, JSON.stringify(current.data));
+  return { ...current, client: original.client, contents: fs.readFileSync(current.file, "utf8") };
+}
+function handoffFinalized(owner: Workspace) {
+  return JSON.parse(fs.readFileSync(hubMappingFile(owner.id), "utf8")).authHandoffFinalized;
+}
+
+describe("quiescent legacy auth handoff", () => {
+  it("replaces stale provisional tokens with current legacy credentials and never reimports after finalization", () => {
+    const owner = new Workspace(root), hub = resolveHub(owner);
+    const initial = legacyAuthFixture(state, owner.id, root);
+    new AuthStore(hub.hubId);
+    expect(initialized(owner.id)).toBe(true);
+    expect(handoffFinalized(owner)).not.toBe(true);
+    expect(() => new AuthStore(hub.hubId, { requireFinalized: true })).toThrow(/AUTH_HANDOFF_REQUIRED/);
+    const current = rotatedLegacy(owner, initial);
+    finalizeAuthHandoff(hub.hubId, owner);
+    expect(handoffFinalized(owner)).toBe(true);
+    expect(initialized(owner.id)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(authFile(hub.hubId), "utf8"))).toEqual({
+      version: 1, hubId: hub.hubId, clients: current.data.clients,
+      tokens: current.data.tokens.map(({ workspaceId: _owner, ...token }) => ({ ...token, hubId: hub.hubId })),
+    });
+    const store = new AuthStore(hub.hubId, { requireFinalized: true });
+    expect(store.verifyAccessToken(current.accessToken).ok).toBe(true);
+    expect(store.verifyAccessToken(initial.accessToken).ok).toBe(false);
+    expect(store.refresh(initial.refreshToken, initial.client.clientId).ok).toBe(false);
+    const rotated = store.refresh(current.refreshToken, current.client.clientId);
+    expect(rotated.ok).toBe(true);
+    expect(fs.readFileSync(current.file, "utf8")).toBe(current.contents);
+    const finalized = fs.readFileSync(authFile(hub.hubId), "utf8");
+    fs.writeFileSync(current.file, "{stale retained source");
+    finalizeAuthHandoff(hub.hubId, owner);
+    fs.unlinkSync(current.file);
+    finalizeAuthHandoff(hub.hubId, owner);
+    expect(fs.readFileSync(authFile(hub.hubId), "utf8")).toBe(finalized);
+    expect(new AuthStore(hub.hubId).verifyAccessToken(current.accessToken).ok).toBe(true);
+  });
+
+  it("does not finalize if the legacy source changes while the final snapshot is copied", () => {
+    const owner = new Workspace(root), hub = resolveHub(owner);
+    const legacy = legacyAuthFixture(state, owner.id, root);
+    new AuthStore(hub.hubId);
+    const original = fs.renameSync;
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      original(from, to);
+      if (String(to) === authFile(hub.hubId)) {
+        legacy.data.tokens[0].expiresAt++;
+        fs.writeFileSync(legacy.file, JSON.stringify(legacy.data));
+      }
+    });
+    expect(() => finalizeAuthHandoff(hub.hubId, owner)).toThrow(/Legacy auth changed during finalization/);
+    expect(handoffFinalized(owner)).not.toBe(true);
+  });
+
+  it.each(["copy", "checkpoint"])("retries an interrupted final %s without merging stale tokens", (stage) => {
+    const owner = new Workspace(root), hub = resolveHub(owner);
+    const initial = legacyAuthFixture(state, owner.id, root);
+    new AuthStore(hub.hubId);
+    const current = rotatedLegacy(owner, initial);
+    const original = fs.renameSync;
+    const blocked = stage === "copy" ? authFile(hub.hubId) : hubMappingFile(owner.id);
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to) === blocked) throw new Error("interrupted final handoff");
+      return original(from, to);
+    });
+    expect(() => finalizeAuthHandoff(hub.hubId, owner)).toThrow(/interrupted final handoff/);
+    expect(handoffFinalized(owner)).not.toBe(true);
+    expect(fs.readFileSync(current.file, "utf8")).toBe(current.contents);
+    rename.mockRestore();
+    finalizeAuthHandoff(hub.hubId, owner);
+    const store = new AuthStore(hub.hubId, { requireFinalized: true });
+    expect(store.verifyAccessToken(current.accessToken).ok).toBe(true);
+    expect(store.refresh(current.refreshToken, current.client.clientId).ok).toBe(true);
+    expect(store.verifyAccessToken(initial.accessToken).ok).toBe(false);
+    expect(store.refresh(initial.refreshToken, initial.client.clientId).ok).toBe(false);
+    expect(handoffFinalized(owner)).toBe(true);
   });
 });

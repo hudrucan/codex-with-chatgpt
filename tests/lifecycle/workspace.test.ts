@@ -5,8 +5,8 @@ import { resolveHub } from "../../src/hub/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { AuthStore } from "../../src/auth/store.js";
 import { acquireWorkspaceLock, destroyWorkspace, disconnectWorkspace, lifecycleFile } from "../../src/lifecycle/workspace.js";
-import { boundConnector, confirmConnectorBinding, connectorReconciliation, persistWorkspaceEndpoint, readLastEndpoint, writeLastEndpoint } from "../../src/config/endpoint.js";
-import { readTunnelState, writeTunnelState } from "../../src/tunnel/state.js";
+import { boundConnector, confirmConnectorBinding, connectorReconciliation, persistHubEndpoint, readLegacyEndpoint as readLastEndpoint, readLastEndpoint as readHubEndpoint, writeLastEndpoint } from "../../src/config/endpoint.js";
+import { readLegacyTunnelState as readTunnelState, readTunnelState as readHubTunnel, writeTunnelState } from "../../src/tunnel/state.js";
 import { CloudflareApi } from "../../src/tunnel/cloudflare-api.js";
 import { verifyForkOrigin } from "../../src/config/update.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
@@ -24,16 +24,27 @@ afterEach(async () => {
   if (originalApiToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN; else process.env.CLOUDFLARE_API_TOKEN = originalApiToken;
 });
 
+// Destroy remains legacy-keyed; seed its existing inputs without using Hub writers for legacy paths.
+function seedLegacy<T extends { version: 1; hubId: string }>(directory: string, ws: Workspace, value: T) {
+  const { version: _version, hubId: _hubId, ...fields } = value;
+  const legacy = { ...fields, workspaceId: ws.id };
+  write(state, `${directory}/${ws.id}.json`, JSON.stringify(legacy));
+  return legacy;
+}
+
 function endpoint(name = "Original") {
   const ws = new Workspace(root);
-  persistWorkspaceEndpoint({ workspaceId: ws.id, workspaceName: ws.name, connectorName: name, port: 1234, publicUrl: "https://code.example.com", mcpUrl: "https://code.example.com/mcp" });
+  persistHubEndpoint({ hubId: resolveHub(ws).hubId, hubName: ws.name, connectorName: name, port: 1234, publicUrl: "https://code.example.com", mcpUrl: "https://code.example.com/mcp" });
+  seedLegacy("endpoints", ws, readHubEndpoint(resolveHub(ws).hubId)!);
   return ws;
 }
 function bind(ws: Workspace, name = "Original") {
-  confirmConnectorBinding(ws.id, { name, mcpUrl: "https://code.example.com/mcp", connectorId: "plugin_owned" });
+  confirmConnectorBinding(resolveHub(ws).hubId, { name, mcpUrl: "https://code.example.com/mcp", connectorId: "plugin_owned" });
+  seedLegacy("endpoints", ws, readHubEndpoint(resolveHub(ws).hubId)!);
 }
 function resources(ws: Workspace) {
-  const saved = writeTunnelState({ workspaceId: ws.id, preference: "named", tunnelId: "id-owned", tunnelName: "owned", hostname: "code.example.com", zone: "example.com" });
+  const hubState = writeTunnelState({ hubId: resolveHub(ws).hubId, preference: "named", tunnelId: "id-owned", tunnelName: "owned", hostname: "code.example.com", zone: "example.com" });
+  const saved = seedLegacy("tunnels", ws, hubState);
   const account = {
     hasCert: () => true, login: vi.fn(), createTunnel: vi.fn(), routeDns: vi.fn(), renameTunnel: vi.fn(),
     listTunnels: vi.fn(async () => [{ id: "id-owned", name: "owned" }]),
@@ -46,34 +57,34 @@ function resources(ws: Workspace) {
 describe("transactional connector reconciliation", () => {
   it("does not claim a new binding until an explicit verified acknowledgement", () => {
     const ws = endpoint();
-    expect(boundConnector(readLastEndpoint(ws.id))).toBeNull();
-    expect(connectorReconciliation(readLastEndpoint(ws.id))).toMatchObject({ needed: true, connectorAction: "create" });
+    expect(boundConnector(readHubEndpoint(resolveHub(ws).hubId))).toBeNull();
+    expect(connectorReconciliation(readHubEndpoint(resolveHub(ws).hubId))).toMatchObject({ needed: true, connectorAction: "create" });
     bind(ws);
     endpoint("Chosen");
     endpoint(); // an explicit setup can still change desired; bound remains unchanged
     endpoint("Chosen");
-    const pending = readLastEndpoint(ws.id)!;
+    const pending = readHubEndpoint(resolveHub(ws).hubId)!;
     expect(pending).toMatchObject({ connectorName: "Original", desiredConnectorName: "Chosen", connectorId: "plugin_owned" });
     // Reruns without explicit values keep desired, never commit bound.
-    persistWorkspaceEndpoint({ workspaceId: ws.id, workspaceName: "Display Changed", port: 1234, publicUrl: pending.publicUrl, mcpUrl: pending.mcpUrl });
-    expect(connectorReconciliation(readLastEndpoint(ws.id))).toMatchObject({ needed: true, connectorName: "Chosen", previousConnectorName: "Original" });
-    confirmConnectorBinding(ws.id, { name: "Chosen", mcpUrl: pending.mcpUrl!, connectorId: "plugin_new" });
-    expect(connectorReconciliation(readLastEndpoint(ws.id)).needed).toBe(false);
+    persistHubEndpoint({ hubId: resolveHub(ws).hubId, hubName: "Display Changed", port: 1234, publicUrl: pending.publicUrl, mcpUrl: pending.mcpUrl });
+    expect(connectorReconciliation(readHubEndpoint(resolveHub(ws).hubId))).toMatchObject({ needed: true, connectorName: "Chosen", previousConnectorName: "Original" });
+    confirmConnectorBinding(resolveHub(ws).hubId, { name: "Chosen", mcpUrl: pending.mcpUrl!, connectorId: "plugin_new" });
+    expect(connectorReconciliation(readHubEndpoint(resolveHub(ws).hubId)).needed).toBe(false);
   });
 
   it("rejects stale/wrong names and URLs without losing the previous binding", () => {
     const ws = endpoint(); bind(ws); endpoint("Chosen");
-    const previous = readLastEndpoint(ws.id);
+    const previous = readHubEndpoint(resolveHub(ws).hubId);
     expect(() => bind(ws)).toThrow(/CONFLICT/);
-    expect(() => confirmConnectorBinding(ws.id, { name: "Chosen", mcpUrl: "https://foreign.example.com/mcp", connectorId: "foreign" })).toThrow(/CONFLICT/);
-    expect(readLastEndpoint(ws.id)).toEqual(previous);
+    expect(() => confirmConnectorBinding(resolveHub(ws).hubId, { name: "Chosen", mcpUrl: "https://foreign.example.com/mcp", connectorId: "foreign" })).toThrow(/CONFLICT/);
+    expect(readHubEndpoint(resolveHub(ws).hubId)).toEqual(previous);
   });
 
   it("retains legacy binding/name and tracks address changes until confirmation", () => {
     const ws = new Workspace(root);
-    writeLastEndpoint({ workspaceId: ws.id, port: 1, publicUrl: "https://old.example.com", mcpUrl: "https://old.example.com/mcp" });
-    persistWorkspaceEndpoint({ workspaceId: ws.id, workspaceName: "Renamed", port: 2, publicUrl: "https://new.example.com", mcpUrl: "https://new.example.com/mcp" });
-    expect(connectorReconciliation(readLastEndpoint(ws.id))).toMatchObject({ needed: true, connectorName: "Codex with ChatGPT", previousMcpUrl: "https://old.example.com/mcp" });
+    writeLastEndpoint({ hubId: resolveHub(ws).hubId, port: 1, publicUrl: "https://old.example.com", mcpUrl: "https://old.example.com/mcp" });
+    persistHubEndpoint({ hubId: resolveHub(ws).hubId, hubName: "Renamed", port: 2, publicUrl: "https://new.example.com", mcpUrl: "https://new.example.com/mcp" });
+    expect(connectorReconciliation(readHubEndpoint(resolveHub(ws).hubId))).toMatchObject({ needed: true, connectorName: "Codex with ChatGPT", previousMcpUrl: "https://old.example.com/mcp" });
   });
 });
 
@@ -85,15 +96,16 @@ describe("disconnect and ownership-checked destroy", () => {
     write(state, `sessions/${ws.id}.json`, JSON.stringify({ url: "https://chatgpt.com/c/saved" }));
     await disconnectWorkspace(root);
     expect(new AuthStore(resolveHub(ws).hubId).verifyAccessToken(issued.accessToken).ok).toBe(false);
-    expect(readLastEndpoint(ws.id)).toMatchObject({ connectorName: "Original", disconnected: true });
-    expect(readTunnelState(ws.id)).toEqual(saved);
+    expect(readHubEndpoint(resolveHub(ws).hubId)).toMatchObject({ connectorName: "Original", disconnected: true });
+    const { workspaceId: _owner, ...fields } = saved;
+    expect(readHubTunnel(resolveHub(ws).hubId)).toEqual({ version: 1, hubId: resolveHub(ws).hubId, ...fields });
     expect(fs.existsSync(path.join(state, "sessions", `${ws.id}.json`))).toBe(true);
   });
 
   it("records an intentional disconnect even before an endpoint was saved", async () => {
     const ws = new Workspace(root);
     await disconnectWorkspace(root);
-    expect(readLastEndpoint(ws.id)).toMatchObject({ disconnected: true, bindingVersion: 1, boundMcpUrl: null });
+    expect(readHubEndpoint(resolveHub(ws).hubId)).toMatchObject({ disconnected: true, bindingVersion: 1, boundMcpUrl: null });
   });
 
   it("plans without mutations; refuses missing or wrong connector receipts", async () => {
@@ -198,7 +210,7 @@ describe("owner registry cleanup during lifecycle", () => {
     const saved = registries(ws);
     await disconnectWorkspace(root);
     saved.expectRetained();
-    expect(readLastEndpoint(ws.id)?.disconnected).toBe(true);
+    expect(readHubEndpoint(resolveHub(ws).hubId)?.disconnected).toBe(true);
   });
 
   it("retains all registries for a destroy plan and a rejected destroy", async () => {

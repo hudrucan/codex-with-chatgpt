@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { resolveHub } from "../../src/hub/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { writeTunnelState } from "../../src/tunnel/state.js";
 import path from "node:path";
@@ -72,7 +73,7 @@ describe("machine-wide commands accept leftover -w", () => {
     const workspace = new Workspace(root);
     const tunnelId = "11111111-1111-4111-8111-111111111111";
     writeTunnelState({
-      workspaceId: workspace.id,
+      hubId: resolveHub(workspace).hubId,
       preference: "named",
       provider: "cloudflare-named",
       tunnelName: "c2c-test",

@@ -7,7 +7,7 @@ afterEach(() => {
 
 describe("PairingManager", () => {
   it("generates codes in XXXX-XXXX format without ambiguous characters", () => {
-    const manager = new PairingManager("hub_550e8400-e29b-41d4-a716-446655440000");
+    const manager = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440000");
     for (let i = 0; i < 20; i++) {
       const { code } = manager.create();
       expect(code).toMatch(/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
@@ -16,7 +16,7 @@ describe("PairingManager", () => {
   });
 
   it("accepts the correct code exactly once", () => {
-    const manager = new PairingManager("hub_550e8400-e29b-41d4-a716-446655440000");
+    const manager = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440000");
     const { code } = manager.create();
     const first = manager.verify(code);
     expect(first.ok).toBe(true);
@@ -25,14 +25,14 @@ describe("PairingManager", () => {
   });
 
   it("is forgiving about dashes and case", () => {
-    const manager = new PairingManager("hub_550e8400-e29b-41d4-a716-446655440000");
+    const manager = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440000");
     const { code } = manager.create();
     const sloppy = code.replace("-", " ").toLowerCase();
     expect(manager.verify(sloppy).ok).toBe(true);
   });
 
   it("rejects wrong codes and limits attempts", () => {
-    const manager = new PairingManager("hub_550e8400-e29b-41d4-a716-446655440000", { maxAttempts: 3 });
+    const manager = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440000", { maxAttempts: 3 });
     manager.create();
     expect(manager.verify("AAAA-AAAA")).toMatchObject({ ok: false, reason: "invalid", attemptsLeft: 2 });
     expect(manager.verify("BBBB-BBBB")).toMatchObject({ ok: false, reason: "invalid", attemptsLeft: 1 });
@@ -43,14 +43,14 @@ describe("PairingManager", () => {
 
   it("expires codes after the TTL", () => {
     vi.useFakeTimers();
-    const manager = new PairingManager("hub_550e8400-e29b-41d4-a716-446655440000", { ttlMs: 2 * 60_000 });
+    const manager = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440000", { ttlMs: 2 * 60_000 });
     const { code } = manager.create();
     vi.advanceTimersByTime(2 * 60_000 + 1000);
     expect(manager.verify(code)).toMatchObject({ ok: false, reason: "expired" });
   });
 
   it("rate limits per IP", () => {
-    const manager = new PairingManager("hub_550e8400-e29b-41d4-a716-446655440000", { ipRateLimit: 3, maxAttempts: 100 });
+    const manager = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440000", { ipRateLimit: 3, maxAttempts: 100 });
     manager.create();
     manager.verify("AAAA-AAAA", "1.2.3.4");
     manager.verify("AAAA-AAAA", "1.2.3.4");
@@ -61,15 +61,15 @@ describe("PairingManager", () => {
   });
 
   it("invalidates previous sessions when creating a new one", () => {
-    const manager = new PairingManager("hub_550e8400-e29b-41d4-a716-446655440000");
+    const manager = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440000");
     const first = manager.create();
     manager.create();
     expect(manager.verify(first.code).ok).toBe(false);
   });
 
   it("owns pairing sessions by Hub and never shares codes across connections", () => {
-    const first = new PairingManager("hub_550e8400-e29b-41d4-a716-446655440000");
-    const second = new PairingManager("hub_550e8400-e29b-41d4-a716-446655440001");
+    const first = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440000");
+    const second = new PairingManager("hub-550e8400-e29b-41d4-a716-446655440001");
     const { code } = first.create();
     expect(first.hubId).not.toBe(second.hubId);
     expect(second.verify(code).ok).toBe(false);

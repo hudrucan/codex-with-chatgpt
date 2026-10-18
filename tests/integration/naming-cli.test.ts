@@ -5,11 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Workspace } from "../../src/workspace/manager.js";
+import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { resolveHub } from "../../src/hub/store.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { readRuntimeState } from "../../src/bridge/runtime.js";
 import { readLastEndpoint, writeLastEndpoint, confirmConnectorBinding } from "../../src/config/endpoint.js";
 import { readTunnelState, writeTunnelState } from "../../src/tunnel/state.js";
+import { SERVICE_NAME, VERSION } from "../../src/version.js";
 import type { TunnelProvider } from "../../src/tunnel/provider.js";
 import { cleanup, isolateStateDir, makeTmpDir, write, legacyAuthFixture } from "../helpers.js";
 
@@ -71,7 +73,7 @@ describe("naming through setup and repair commands", () => {
   it("persists explicit names through setup reruns, doctor, restart, and display-name changes without revoking tokens", async () => {
     write(root, ".c2c.json", JSON.stringify({ name: "Original", maxIterations: 7 }));
     const workspace = new Workspace(root);
-    const token = legacyAuthFixture(stateDir, workspace.id).accessToken;
+    const token = legacyAuthFixture(stateDir, workspace.id, root).accessToken;
     ownsDaemon = true;
     const first = await runCli(["setup", "--no-tunnel", "--workspace-name", "Desk C2C Hub", "--connector-name", "Desk Connector"]);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
@@ -97,7 +99,7 @@ describe("naming through setup and repair commands", () => {
     expect(restarted.status, JSON.stringify(restarted.payload)).toBe(0);
     expect(restarted.payload).toMatchObject({ workspaceId: workspace.id, workspaceName: "Renamed Workspace", connectorName: "Desk Connector" });
     expect(new Workspace(root).id).toBe(workspace.id);
-    expect(readLastEndpoint(workspace.id)?.desiredConnectorName).toBe("Desk Connector");
+    expect(readLastEndpoint(resolveHub(workspace).hubId)?.desiredConnectorName).toBe("Desk Connector");
     expect(JSON.parse(fs.readFileSync(path.join(root, ".c2c.json"), "utf8"))).toEqual({ name: "Original", maxIterations: 7 });
 
     const runtime = readRuntimeState(resolveHub(workspace).hubId)!;
@@ -117,7 +119,7 @@ describe("naming through setup and repair commands", () => {
     expect(readRuntimeState(resolveHub(new Workspace(root)).hubId)).toBeNull();
     const reconnect = await runCli(["setup", "--no-tunnel"]);
     expect(reconnect.payload).toMatchObject({ workspaceName: "Local Name", connectorName: "Retained Connector" });
-    expect(readLastEndpoint(id)?.disconnected).toBe(false);
+    expect(readLastEndpoint(resolveHub(new Workspace(root)).hubId)?.disconnected).toBe(false);
     expect(fs.existsSync(path.join(root, ".c2c.json"))).toBe(false);
   });
 
@@ -138,7 +140,7 @@ describe("naming through setup and repair commands", () => {
     const workspaceId = bridge.workspace.id;
     const tunnelId = "11111111-1111-4111-8111-111111111111";
     const savedTunnel = writeTunnelState({
-      workspaceId, preference: "named", provider: "cloudflare-named", tunnelId,
+      hubId: bridge.hubId, preference: "named", provider: "cloudflare-named", tunnelId,
       tunnelName: "desk-c2c", hostname: "code.example.com", zone: "example.com",
     });
     const cert = write(stateDir, "test-cert.pem", "synthetic certificate");
@@ -146,17 +148,81 @@ describe("naming through setup and repair commands", () => {
     await fetch(`${bridge.localBaseUrl()}/admin/tunnel/start`, {
       method: "POST", headers: { authorization: `Bearer ${bridge.adminToken}` },
     });
-    writeLastEndpoint({ ...readLastEndpoint(workspaceId)!, publicUrl: "https://old.example.com", mcpUrl: "https://old.example.com/mcp" });
-    confirmConnectorBinding(workspaceId, { name: "Desk Connector", mcpUrl: "https://old.example.com/mcp", connectorId: "plugin_owned" });
+    writeLastEndpoint({ ...readLastEndpoint(bridge.hubId)!, publicUrl: "https://old.example.com", mcpUrl: "https://old.example.com/mcp" });
+    confirmConnectorBinding(bridge.hubId, { name: "Desk Connector", mcpUrl: "https://old.example.com/mcp", connectorId: "plugin_owned" });
     const result = await runCli(["doctor"], { TUNNEL_ORIGIN_CERT: cert, TUNNEL_CRED_FILE: credential });
     expect(result.payload.chatgptRepair).toMatchObject({ needed: true, connectorAction: "update", connectorName: "Desk Connector" });
-    expect(readLastEndpoint(workspaceId)).toMatchObject({ connectorName: "Desk Connector", publicUrl: url });
-    expect(readTunnelState(workspaceId)).toEqual(savedTunnel);
+    expect(readLastEndpoint(bridge.hubId)).toMatchObject({ connectorName: "Desk Connector", publicUrl: url });
+    expect(readTunnelState(bridge.hubId)).toEqual(savedTunnel);
     const secondDoctor = await runCli(["doctor"], { TUNNEL_ORIGIN_CERT: cert, TUNNEL_CRED_FILE: credential });
     expect(secondDoctor.payload.chatgptRepair).toMatchObject({ needed: true, previousMcpUrl: "https://old.example.com/mcp" });
     const bind = await runCli(["connector", "bind", "--name", "Desk Connector", "--mcp-url", `${url!}/mcp`, "--connector-id", "plugin_new", "--verified-workspace", workspaceId]);
     expect(bind.status, JSON.stringify(bind.payload)).toBe(0);
     expect((await runCli(["doctor"], { TUNNEL_ORIGIN_CERT: cert, TUNNEL_CRED_FILE: credential })).payload.chatgptRepair.needed).toBe(false);
+  });
+
+  it("adopts local resource state without restarting a healthy legacy bridge or its tunnel", async () => {
+    let url: string | null = null;
+    let starts = 0, stops = 0;
+    const tunnel: TunnelProvider = {
+      name: "cloudflare-quick",
+      start: async (port) => { starts++; return url = `http://127.0.0.1:${port}`; },
+      stop: async () => { stops++; url = null; },
+      restart: async () => { throw new Error("Unexpected tunnel restart"); },
+      status: () => ({ running: url !== null, url, provider: "cloudflare-quick" }),
+      getPublicUrl: () => url,
+      doctor: async () => ({ provider: "cloudflare-quick", binaryFound: true, binaryPath: "test", running: url !== null, url, problems: [] }),
+    };
+    bridge = await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false, tunnelProvider: tunnel });
+    await fetch(`${bridge.localBaseUrl()}/admin/tunnel/start`, { method: "POST", headers: { authorization: `Bearer ${bridge.adminToken}` } });
+    const owner = bridge.workspace.id;
+    const tunnelId = "11111111-1111-4111-8111-111111111111";
+    const legacyRuntime = write(stateDir, `runtime/${owner}.json`, JSON.stringify({ service: SERVICE_NAME, version: VERSION,
+      workspaceId: owner, workspaceRoot: root, pid: process.pid, port: bridge.port, adminToken: bridge.adminToken,
+      publicUrl: url, startedAt: new Date().toISOString() }));
+    const legacyTunnel = write(stateDir, `tunnels/${owner}.json`, JSON.stringify({ workspaceId: owner, preference: "named",
+      provider: "cloudflare-named", tunnelName: "existing-name", tunnelId, hostname: "code.example.com", zone: "example.com" }));
+    const legacyEndpoint = write(stateDir, `endpoints/${owner}.json`, JSON.stringify({ workspaceId: owner, port: bridge.port,
+      publicUrl: url, mcpUrl: `${url}/mcp`, connectorName: "Existing Connector", desiredConnectorName: "Existing Connector",
+      connectorId: "plugin_existing", bindingVersion: 1, boundMcpUrl: `${url}/mcp`, savedAt: new Date().toISOString() }));
+    const files = [legacyRuntime, legacyTunnel, legacyEndpoint].map((file) => ({ file, contents: fs.readFileSync(file, "utf8") }));
+    const cert = write(stateDir, "legacy-cert.pem", "synthetic cert");
+    const credential = write(stateDir, "legacy-credential.json", JSON.stringify({ TunnelID: tunnelId, TunnelSecret: "synthetic secret" }));
+    const setup = await runCli(["setup", "--no-tunnel"]);
+    expect(setup.status, JSON.stringify(setup.payload)).toBe(0);
+    expect(setup.payload).toMatchObject({ connectorName: "Existing Connector", connectorId: "plugin_existing", connectorAction: "none" });
+    const doctor = await runCli(["doctor"], { TUNNEL_ORIGIN_CERT: cert, TUNNEL_CRED_FILE: credential });
+    expect(doctor.status, JSON.stringify(doctor.payload)).toBe(0);
+    expect(starts).toBe(1);
+    expect(stops).toBe(0);
+    expect(readRuntimeState(bridge.hubId)).toBeNull();
+    for (const saved of files) expect(fs.readFileSync(saved.file, "utf8")).toBe(saved.contents);
+  });
+
+  it("binds only MCP workspace evidence currently registered to the Hub", async () => {
+    bridge = await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false });
+    const ownRepo = makeTmpDir("bind-owned-repo"), foreignRoot = makeTmpDir("bind-foreign"), unknownRoot = makeTmpDir("bind-unknown");
+    dirs.push(ownRepo, foreignRoot, unknownRoot);
+    const registry = WorkspaceRegistry.forWorkspace(bridge.workspace);
+    const own = registry.add(ownRepo, "registered-repo");
+    const foreign = WorkspaceRegistry.forWorkspace(new Workspace(foreignRoot)).add(foreignRoot, "foreign-repo");
+    const mcpUrl = "https://code.example.com/mcp";
+    writeLastEndpoint({ hubId: bridge.hubId, port: bridge.port, publicUrl: "https://code.example.com", mcpUrl,
+      desiredConnectorName: "Observed Connector", bindingVersion: 1, boundMcpUrl: null });
+    // A healthy local bridge alone does not establish a verified ChatGPT binding.
+    expect(readLastEndpoint(bridge.hubId)?.connectorId).toBeUndefined();
+    const args = ["connector", "bind", "--name", "Observed Connector", "--mcp-url", mcpUrl, "--connector-id", "plugin_observed"];
+    const binding = await runCli([...args, "--verified-workspace", own.workspaceId]);
+    expect(binding.status, JSON.stringify(binding.payload)).toBe(0);
+    const bound = readLastEndpoint(bridge.hubId);
+    expect(bound).toMatchObject({ connectorName: "Observed Connector", connectorId: "plugin_observed", boundMcpUrl: mcpUrl });
+    registry.remove(own.workspaceId);
+    for (const id of [foreign.workspaceId, new Workspace(unknownRoot).id, own.workspaceId]) {
+      const rejected = await runCli([...args, "--verified-workspace", id]);
+      expect(rejected.status).toBe(1);
+      expect(rejected.payload.error).toContain("CONNECTOR_BINDING_CONFLICT");
+      expect(readLastEndpoint(bridge.hubId)).toEqual(bound);
+    }
   });
 
   it.skipIf(process.platform === "win32")("honors all setup naming flags through the Cloudflare process adapter and reuses them on rerun", async () => {

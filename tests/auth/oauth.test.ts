@@ -295,7 +295,7 @@ describe("token enforcement on /mcp", () => {
     const verdict = bridge.authStore.verifyAccessToken(foreign.accessToken);
     if (!verdict.ok) throw new Error("Missing token fixture");
     const verify = vi.spyOn(bridge.authStore, "verifyAccessToken").mockReturnValue({
-      ok: true, record: { ...verdict.record, hubId: "hub_550e8400-e29b-41d4-a716-446655440000" },
+      ok: true, record: { ...verdict.record, hubId: "hub-550e8400-e29b-41d4-a716-446655440000" },
     });
     try { expect((await mcpCall(foreign.accessToken)).status).toBe(403); }
     finally { verify.mockRestore(); }

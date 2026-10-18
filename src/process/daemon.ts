@@ -3,9 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureDir, getStateDir } from "../config/paths.js";
-import { findBridgeObservation, findLiveBridge, type RuntimeState } from "../bridge/runtime.js";
+import { findBridgeObservation, findLiveBridge, readRuntimeState, type RuntimeState } from "../bridge/runtime.js";
 import { resolveHub } from "../hub/store.js";
 import { Workspace } from "../workspace/manager.js";
+import { finalizeAuthHandoff } from "../auth/store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,6 +42,7 @@ export async function ensureBridge(workspaceRoot: string, opts: { port?: number 
     );
   }
 
+  finalizeAuthHandoff(hub.hubId, workspace);
   const logDir = ensureDir(path.join(getStateDir(), "logs"));
   const logFile = path.join(logDir, `bridge-${hub.hubId}.out.log`);
   const out = fs.openSync(logFile, "a", 0o600);
@@ -68,8 +70,12 @@ export async function ensureBridge(workspaceRoot: string, opts: { port?: number 
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 300));
-    const runtime = await findLiveBridge(hub.hubId);
-    if (runtime) return { runtime, spawned: true };
+    // Startup publishes runtime only after its control-plane initialization.
+    // Avoid competing with that initialization for the Hub mapping lock.
+    if (readRuntimeState(hub.hubId)?.pid === child.pid) {
+      const runtime = await findLiveBridge(hub.hubId);
+      if (runtime) return { runtime, spawned: true };
+    }
     if (child.exitCode !== null && child.exitCode !== 0) {
       throw new Error(`Bridge process exited with code ${child.exitCode}. See ${logFile}`);
     }

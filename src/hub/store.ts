@@ -5,7 +5,7 @@ import { z } from "zod";
 import { ensureDir, getStateDir, writeSecureJson } from "../config/paths.js";
 import type { Workspace } from "../workspace/manager.js";
 
-export const hubIdSchema = z.string().regex(/^hub_[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+export const hubIdSchema = z.string().regex(/^hub-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
 const workspaceIdSchema = z.string().regex(/^[a-f0-9]{12}$/);
 const hubSchema = z.object({
   version: z.literal(1),
@@ -20,6 +20,9 @@ const mappingSchema = z.object({
   hubId: hubIdSchema,
   registryInitialized: z.boolean(),
   authInitialized: z.boolean().optional(),
+  authHandoffFinalized: z.boolean().optional(),
+  tunnelInitialized: z.boolean().optional(),
+  endpointInitialized: z.boolean().optional(),
 }).strict();
 
 export type Hub = z.infer<typeof hubSchema>;
@@ -71,6 +74,9 @@ function validatedState() {
   }
   const mappedHubs = new Set<string>();
   for (const { key, value: mapping } of mappings) {
+    if (mapping.authHandoffFinalized && !mapping.authInitialized) {
+      throw new HubError("HUB_MAPPING_CONFLICT", "Finalized auth handoff requires an initialized Hub auth store.");
+    }
     if (key !== mapping.legacyOwnerWorkspaceId || claims.get(key)?.hubId !== mapping.hubId || mappedHubs.has(mapping.hubId)) {
       throw new HubError("HUB_MAPPING_CONFLICT", "Hub mappings must uniquely match their persisted legacy owners.");
     }
@@ -94,6 +100,9 @@ function withHubLock<T>(operation: () => T): T {
 /** Existing identities only: never creates or recovers a Hub mapping. */
 export function withHubControlPlane<T>(hubId: string, operation: (state: {
   hub: Hub; authInitialized: boolean; completeAuthAdoption: () => void;
+  authHandoffFinalized: boolean; completeAuthHandoff: () => void;
+  tunnelInitialized: boolean; endpointInitialized: boolean;
+  completeResourceAdoption: (resource: "tunnel" | "endpoint") => void;
 }) => T): T {
   hubFile(hubId);
   return withHubLock(() => {
@@ -105,6 +114,23 @@ export function withHubControlPlane<T>(hubId: string, operation: (state: {
     return operation({
       hub,
       authInitialized: mapping?.authInitialized ?? !hub.legacyOwnerWorkspaceId,
+      authHandoffFinalized: mapping?.authHandoffFinalized ?? !hub.legacyOwnerWorkspaceId,
+      completeAuthHandoff: () => {
+        if (mapping && !mapping.authHandoffFinalized) {
+          const finalized = { ...mapping, authInitialized: true, authHandoffFinalized: true };
+          writeSecureJson(hubMappingFile(mapping.legacyOwnerWorkspaceId), finalized);
+          Object.assign(mapping, finalized);
+        }
+      },
+      tunnelInitialized: mapping?.tunnelInitialized ?? !hub.legacyOwnerWorkspaceId,
+      endpointInitialized: mapping?.endpointInitialized ?? !hub.legacyOwnerWorkspaceId,
+      completeResourceAdoption: (resource) => {
+        const key = resource === "tunnel" ? "tunnelInitialized" : "endpointInitialized";
+        if (mapping && !mapping[key]) {
+          mapping[key] = true;
+          writeSecureJson(hubMappingFile(mapping.legacyOwnerWorkspaceId), mapping);
+        }
+      },
       completeAuthAdoption: () => {
         if (mapping && !mapping.authInitialized) writeSecureJson(hubMappingFile(mapping.legacyOwnerWorkspaceId), { ...mapping, authInitialized: true });
       },
@@ -123,7 +149,7 @@ export function resolveHub(workspace: Pick<Workspace, "id" | "name">, initialize
     const { mappings, claims } = validatedState();
     let hub = claims.get(workspace.id);
     if (!hub) {
-      hub = hubSchema.parse({ version: 1, hubId: `hub_${randomUUID()}`, displayName: workspace.name,
+      hub = hubSchema.parse({ version: 1, hubId: `hub-${randomUUID()}`, displayName: workspace.name,
         createdAt: new Date().toISOString(), legacyOwnerWorkspaceId: workspace.id });
       writeSecureJson(hubFile(hub.hubId), hub);
     }

@@ -1,6 +1,6 @@
 # Setup and connection lifecycle
 
-The canonical startup workspace determines the resource owner's `workspaceId`.
+The canonical startup workspace resolves the resource owner's stable Hub ID.
 Display names and additional read targets do not transfer ownership of OAuth
 tokens, runtime state, connectors or tunnel UUIDs.
 
@@ -57,7 +57,7 @@ Endpoint state separates desired settings from the verified ChatGPT binding:
 | `bindingVersion: 1` | Explicit desired/bound state format |
 
 Inspect the exact plugin ID, name and Server URL. Verify `workspace_info` through
-the plugin, selecting the startup workspace ID when its registry has multiple
+the plugin, selecting a workspace currently registered to this Hub when it has multiple
 entries, then acknowledge the observed binding:
 
 ```bash

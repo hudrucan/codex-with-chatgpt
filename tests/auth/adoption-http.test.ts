@@ -12,7 +12,7 @@ let bridge: Bridge;
 let legacy: ReturnType<typeof legacyAuthFixture>;
 beforeEach(async () => {
   state = isolateStateDir(); root = makeTmpDir("auth-http-adoption");
-  legacy = legacyAuthFixture(state, new Workspace(root).id);
+  legacy = legacyAuthFixture(state, new Workspace(root).id, root);
   bridge = await startBridge({ workspaceRoot: root, port: 0, persistRuntime: false });
 });
 afterEach(async () => { await bridge?.close(); [state, root].forEach(cleanup); delete process.env.C2C_STATE_DIR; });

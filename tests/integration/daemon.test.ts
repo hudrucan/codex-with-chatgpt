@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { adminFetch, ensureBridge, stopBridge } from "../../src/process/daemon.js";
+import { readTunnelState } from "../../src/tunnel/state.js";
 import { readRuntimeState } from "../../src/bridge/runtime.js";
 import { resolveHub } from "../../src/hub/store.js";
 import { Workspace } from "../../src/workspace/manager.js";
@@ -15,12 +16,19 @@ it("starts and stops a Hub-owned source daemon without deleting or copying stale
     workspaceId: workspace.id, workspaceRoot: root, pid: 999_999_999, port: 1,
     adminToken: "stale-admin", publicUrl: null, startedAt: new Date().toISOString() }));
   const original = fs.readFileSync(legacyFile, "utf8");
+  const legacyTunnel = { workspaceId: workspace.id, preference: "named", provider: "cloudflare-named",
+    tunnelName: "existing-tunnel", tunnelId: "11111111-1111-4111-8111-111111111111",
+    hostname: "code.example.com", zone: "example.com" };
+  const tunnelFile = write(state, `tunnels/${workspace.id}.json`, JSON.stringify(legacyTunnel));
+
   let spawnedPid: number | undefined;
   try {
     const started = await ensureBridge(root, { port: 0 });
     spawnedPid = started.runtime.pid;
     expect(started.spawned).toBe(true);
     expect(started.runtime.hubId).toBe(hub.hubId);
+    expect(readTunnelState(hub.hubId)).toMatchObject({ hubId: hub.hubId, tunnelId: legacyTunnel.tunnelId });
+    expect(fs.readFileSync(tunnelFile, "utf8")).toBe(JSON.stringify(legacyTunnel));
     const info = await adminFetch<{ hubId: string; workspaceId: string }>(started.runtime, "GET", "/admin/info");
     expect(info).toMatchObject({ hubId: hub.hubId, workspaceId: workspace.id });
     expect((await ensureBridge(root)).spawned).toBe(false);

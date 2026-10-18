@@ -80,10 +80,10 @@ async function expectWorkspaceReads(): Promise<void> {
 
 describe("MCP uses the Hub resolved at startup", () => {
   it("requires an explicit matching Hub context without creating ownership state", async () => {
-    const hubId = `hub_${randomUUID()}`;
+    const hubId = `hub-${randomUUID()}`;
     const registry = new WorkspaceRegistry(hubId);
     const before = ownershipSnapshot();
-    expect(() => createMcpServer({ hubId: `hub_${randomUUID()}`, registry, logger: nullLogger }))
+    expect(() => createMcpServer({ hubId: `hub-${randomUUID()}`, registry, logger: nullLogger }))
       .toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE_OWNER" }));
     const server = createMcpServer({ hubId, registry, logger: nullLogger });
     await server.close();
