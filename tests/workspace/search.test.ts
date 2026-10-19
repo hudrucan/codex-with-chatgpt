@@ -1,7 +1,14 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import { spawn } from "node:child_process";
+import path from "node:path";
 import { Workspace } from "../../src/workspace/manager.js";
 import { searchWorkspace, resetRipgrepCache, findRipgrep } from "../../src/workspace/search.js";
 import { makeTmpDir, cleanup, write } from "../helpers.js";
+
+vi.mock("node:child_process", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 let root: string;
 let ws: Workspace;
@@ -31,6 +38,8 @@ afterAll(() => {
 
 afterEach(() => {
   delete process.env.C2C_DISABLE_RG;
+  delete process.env.C2C_RG_PATH;
+  vi.mocked(spawn).mockReset();
   resetRipgrepCache();
 });
 
@@ -54,6 +63,20 @@ describe.each(engines())("search engine: %s", (engine) => {
     expect(paths).toContain("README.md");
     const authMatch = result.matches.find((match) => match.path === "src/auth.ts");
     expect(authMatch?.line).toBe(1);
+  });
+
+  it("returns an empty successful result for no matches", async () => {
+    configure();
+    expect(await searchWorkspace(ws, { query: "no-such-marker-734982" })).toEqual({
+      matches: [], matchCount: 0, truncated: false, engine,
+    });
+  });
+
+  it.each(["[", "[z-a]"])("rejects invalid regex %s with the same typed error in either engine", async query => {
+    configure();
+    await expect(searchWorkspace(ws, { query, regex: true })).rejects.toMatchObject({
+      name: "SearchError", code: "INVALID_REGEX", message: "Invalid regular expression.",
+    });
   });
 
   it("never returns sensitive or noise files", async () => {
@@ -122,5 +145,34 @@ describe.each(engines())("search engine: %s", (engine) => {
     const paths = result.matches.map((match) => match.path);
     expect(paths).toContain("src/auth.ts");
     expect(paths).not.toContain("README.md");
+  });
+});
+
+describe("ripgrep process failures", () => {
+  async function useProcess(script: string) {
+    process.env.C2C_RG_PATH = "test-ripgrep";
+    resetRipgrepCache();
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    vi.mocked(spawn).mockImplementationOnce((_, args, options) => actual.spawn(process.execPath, ["-e", script], options));
+  }
+  const match = () => JSON.stringify({ type: "match", data: {
+    path: { text: path.join(root, "README.md") }, line_number: 1, lines: { text: "needle-alpha" },
+  } });
+
+  it.each([2, 7])("rejects exit %i even after partial output instead of silently falling back", async code => {
+    await useProcess(`process.stdout.write(${JSON.stringify(match() + "\n")}); process.exitCode = ${code};`);
+    await expect(searchWorkspace(ws, { query: "needle-alpha" })).rejects.toMatchObject({ name: "SearchError", code: "SEARCH_FAILED" });
+  });
+
+  it.each(["missing-ripgrep", "invalid\0ripgrep"])("reports spawn failure for %j as a typed error instead of returning Node fallback matches", async binary => {
+    process.env.C2C_RG_PATH = path.join(root, binary); resetRipgrepCache();
+    await expect(searchWorkspace(ws, { query: "needle-alpha" })).rejects.toMatchObject({ name: "SearchError", code: "SEARCH_FAILED" });
+  });
+
+  it("accepts an intentional limit kill but rejects an unsolicited termination", async () => {
+    await useProcess(`process.stdout.write(${JSON.stringify(match() + "\n" + match() + "\n")}); setInterval(() => {}, 1000);`);
+    expect(await searchWorkspace(ws, { query: "needle-alpha", limit: 1 })).toMatchObject({ engine: "ripgrep", matchCount: 1, truncated: true });
+    await useProcess('process.kill(process.pid, "SIGTERM");');
+    await expect(searchWorkspace(ws, { query: "needle-alpha" })).rejects.toMatchObject({ name: "SearchError", code: "SEARCH_FAILED" });
   });
 });

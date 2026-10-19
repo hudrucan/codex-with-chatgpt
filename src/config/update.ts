@@ -16,8 +16,10 @@ export function verifyForkOrigin(run: (args: string[]) => { ok: boolean; stdout:
 /** Called only by the explicit update command. Never stashes user changes. */
 export function pullFork(root: string): void {
   const run = (args: string[]) => {
-    const result = spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: 60_000,
-      windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    const readOnly = args[0] !== "pull";
+    const result = spawnSync("git", readOnly ? ["--no-optional-locks", "-c", "core.fsmonitor=false", ...args] : args,
+      { cwd: root, encoding: "utf8", timeout: 60_000, windowsHide: true,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(readOnly ? { GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat" } : {}) } });
     return { ok: result.status === 0, stdout: (result.stdout ?? "").trim() };
   };
   verifyForkOrigin(run);

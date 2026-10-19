@@ -155,6 +155,23 @@ describe("read_file pagination", () => {
     expect(result.endLine).toBe(502);
   });
 
+  it("rejects reversed ranges instead of returning an empty but truncated page", async () => {
+    await expect(ws.readFile("hello.txt", { startLine: 3, endLine: 2 })).rejects.toMatchObject({ code: "INVALID_RANGE" });
+  });
+
+  it.each([2, 99])("returns a consistent empty page when start %i is after EOF", async startLine => {
+    expect(await ws.readFile("hello.txt", { startLine })).toMatchObject({
+      totalLines: 1, startLine: 2, endLine: 1, content: "", remainingLines: 0, truncated: false, nextStartLine: null,
+    });
+  });
+
+  it("uses the same empty-page convention for an empty file", async () => {
+    write(root, "empty.txt", "");
+    expect(await ws.readFile("empty.txt", { startLine: 99 })).toMatchObject({
+      totalLines: 0, startLine: 1, endLine: 0, content: "", remainingLines: 0, truncated: false, nextStartLine: null,
+    });
+  });
+
   it("denies binary files", async () => {
     fs.writeFileSync(path.join(root, "blob.bin"), Buffer.from([0, 1, 2, 3, 0, 255]));
     await expect(ws.readFile("blob.bin")).rejects.toMatchObject({ code: "BINARY_FILE" });

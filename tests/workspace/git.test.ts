@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { gitDiff, gitInfo, gitStatus } from "../../src/workspace/git.js";
@@ -20,6 +20,51 @@ afterAll(() => {
   delete process.env.GIT_CEILING_DIRECTORIES;
   cleanup(repo);
   cleanup(plain);
+});
+afterEach(() => { vi.unstubAllEnvs(); });
+
+describe("read-only git execution", () => {
+  it("never executes repo-configured fsmonitor, textconv or external diff helpers", () => {
+    const isolated = makeTmpDir("git-helpers");
+    try {
+      makeGitRepo(isolated);
+      write(isolated, ".gitattributes", "hello.txt diff=unsafe\n");
+      git(isolated, "add", ".gitattributes"); git(isolated, "commit", "-m", "configure diff driver");
+      write(isolated, "hello.txt", "staged content\n"); git(isolated, "add", "hello.txt");
+      write(isolated, "hello.txt", "working content\n");
+      const marker = path.join(isolated, "helper-executed");
+      const helper = write(isolated, "helper.cjs", `require('node:fs').appendFileSync(${JSON.stringify(marker)}, process.argv[2]); process.stdout.write('HELPER_OUTPUT\\n');`);
+      const command = `"${process.execPath.replace(/\\/g, "/")}" "${helper.replace(/\\/g, "/")}"`;
+      git(isolated, "config", "diff.unsafe.textconv", `${command} textconv`);
+      git(isolated, "config", "diff.external", `${command} external`);
+      git(isolated, "config", "core.fsmonitor", `${command} fsmonitor`);
+      expect(gitInfo(isolated)).toMatchObject({ isRepo: true, dirty: true });
+      expect(gitStatus(isolated)).toMatchObject({ isRepo: true, unstaged: expect.arrayContaining([{ path: "hello.txt", change: "M" }]) });
+      for (const mode of ["unstaged", "staged", "head"] as const) {
+        const result = gitDiff(isolated, { mode });
+        expect(result.isRepo).toBe(true); expect(result.diff).toContain("content");
+        expect(result.diff).not.toContain("HELPER_OUTPUT");
+      }
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally { cleanup(isolated); }
+  });
+
+  it("does not refresh or rewrite the index when status or workspace info reads changed file timestamps", () => {
+    const isolated = makeTmpDir("git-index-read");
+    try {
+      makeGitRepo(isolated);
+      vi.stubEnv("GIT_OPTIONAL_LOCKS", "1");
+      const changedTime = new Date(Date.now() + 10_000);
+      fs.utimesSync(path.join(isolated, "hello.txt"), changedTime, changedTime);
+      const index = path.join(isolated, ".git", "index"), bytes = fs.readFileSync(index);
+      const modifiedAt = fs.statSync(index, { bigint: true }).mtimeNs;
+      expect(gitStatus(isolated)).toMatchObject({ isRepo: true, staged: [], unstaged: [] });
+      expect(gitInfo(isolated).dirty).toBe(false);
+      expect(fs.readFileSync(index)).toEqual(bytes);
+      expect(fs.statSync(index, { bigint: true }).mtimeNs).toBe(modifiedAt);
+      expect(fs.existsSync(`${index}.lock`)).toBe(false);
+    } finally { cleanup(isolated); }
+  });
 });
 
 describe("gitInfo", () => {

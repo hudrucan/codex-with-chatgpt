@@ -8,6 +8,7 @@ import { readJsonIfExists } from "../config/paths.js";
 
 export type WorkspaceErrorCode =
   | "INVALID_PATH"
+  | "INVALID_RANGE"
   | "PATH_OUTSIDE_WORKSPACE"
   | "ACCESS_DENIED_SENSITIVE_FILE"
   | "FILE_NOT_FOUND"
@@ -187,9 +188,13 @@ export class Workspace {
     }
 
     const startLine = Math.max(1, Math.floor(opts.startLine ?? 1));
+    const requestedEnd = opts.endLine === undefined ? undefined : Math.floor(opts.endLine);
+    if (requestedEnd !== undefined && requestedEnd < startLine) {
+      throw new WorkspaceError("INVALID_RANGE", "end_line must be greater than or equal to start_line.");
+    }
     const maxLines = Math.min(HARD_MAX_LINES, Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES)));
-    const endLimit = opts.endLine
-      ? Math.min(Math.floor(opts.endLine), startLine + HARD_MAX_LINES - 1)
+    const endLimit = requestedEnd !== undefined
+      ? Math.min(requestedEnd, startLine + HARD_MAX_LINES - 1)
       : startLine + maxLines - 1;
     const maxBytes = Math.min(1024 * 1024, Math.max(1024, Math.floor(opts.maxBytes ?? DEFAULT_MAX_BYTES)));
 
@@ -216,16 +221,17 @@ export class Workspace {
     }
     rl.close();
 
-    const remaining = Math.max(0, totalLines - actualEnd);
+    const endLine = Math.min(actualEnd, totalLines);
+    const remaining = totalLines - endLine;
     return {
       path: rel,
       sizeBytes: stat.size,
       totalLines,
-      startLine: Math.min(startLine, Math.max(totalLines, 1)),
-      endLine: actualEnd,
+      startLine: Math.min(startLine, totalLines + 1),
+      endLine,
       truncated: remaining > 0,
       remainingLines: remaining,
-      nextStartLine: remaining > 0 ? actualEnd + 1 : null,
+      nextStartLine: remaining > 0 ? endLine + 1 : null,
       content: lines.join("\n"),
     };
   }

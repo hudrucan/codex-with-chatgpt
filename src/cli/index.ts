@@ -931,11 +931,11 @@ program
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function runGit(args: string[]): { ok: boolean; stdout: string } {
-  const result = spawnSync("git", args, {
+  const result = spawnSync("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
     timeout: 8000,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" },
     windowsHide: true,
   });
   return { ok: result.status === 0, stdout: (result.stdout ?? "").trim() };

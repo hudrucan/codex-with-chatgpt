@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -23,6 +23,13 @@ export interface SearchResult {
   matchCount: number;
   truncated: boolean;
   engine: "ripgrep" | "node";
+}
+
+export class SearchError extends Error {
+  constructor(public code: "INVALID_REGEX" | "SEARCH_FAILED", message: string) {
+    super(message);
+    this.name = "SearchError";
+  }
 }
 
 const RG_CANDIDATES = [
@@ -82,9 +89,13 @@ async function searchWithRipgrep(
   args.push("--", opts.query, searchAbs);
 
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(rgBin, args, { cwd: ws.root, windowsHide: true });
+    let child: ChildProcessWithoutNullStreams;
+    try { child = spawn(rgBin, args, { cwd: ws.root, windowsHide: true }); }
+    catch { reject(new SearchError("SEARCH_FAILED", "Could not start ripgrep.")); return; }
     const matches: SearchMatch[] = [];
     let truncated = false;
+    let killedForLimit = false;
+    child.stderr.resume();
     const rl = readline.createInterface({ input: child.stdout });
     rl.on("line", (line) => {
       if (truncated) return;
@@ -99,7 +110,7 @@ async function searchWithRipgrep(
         // Metadata and hidden matches do not indicate omitted visible results.
         if (matches.length >= limit) {
           truncated = true;
-          child.kill("SIGTERM");
+          killedForLimit = child.kill("SIGTERM");
           return;
         }
         matches.push({
@@ -111,8 +122,12 @@ async function searchWithRipgrep(
         // ignore malformed json lines
       }
     });
-    child.on("error", reject);
-    child.on("close", () => {
+    child.on("error", () => reject(new SearchError("SEARCH_FAILED", "Could not start ripgrep.")));
+    child.on("close", (code, signal) => {
+      if (code !== 0 && code !== 1 && !(killedForLimit && signal === "SIGTERM")) {
+        reject(new SearchError("SEARCH_FAILED", `ripgrep failed (${signal ? `signal ${signal}` : `exit ${code}`}).`));
+        return;
+      }
       resolvePromise({ matches, matchCount: matches.length, truncated, engine: "ripgrep" });
     });
   });
@@ -122,9 +137,9 @@ async function searchWithNode(
   ws: Workspace,
   searchAbs: string,
   opts: SearchOptions,
-  limit: number
+  limit: number,
+  matcher: RegExp | null
 ): Promise<SearchResult> {
-  const matcher = opts.regex ? new RegExp(opts.query, "i") : null;
   const needle = opts.query.toLowerCase();
   const globRegex = opts.glob ? globToRegex(opts.glob) : null;
   const matches: SearchMatch[] = [];
@@ -195,6 +210,11 @@ function globToRegex(glob: string): RegExp {
 }
 
 export async function searchWorkspace(ws: Workspace, opts: SearchOptions): Promise<SearchResult> {
+  let matcher: RegExp | null = null;
+  if (opts.regex) {
+    try { matcher = new RegExp(opts.query, "i"); }
+    catch { throw new SearchError("INVALID_REGEX", "Invalid regular expression."); }
+  }
   if (!opts.query || opts.query.length < 2) {
     return { matches: [], matchCount: 0, truncated: false, engine: "node" };
   }
@@ -202,11 +222,7 @@ export async function searchWorkspace(ws: Workspace, opts: SearchOptions): Promi
   const { abs } = ws.resolve(opts.path ?? ".");
   const rg = findRipgrep();
   if (rg) {
-    try {
-      return await searchWithRipgrep(ws, rg, abs, opts, limit);
-    } catch {
-      // fall through to node engine
-    }
+    return searchWithRipgrep(ws, rg, abs, opts, limit);
   }
-  return searchWithNode(ws, abs, opts, limit);
+  return searchWithNode(ws, abs, opts, limit, matcher);
 }

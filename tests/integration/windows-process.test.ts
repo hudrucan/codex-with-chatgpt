@@ -48,6 +48,8 @@ describe("Windows background subprocess windowsHide: true (RED verification)", (
     const gitCall = spawnSyncCalls.find((c) => c.file === "git");
     expect(gitCall).toBeDefined();
     expect(gitCall?.options).toHaveProperty("windowsHide", true);
+    expect(gitCall?.args).toEqual(["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain"]);
+    expect(gitCall?.options.env).toMatchObject({ GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" });
   });
 
   it("2. findRipgrep in src/workspace/search.ts passes windowsHide: true for candidate probe", () => {

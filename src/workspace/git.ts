@@ -9,8 +9,9 @@ export interface GitCommandResult {
 }
 
 export function runGit(root: string, args: string[]): GitCommandResult {
-  const result = spawnSync("git", args, {
+  const result = spawnSync("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", ...args], {
     cwd: root,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" },
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     timeout: 30_000,
@@ -205,6 +206,8 @@ export function gitDiff(
   // 1. Full-workspace inventory using NUL separation and global rename detection
   const listArgs = [
     "diff",
+    "--no-ext-diff",
+    "--no-textconv",
     "--name-status",
     "-z",
     "--find-renames=1%",
@@ -278,6 +281,8 @@ export function gitDiff(
     const pathspecs = batch.map((p) => `:(literal)${p}`);
     const diffArgs = [
       "diff",
+      "--no-ext-diff",
+      "--no-textconv",
       "--no-color",
       "--find-renames=1%",
       ...modeArgs,

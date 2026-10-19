@@ -15,16 +15,18 @@ let accessToken: string;
 let stateDir: string;
 let authFile: string;
 
-function textOf(result: { content?: unknown }): string {
+type ToolResponse = Awaited<ReturnType<Client["callTool"]>>;
+
+function textOf(result: ToolResponse): string {
   const content = result.content as { type: string; text: string }[];
   return content?.[0]?.text ?? "";
 }
 
-function jsonOf<T = Record<string, unknown>>(result: { content?: unknown }): T {
+function jsonOf<T = Record<string, unknown>>(result: ToolResponse): T {
   return JSON.parse(textOf(result)) as T;
 }
 
-function structuredJsonOf<T = Record<string, unknown>>(result: { content?: unknown; structuredContent?: unknown }): T {
+function structuredJsonOf<T = Record<string, unknown>>(result: ToolResponse): T {
   const parsed = jsonOf<T>(result);
   expect(result.structuredContent).toEqual(parsed);
   return parsed;
@@ -131,6 +133,16 @@ describe("MCP tools over Streamable HTTP", () => {
     const result = await client.callTool({ name: "read_file", arguments: { path: "hello.txt" } });
     const file = structuredJsonOf<{ content: string; totalLines: number }>(result);
     expect(file.content).toContain("Hello from Desk C2C Hub!");
+  });
+
+  it("returns typed range and regex errors through MCP instead of generic or successful results", async () => {
+    for (const [name, args, error] of [
+      ["read_file", { path: "hello.txt", start_line: 3, end_line: 2 }, "INVALID_RANGE"],
+      ["search_workspace", { query: "([", regex: true }, "INVALID_REGEX"],
+    ] as const) {
+      const result = await client.callTool({ name, arguments: args });
+      expect(result.isError).toBe(true); expect(jsonOf(result)).toMatchObject({ error });
+    }
   });
 
   it("read_image returns metadata and image content", async () => {

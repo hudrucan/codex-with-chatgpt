@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { WorkspaceError } from "../workspace/manager.js";
 import { WorkspaceRegistry, WorkspaceRegistryError } from "../workspace/registry.js";
-import { searchWorkspace } from "../workspace/search.js";
+import { SearchError, searchWorkspace } from "../workspace/search.js";
 import { gitDiff, gitInfo, gitStatus, type DiffMode } from "../workspace/git.js";
 import type { Logger } from "../logger/index.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
@@ -46,7 +46,7 @@ function mapError(error: unknown): ToolResult {
       isError: true,
     };
   }
-  if (error instanceof WorkspaceError) return fail(error.code, error.message);
+  if (error instanceof WorkspaceError || error instanceof SearchError) return fail(error.code, error.message);
   return fail("INTERNAL_ERROR", error instanceof Error ? error.message : String(error));
 }
 
