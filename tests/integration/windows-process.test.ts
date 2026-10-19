@@ -22,7 +22,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 // Import modules under test after mock is established
-import { runGit } from "../../src/workspace/git.js";
+import { gitDiff, runGit } from "../../src/workspace/git.js";
 import { findRipgrep, resetRipgrepCache, searchWorkspace } from "../../src/workspace/search.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { findBinary } from "../../src/tunnel/detect.js";
@@ -50,6 +50,23 @@ describe("Windows background subprocess windowsHide: true (RED verification)", (
     expect(gitCall?.options).toHaveProperty("windowsHide", true);
     expect(gitCall?.args).toEqual(["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain"]);
     expect(gitCall?.options.env).toMatchObject({ GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" });
+  });
+
+  it("async gitDiff preserves hardened arguments, environment and hidden windows for inventory and patches", async () => {
+    makeGitRepo(tmpDir);
+    write(tmpDir, "hello.txt", "changed content\n");
+    spawnCalls.length = 0; spawnSyncCalls.length = 0;
+    expect((await gitDiff(tmpDir)).isRepo).toBe(true);
+    const calls = spawnCalls.filter(call => call.file === "git");
+    expect(calls).toHaveLength(2);
+    expect(spawnSyncCalls).toHaveLength(0);
+    for (const call of calls) {
+      expect(call.options.windowsHide).toBe(true);
+      expect(call.options.env).toMatchObject({ GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" });
+      expect(call.args.slice(0, 6)).toEqual(["--no-optional-locks", "-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--no-textconv"]);
+    }
+    expect(calls[0].args).toContain("--name-status");
+    expect(calls[1].args).toContain(":(literal)hello.txt");
   });
 
   it("2. findRipgrep in src/workspace/search.ts passes windowsHide: true for candidate probe", () => {

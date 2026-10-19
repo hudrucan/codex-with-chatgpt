@@ -401,7 +401,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
           relPath = workspace.resolve(args.path).rel;
         }
         return okStructured(
-          gitDiff(
+          await gitDiff(
             workspace,
             { mode: args.mode as DiffMode, offset: args.offset, maxBytes: args.max_bytes },
             relPath

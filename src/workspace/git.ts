@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { IgnoreRules } from "./ignore.js";
 
 export interface GitCommandResult {
@@ -187,11 +187,67 @@ function isPathInScope(filePath: string, scope?: string): boolean {
   return filePath === scope || filePath.startsWith(scope + "/");
 }
 
-export function gitDiff(
+const MAX_GIT_INVENTORY_BYTES = 64 * 1024 * 1024;
+const MAX_AGGREGATE_DIFF_BYTES = 64 * 1024 * 1024;
+const MAX_GIT_STDERR_BYTES = 64 * 1024;
+const GIT_PROCESS_TIMEOUT_MS = 30_000;
+
+/** Drain each process completely; failure is reported only after its streams close. */
+function streamGit(root: string, args: string[], consume: (chunk: Buffer) => boolean): Promise<boolean> {
+  return new Promise(resolve => {
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", ...args], {
+        cwd: root,
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" },
+        windowsHide: true,
+      });
+    } catch { resolve(false); return; }
+    let failed = false;
+    let stderrBytes = 0;
+    const fail = (): void => {
+      if (failed) return;
+      failed = true;
+      try { child.kill("SIGKILL"); }
+      catch { /* Still wait for close; never resolve with partial output. */ }
+    };
+    const timer = setTimeout(fail, GIT_PROCESS_TIMEOUT_MS);
+    child.on("error", fail);
+    child.stdin.on("error", fail);
+    child.stdout.on("error", fail);
+    child.stderr.on("error", fail);
+    child.stdin.end();
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (failed) return;
+      try { if (!consume(chunk)) fail(); }
+      catch { fail(); }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (failed) return;
+      stderrBytes += chunk.length;
+      if (stderrBytes > MAX_GIT_STDERR_BYTES) fail();
+    });
+    child.once("close", code => {
+      clearTimeout(timer);
+      resolve(!failed && code === 0);
+    });
+  });
+}
+
+/** A page without a newline may end in the middle of a multibyte code point. */
+function utf8PageEnd(page: Buffer): number {
+  let start = page.length - 1;
+  while (start > 0 && (page[start] & 0xc0) === 0x80) start--;
+  const lead = page[start];
+  const width = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+  return start + width > page.length ? start : page.length;
+}
+
+export async function gitDiff(
   target: GitTarget,
   opts: GitDiffOptions = {},
   relPath?: string
-): GitDiffResult {
+): Promise<GitDiffResult> {
   const root = typeof target === "string" ? target : target.root;
   const ignoreRules =
     typeof target === "object" && target.ignoreRules
@@ -202,6 +258,10 @@ export function gitDiff(
   const offset = Math.max(0, Math.floor(opts.offset ?? 0));
   const maxBytes = Math.min(256 * 1024, Math.max(1024, Math.floor(opts.maxBytes ?? 64 * 1024)));
   const modeArgs = getDiffModeArgs(mode);
+  const failure: GitDiffResult = {
+    isRepo: false, mode, totalBytes: 0, offset: 0, returnedBytes: 0,
+    hasMore: false, nextOffset: null, diff: "",
+  };
 
   // 1. Full-workspace inventory using NUL separation and global rename detection
   const listArgs = [
@@ -215,67 +275,52 @@ export function gitDiff(
     "--",
     ".",
   ];
-  const listResult = runGit(root, listArgs);
-  if (!listResult.ok) {
-    return {
-      isRepo: false,
-      mode,
-      totalBytes: 0,
-      offset: 0,
-      returnedBytes: 0,
-      hasMore: false,
-      nextOffset: null,
-      diff: "",
-    };
-  }
-
-  const tokens = listResult.stdout.split("\0");
+  let inventory: Buffer[] = [];
+  let inventoryBytes = 0;
+  const listed = await streamGit(root, listArgs, chunk => {
+    if (inventoryBytes + chunk.length > MAX_GIT_INVENTORY_BYTES) return false;
+    inventory.push(chunk);
+    inventoryBytes += chunk.length;
+    return true;
+  });
+  if (!listed) return failure;
+  const tokens = Buffer.concat(inventory, inventoryBytes).toString("utf8").split("\0");
+  inventory = [];
+  // Never use a partial inventory, even if a process unexpectedly exits successfully.
+  if (tokens.pop() !== "") return failure;
   const safePaths: string[] = [];
   for (let i = 0; i < tokens.length; ) {
     const status = tokens[i++];
-    if (!status) break;
+    if (!status) return failure;
     if (status.startsWith("R") || status.startsWith("C")) {
       const oldPath = tokens[i++];
       const newPath = tokens[i++];
-      if (oldPath && newPath) {
-        // Layer 1: Security - EITHER side sensitive -> completely unsafe
-        const isSafe = !ignoreRules.isSensitive(oldPath) && !ignoreRules.isSensitive(newPath);
-        // Layer 2: Scope - EITHER side in scope -> relevant
-        const isRelevant = isPathInScope(oldPath, relPath) || isPathInScope(newPath, relPath);
-        if (isSafe && isRelevant) {
-          safePaths.push(oldPath, newPath);
-        }
+      if (!oldPath || !newPath) return failure;
+      // Layer 1: Security - EITHER side sensitive -> completely unsafe
+      const isSafe = !ignoreRules.isSensitive(oldPath) && !ignoreRules.isSensitive(newPath);
+      // Layer 2: Scope - EITHER side in scope -> relevant
+      const isRelevant = isPathInScope(oldPath, relPath) || isPathInScope(newPath, relPath);
+      if (isSafe && isRelevant) {
+        safePaths.push(oldPath, newPath);
       }
     } else {
       const filePath = tokens[i++];
-      if (filePath) {
-        const isSafe = !ignoreRules.isSensitive(filePath);
-        const isRelevant = isPathInScope(filePath, relPath);
-        if (isSafe && isRelevant) {
-          safePaths.push(filePath);
-        }
+      if (!filePath) return failure;
+      const isSafe = !ignoreRules.isSensitive(filePath);
+      const isRelevant = isPathInScope(filePath, relPath);
+      if (isSafe && isRelevant) {
+        safePaths.push(filePath);
       }
     }
   }
 
-  if (safePaths.length === 0) {
-    return {
-      isRepo: true,
-      mode,
-      totalBytes: 0,
-      offset: 0,
-      returnedBytes: 0,
-      hasMore: false,
-      nextOffset: null,
-      diff: "",
-    };
-  }
+  if (safePaths.length === 0) return { ...failure, isRepo: true };
 
-  // 2. Fetch diffs for safe paths in bounded batches (path count + argv bytes)
+  // 2. Count every safe diff byte, retaining only the requested page across batches.
   const batches = chunkSafePaths(safePaths);
-  let combinedDiff = "";
-  let totalAggregateBytes = 0;
-  const MAX_AGGREGATE_DIFF_BYTES = 64 * 1024 * 1024;
+  const page = Buffer.allocUnsafe(maxBytes);
+  let pageBytes = 0;
+  let totalBytes = 0;
 
   for (const batch of batches) {
     const pathspecs = batch.map((p) => `:(literal)${p}`);
@@ -289,57 +334,33 @@ export function gitDiff(
       "--",
       ...pathspecs,
     ];
-    const diffResult = runGit(root, diffArgs);
-    if (!diffResult.ok) {
-      // Fail closed on any batch error: never return partial silent success
-      return {
-        isRepo: false,
-        mode,
-        totalBytes: 0,
-        offset: 0,
-        returnedBytes: 0,
-        hasMore: false,
-        nextOffset: null,
-        diff: "",
-      };
-    }
-    if (diffResult.stdout) {
-      const chunkBytes = Buffer.byteLength(diffResult.stdout, "utf8");
-      if (totalAggregateBytes + chunkBytes > MAX_AGGREGATE_DIFF_BYTES) {
-        // Fail closed on aggregate cap: do not fake a partial successful diff
-        return {
-          isRepo: false,
-          mode,
-          totalBytes: 0,
-          offset: 0,
-          returnedBytes: 0,
-          hasMore: false,
-          nextOffset: null,
-          diff: "",
-        };
+    const completed = await streamGit(root, diffArgs, chunk => {
+      if (totalBytes + chunk.length > MAX_AGGREGATE_DIFF_BYTES) return false;
+      const skip = Math.max(0, offset - totalBytes);
+      if (skip < chunk.length && pageBytes < maxBytes) {
+        const count = Math.min(chunk.length - skip, maxBytes - pageBytes);
+        chunk.copy(page, pageBytes, skip, skip + count);
+        pageBytes += count;
       }
-      combinedDiff += diffResult.stdout;
-      totalAggregateBytes += chunkBytes;
-    }
+      totalBytes += chunk.length;
+      return true;
+    });
+    if (!completed) return failure;
   }
 
-  const full = Buffer.from(combinedDiff, "utf8");
-  const slice = full.subarray(offset, offset + maxBytes);
-  let text = slice.toString("utf8");
-  let sliceLen = slice.length;
-  // Avoid cutting mid-line when more content follows.
-  if (offset + sliceLen < full.length) {
-    const lastNewline = text.lastIndexOf("\n");
-    if (lastNewline > 0) {
-      text = text.slice(0, lastNewline + 1);
-      sliceLen = Buffer.byteLength(text, "utf8");
-    }
+  let slice = page.subarray(0, pageBytes);
+  // Keep newline trimming byte-based; sequential page offsets must not drift on UTF-8.
+  if (offset + slice.length < totalBytes) {
+    const lastNewline = slice.lastIndexOf(0x0a);
+    slice = slice.subarray(0, lastNewline > 0 ? lastNewline + 1 : utf8PageEnd(slice));
   }
-  const hasMore = offset + sliceLen < full.length;
+  const sliceLen = slice.length;
+  const text = slice.toString("utf8");
+  const hasMore = offset + sliceLen < totalBytes;
   return {
     isRepo: true,
     mode,
-    totalBytes: full.length,
+    totalBytes,
     offset,
     returnedBytes: sliceLen,
     hasMore,
