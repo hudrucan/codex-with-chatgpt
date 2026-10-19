@@ -1,7 +1,7 @@
 {
   "name": "desk-c2c-hub",
-  "version": "0.1.3",
-  "description": "Secure read-only MCP bridge connecting ChatGPT to a local workspace.",
+  "version": "0.2.0",
+  "description": "Secure read-only MCP Hub connecting ChatGPT to registered local repositories.",
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -19,7 +19,7 @@
   },
   "packageManager": "pnpm@11.24.0",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "latest",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "commander": "^14.0.0",
     "express": "^5.1.0",
     "ignore": "^7.0.5",

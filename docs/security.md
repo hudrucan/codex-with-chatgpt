@@ -33,6 +33,20 @@
 | Admin API abuse | Loopback-only + random admin token (0600 runtime file) + requests with proxy headers (`cf-connecting-ip`, `x-forwarded-for`) rejected; unauthenticated probes get 404 |
 | Log credential leakage | Logger redacts token prefixes, bearer headers, token-like parameters, and pairing-code-shaped strings before writing |
 
+## Custom ignore rules
+
+An optional `.c2cignore` in a registered repo uses gitignore-style patterns.
+Matching paths are hidden from workspace reads, directory listings, search and
+git diffs. For example:
+
+```gitignore
+internal-notes/
+fixtures/**/*.snap
+```
+
+Built-in sensitive-file rules still apply even without `.c2cignore` and cannot
+be overridden by it.
+
 ## Token & scope design
 
 Scopes: `workspace.read`, `workspace.search`, `git.read`, `offline_access`. Tools enforce scopes individually (`INSUFFICIENT_SCOPE`).

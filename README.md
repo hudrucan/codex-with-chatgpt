@@ -6,8 +6,8 @@ MCP. Each connection resolves a stable local Hub with its own workspace grants.
 
 ## Install
 
-Requirements: Node.js >= 20, git, pnpm through Corepack, and cloudflared for a
-public ChatGPT connection.
+Requirements: Node.js >= 22.13 for the pinned pnpm toolchain, git, Corepack, and
+cloudflared for a public ChatGPT connection. The bridge runtime supports Node.js >= 20.
 
 ```bash
 git clone https://github.com/hudrucan/desk-c2c-hub.git

@@ -224,5 +224,5 @@ can override the state directory. No repository configuration is written.
 
 Registry ownership must match the running Hub. Writes use an exclusive local
 lock and atomic replacement. Native stores never import old files or merge
-other Hubs' grants. See [troubleshooting](troubleshooting.md) for explicit upgrade
-and lock recovery. All connection resources and destroy receipts are Hub-owned.
+other Hubs' grants. See [troubleshooting](troubleshooting.md) for state, lock
+and runtime recovery. All connection resources and destroy receipts are Hub-owned.

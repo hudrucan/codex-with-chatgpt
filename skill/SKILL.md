@@ -34,8 +34,9 @@ coding/planning loop, or use INIT/PLAN/EXECUTED/REVIEW or session/checkpoint orc
 ## Location and selection
 
 Checkout: `<ACTUAL_CHECKOUT_PATH>`. Run `node "<checkout>/bin/c2c.js" <command>`
-or `c2c` when linked. Node >= 20 and Corepack/pnpm are required. Build/install
-only if absent or explicitly updating; never pull just to start a connection.
+or `c2c` when linked. The bridge runtime requires Node >= 20; the pinned pnpm
+toolchain requires Node >= 22.13 and Corepack. Build/install only if absent or
+explicitly updating; never pull just to start a connection.
 Keep OS C2C state outside repos. Keep display naming in external workspace state.
 
 Start with `c2c hub list --json`:
@@ -82,7 +83,7 @@ names and binding. Unknown runtime state is a blocker, not permission to spawn.
    authentication, required credentials, consent or a real ownership conflict.
 5. Reuse a matching ChatGPT connector. Create only for a genuinely new connection,
    using returned name/URL, OAuth, and description `Read-only access to the
-   connected local workspace.` Reuse the task's single in-app browser tab.
+   registered local repositories.` Reuse the task's single in-app browser tab.
 6. When the pairing form is ready, use `c2c pair --json` and type that one-time
    code. Never unpair/revoke to solve a discovery or process-handoff issue.
 7. Verify actual MCP results and bind the connector below. Then follow

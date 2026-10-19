@@ -1,12 +1,14 @@
 import { fixtureHub, fixtureWorkspace, fixtureAuthFile } from "../helpers.js";
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Logger } from "../../src/logger/index.js";
 import { AuthStore } from "../../src/auth/store.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
-import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir } from "../helpers.js";
+import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir, pkceVerifierAndChallenge } from "../helpers.js";
 
 let root: string;
 let bridge: Bridge;
@@ -59,6 +61,7 @@ beforeAll(async () => {
     hubId: fixtureHub(root).hubId,
     port: 0,
     persistRuntime: false,
+    logger: new Logger({ file: path.join(stateDir, "mcp-http.log"), console: true, level: "debug" }),
     authStoreFile: fixtureAuthFile(fixtureHub(root).hubId, authFile),
   });
   const tokens = bridge.authStore.issueTokens({
@@ -186,6 +189,102 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(paths).toContain("hello.txt");
     expect(paths).toContain("src/index.ts");
     expect(paths).not.toContain(".env");
+  });
+
+  it("discovers OAuth, registers and pairs with PKCE, then routes authenticated MCP reads without logging credentials", async () => {
+    const base = bridge.localBaseUrl();
+    const other = makeTmpDir("oauth-explicit-repo");
+    const registry = new WorkspaceRegistry(bridge.hubId);
+    write(other, "hello.txt", "explicit OAuth repository\n");
+    write(other, ".env", "denied-credential-content\n");
+    const entry = registry.add(other, "oauth-repo");
+    const oauthClient = new Client({ name: "oauth-mcp-integration", version: "1.0.0" });
+    const output: string[] = [];
+    const capture = [process.stdout, process.stderr].map(stream => vi.spyOn(stream, "write").mockImplementation(chunk => {
+      output.push(String(chunk)); return true;
+    }));
+    try {
+      const unauthorized = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) });
+      expect(unauthorized.status).toBe(401);
+      const metadataUrl = unauthorized.headers.get("www-authenticate")?.match(/resource_metadata="([^"]+)"/)?.[1];
+      expect(metadataUrl).toBe(`${base}/.well-known/oauth-protected-resource/mcp`);
+      const metadataResponse = await fetch(metadataUrl!);
+      expect(metadataResponse.status).toBe(200);
+      const resource = await metadataResponse.json() as { resource: string; authorization_servers: string[] };
+      expect(resource).toMatchObject({ resource: `${base}/mcp`, authorization_servers: [base] });
+      const discovery = await fetch(`${resource.authorization_servers[0]}/.well-known/oauth-authorization-server`);
+      expect(discovery.status).toBe(200);
+      const metadata = await discovery.json() as { authorization_endpoint: string; token_endpoint: string;
+        registration_endpoint: string; scopes_supported: string[]; code_challenge_methods_supported: string[] };
+      expect(metadata).toMatchObject({ authorization_endpoint: `${base}/oauth/authorize`, token_endpoint: `${base}/oauth/token`,
+        registration_endpoint: `${base}/oauth/register`, code_challenge_methods_supported: ["S256"] });
+
+      const redirectUri = "http://127.0.0.1:19876/callback";
+      const registered = await fetch(metadata.registration_endpoint, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ client_name: "OAuth MCP integration", redirect_uris: [redirectUri] }) });
+      expect(registered.status).toBe(201);
+      const registration = await registered.json() as { client_id: string };
+      const { verifier, challenge } = pkceVerifierAndChallenge();
+      const authorize = new URL(metadata.authorization_endpoint);
+      authorize.search = new URLSearchParams({ client_id: registration.client_id, redirect_uri: redirectUri,
+        response_type: "code", state: "integration-state", code_challenge: challenge, code_challenge_method: "S256",
+        scope: metadata.scopes_supported.join(" ") }).toString();
+      const page = await fetch(authorize, { redirect: "manual" });
+      expect(page.status).toBe(200);
+      const requestId = (await page.text()).match(/name="request_id" value="([a-f0-9]+)"/)?.[1];
+      expect(Boolean(requestId)).toBe(true);
+      const pairingResponse = await fetch(`${base}/admin/pairing`, { method: "POST",
+        headers: { authorization: `Bearer ${bridge.adminToken}` } });
+      expect(pairingResponse.status).toBe(200);
+      const pairing = await pairingResponse.json() as { code: string };
+      const approval = await fetch(metadata.authorization_endpoint, { method: "POST", redirect: "manual",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ request_id: requestId!, pairing_code: pairing.code }) });
+      expect(approval.status).toBe(302);
+      const redirect = new URL(approval.headers.get("location")!);
+      expect(redirect.origin + redirect.pathname).toBe(redirectUri);
+      expect(redirect.searchParams.get("state")).toBe("integration-state");
+      const code = redirect.searchParams.get("code")!;
+      expect(Boolean(code)).toBe(true);
+      const exchange = await fetch(metadata.token_endpoint, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier,
+          client_id: registration.client_id, redirect_uri: redirectUri }) });
+      expect(exchange.status).toBe(200);
+      const tokens = await exchange.json() as { access_token: string; refresh_token: string };
+      expect(Boolean(tokens.access_token)).toBe(true);
+      expect(Boolean(tokens.refresh_token)).toBe(true);
+
+      await oauthClient.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } },
+      }));
+      const info = await oauthClient.callTool({ name: "workspace_info", arguments: { workspace: entry.workspaceId } });
+      expect(info.isError ?? false).toBe(false);
+      expect(structuredJsonOf(info).workspaceId).toBe(entry.workspaceId);
+      const file = await oauthClient.callTool({ name: "read_file", arguments: { workspace: entry.workspaceId, path: "hello.txt" } });
+      expect(structuredJsonOf(file).content).toBe("explicit OAuth repository");
+      const denied = await oauthClient.callTool({ name: "read_file", arguments: { workspace: entry.workspaceId, path: ".env" } });
+      expect(denied.isError).toBe(true);
+      expect(jsonOf(denied)).toMatchObject({ error: "ACCESS_DENIED_SENSITIVE_FILE" });
+      expect(textOf(denied).includes("denied-credential-content")).toBe(false);
+
+      const log = fs.readFileSync(path.join(stateDir, "mcp-http.log"), "utf8");
+      expect(log.includes("Pairing verified")).toBe(true);
+      expect(log.includes("Issued access token")).toBe(true);
+      expect(output.join("").includes("Issued access token")).toBe(true);
+      for (const secret of [tokens.access_token, tokens.refresh_token, code, verifier, pairing.code, bridge.adminToken]) {
+        // Boolean assertions keep even a failing test from printing credentials.
+        expect(log.includes(secret)).toBe(false);
+        expect(output.join("").includes(secret)).toBe(false);
+      }
+      expect(/c2c_(?:at|rt|ac|admin)_/.test(log + output.join(""))).toBe(false);
+    } finally {
+      try { await oauthClient.close(); }
+      finally {
+        capture.forEach(spy => spy.mockRestore());
+        registry.remove(entry.workspaceId); cleanup(other);
+      }
+    }
   });
 
   it("search_workspace finds matches", async () => {
