@@ -91,6 +91,7 @@ const listDirectoryOutputSchema = {
   offset: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
   hasMore: z.boolean(),
+  truncated: z.boolean(),
 };
 
 const readFileOutputSchema = {
@@ -238,7 +239,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       title: "List directory",
       description:
         `List files and directories under a workspace-relative path. High-noise directories ` +
-        `(node_modules, .git, build output) are omitted. Supports pagination. ${UNTRUSTED_NOTE}`,
+        `(node_modules, .git, build output) are omitted. Discovery is capped at offset + limit + 2000 visible entries. ` +
+        `When truncated is true, total counts only discovered entries and hasMore remains true. ${UNTRUSTED_NOTE}`,
       inputSchema: {
         workspace: workspaceSelector,
         path: z.string().default(".").describe("Workspace-relative path, e.g. 'src'"),
@@ -267,7 +269,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       title: "Read file",
       description:
         `Read a text file from the workspace with line-range pagination. Defaults to the first ` +
-        `400 lines; use start_line/end_line to page through large files. Sensitive files ` +
+        `400 lines; use start_line/end_line to page through files up to 16 MiB. Larger files fail with FILE_TOO_LARGE without returning content. Sensitive files ` +
         `(.env, keys, credentials) are always denied. ${UNTRUSTED_NOTE}`,
       inputSchema: {
         workspace: workspaceSelector,

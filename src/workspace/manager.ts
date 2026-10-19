@@ -55,6 +55,7 @@ export interface ListDirectoryResult {
   offset: number;
   limit: number;
   hasMore: boolean;
+  truncated: boolean;
 }
 
 function stringRecord(value: unknown): Record<string, string> {
@@ -68,6 +69,8 @@ function stringRecord(value: unknown): Record<string, string> {
 const DEFAULT_MAX_LINES = 400;
 const HARD_MAX_LINES = 2000;
 const DEFAULT_MAX_BYTES = 256 * 1024;
+const MAX_TEXT_FILE_BYTES = 16 * 1024 * 1024;
+const DIRECTORY_SCAN_LOOKAHEAD = 2000;
 
 export class Workspace {
   readonly root: string;
@@ -183,6 +186,9 @@ export class Workspace {
     if (!stat.isFile()) {
       throw new WorkspaceError("NOT_A_FILE", `Not a regular file: ${rel}`);
     }
+    if (stat.size > MAX_TEXT_FILE_BYTES) {
+      throw new WorkspaceError("FILE_TOO_LARGE", `Text files larger than 16 MiB cannot be read: ${rel}. Content is not returned.`);
+    }
     if (await this.isBinary(abs)) {
       throw new WorkspaceError("BINARY_FILE", `Binary file (${stat.size} bytes): ${rel}. Content is not returned.`);
     }
@@ -253,9 +259,15 @@ export class Workspace {
     const depth = Math.min(4, Math.max(1, Math.floor(opts.depth ?? 1)));
     const limit = Math.min(1000, Math.max(1, Math.floor(opts.limit ?? 200)));
     const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+    const scanLimit = offset + limit + DIRECTORY_SCAN_LOOKAHEAD;
 
     const all: DirEntry[] = [];
+    let truncated = false;
     const walk = async (dirAbs: string, dirRel: string, level: number): Promise<void> => {
+      if (all.length >= scanLimit) {
+        truncated = true;
+        return;
+      }
       let entries: fs.Dirent[];
       try {
         entries = await fs.promises.readdir(dirAbs, { withFileTypes: true });
@@ -268,11 +280,16 @@ export class Workspace {
         return ad !== bd ? ad - bd : a.name.localeCompare(b.name);
       });
       for (const entry of entries) {
+        if (all.length >= scanLimit) {
+          truncated = true;
+          return;
+        }
         const childRel = dirRel ? `${dirRel}/${entry.name}` : entry.name;
         if (this.ignoreRules.isHidden(childRel) || this.ignoreRules.isHidden(childRel + "/")) continue;
         if (entry.isDirectory()) {
           all.push({ path: childRel + "/", type: "dir" });
           if (level < depth) await walk(path.join(dirAbs, entry.name), childRel, level + 1);
+          if (truncated) return;
         } else if (entry.isFile()) {
           let size: number | undefined;
           try {
@@ -282,7 +299,6 @@ export class Workspace {
           }
           all.push({ path: childRel, type: "file", sizeBytes: size });
         }
-        if (all.length >= offset + limit + 2000) return; // hard cap for huge trees
       }
     };
     await walk(abs, rel, 1);
@@ -294,7 +310,8 @@ export class Workspace {
       total: all.length,
       offset,
       limit,
-      hasMore: offset + page.length < all.length,
+      hasMore: truncated || offset + page.length < all.length,
+      truncated,
     };
   }
 

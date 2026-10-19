@@ -172,6 +172,27 @@ describe("read_file pagination", () => {
     });
   });
 
+  it.each([16 * 1024 * 1024 - 1, 16 * 1024 * 1024])("reads a small page from a %i-byte text file within the hard cap", async size => {
+    const file = path.join(root, "size-boundary.txt");
+    const bytes = Buffer.alloc(size, "a");
+    bytes.write("first line\n");
+    fs.writeFileSync(file, bytes);
+    const result = await ws.readFile("size-boundary.txt", { endLine: 1 });
+    expect(result).toMatchObject({ sizeBytes: size, content: "first line", totalLines: 2,
+      startLine: 1, endLine: 1, truncated: true, remainingLines: 1, nextStartLine: 2 });
+  });
+
+  it.each([
+    ["oversized.txt", "FILE_TOO_LARGE"],
+    [".env.oversized", "ACCESS_DENIED_SENSITIVE_FILE"],
+  ])("rejects %s without returning its contents", async (file, code) => {
+    const marker = "size-cap-content-must-not-leak";
+    const abs = write(root, file, marker);
+    fs.truncateSync(abs, 16 * 1024 * 1024 + 1);
+    await expect(ws.readFile(file, { endLine: 1 })).rejects.toMatchObject({ name: "WorkspaceError", code,
+      message: expect.not.stringContaining(marker) });
+  });
+
   it("denies binary files", async () => {
     fs.writeFileSync(path.join(root, "blob.bin"), Buffer.from([0, 1, 2, 3, 0, 255]));
     await expect(ws.readFile("blob.bin")).rejects.toMatchObject({ code: "BINARY_FILE" });
@@ -179,6 +200,45 @@ describe("read_file pagination", () => {
 
   it("reports FILE_NOT_FOUND for missing files", async () => {
     await expect(ws.readFile("nope.txt")).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
+  });
+});
+
+describe("list_directory bounded pagination", () => {
+  it("returns exact visible totals, stable ordering and normal offset pages for a small tree", async () => {
+    const dir = makeTmpDir("directory-pages");
+    try {
+      for (const file of ["z.txt", "b.txt", "a/one.txt", "a/two.txt", ".env", "node_modules/hidden.txt", "private/notes.txt"])
+        write(dir, file, "data");
+      write(dir, ".c2cignore", "private/\n.c2cignore\n");
+      const workspace = new Workspace(dir);
+      const all = await workspace.listDirectory(".", { depth: 2 });
+      expect(all).toMatchObject({ path: ".", total: 5, offset: 0, limit: 200, hasMore: false, truncated: false });
+      expect(all.entries.map(entry => entry.path)).toEqual(["a/", "a/one.txt", "a/two.txt", "b.txt", "z.txt"]);
+      for (const offset of [0, 2, 4, 5, 99]) {
+        const opts = { depth: 2, limit: 2, offset };
+        const page = await workspace.listDirectory(".", opts);
+        expect(page).toEqual({ ...all, entries: all.entries.slice(offset, offset + 2), offset, limit: 2, hasMore: offset + 2 < all.total });
+        expect(await workspace.listDirectory(".", opts)).toEqual(page);
+      }
+    } finally { cleanup(dir); }
+  });
+
+  it("stops the whole recursive traversal at the discovery budget and distinguishes an exact boundary", async () => {
+    const dir = makeTmpDir("directory-budget");
+    try {
+      // offset 0 + limit 1 + 2000 lookahead; the directory itself consumes one entry.
+      for (let index = 0; index < 2001; index++) write(dir, `a/${String(index).padStart(4, "0")}.txt`, "");
+      write(dir, "b/later.txt", "");
+      const workspace = new Workspace(dir);
+      const opts = { depth: 2, offset: 0, limit: 1 };
+      const result = await workspace.listDirectory(".", opts);
+      expect(result).toEqual({ path: ".", entries: [{ path: "a/", type: "dir" }], total: 2001,
+        offset: 0, limit: 1, hasMore: true, truncated: true });
+      expect(await workspace.listDirectory(".", opts)).toEqual(result);
+      // The flat child has exactly the budget's entry count, so its total is complete.
+      const completed = await workspace.listDirectory("a", opts);
+      expect(completed).toMatchObject({ total: 2001, hasMore: true, truncated: false });
+    } finally { cleanup(dir); }
   });
 });
 

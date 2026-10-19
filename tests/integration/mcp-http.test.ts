@@ -102,7 +102,7 @@ describe("MCP tools over Streamable HTTP", () => {
     }
 
     expectToolOutputSchema(tools, "workspace_info", ["workspaceId", "workspaceName", "projectType", "git"]);
-    expectToolOutputSchema(tools, "list_directory", ["path", "entries", "total", "hasMore"]);
+    expectToolOutputSchema(tools, "list_directory", ["path", "entries", "total", "offset", "limit", "hasMore", "truncated"]);
     expectToolOutputSchema(tools, "read_file", ["path", "content", "startLine", "endLine", "nextStartLine"]);
     expectToolOutputSchema(tools, "read_image", ["path", "sizeBytes", "mimeType"]);
     expectToolOutputSchema(tools, "search_workspace", ["matches", "matchCount", "truncated", "engine"]);
@@ -145,6 +145,19 @@ describe("MCP tools over Streamable HTTP", () => {
     }
   });
 
+  it("read_file returns FILE_TOO_LARGE without content for a file over 16 MiB", async () => {
+    const marker = "oversized-mcp-content-must-not-leak";
+    const file = write(root, "oversized-mcp.txt", marker);
+    fs.truncateSync(file, 16 * 1024 * 1024 + 1);
+    try {
+      const result = await client.callTool({ name: "read_file", arguments: { path: "oversized-mcp.txt", end_line: 1 } });
+      expect(result.isError).toBe(true);
+      expect(jsonOf(result)).toEqual({ error: "FILE_TOO_LARGE", message: expect.any(String) });
+      expect(textOf(result)).not.toContain(marker);
+      expect(result.structuredContent).toBeUndefined();
+    } finally { fs.unlinkSync(file); }
+  });
+
   it("read_image returns metadata and image content", async () => {
     const result = await client.callTool({ name: "read_image", arguments: { path: "pixel.png" } });
     expect(result.structuredContent).toEqual({ path: "pixel.png", sizeBytes: 11, mimeType: "image/png" });
@@ -167,7 +180,8 @@ describe("MCP tools over Streamable HTTP", () => {
 
   it("list_directory lists the tree", async () => {
     const result = await client.callTool({ name: "list_directory", arguments: { path: ".", depth: 2 } });
-    const listing = structuredJsonOf<{ entries: { path: string }[] }>(result);
+    const listing = structuredJsonOf<{ entries: { path: string }[]; total: number; hasMore: boolean; truncated: boolean }>(result);
+    expect(listing).toMatchObject({ total: listing.entries.length, hasMore: false, truncated: false });
     const paths = listing.entries.map((entry) => entry.path);
     expect(paths).toContain("hello.txt");
     expect(paths).toContain("src/index.ts");

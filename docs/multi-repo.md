@@ -87,6 +87,19 @@ see [security](security.md).
 | `git_status` | Branch and working-tree status | `git.read` |
 | `git_diff` | Scoped git diff with byte-offset pagination | `git.read` |
 
+`read_file` rejects files larger than **16 MiB (16,777,216 bytes)** with
+`FILE_TOO_LARGE` before scanning lines; no partial content is returned. Files
+within the limit retain line pagination and exact `totalLines`, with the existing
+400-line default, 2,000-line maximum and response byte limits.
+
+`list_directory` discovers at most `offset + limit + 2000` visible entries per
+call, in deterministic directory-first traversal order. Depth is capped at 4 and
+page size at 1,000. `truncated=false` means traversal finished at the requested
+depth and `total` is exact. `truncated=true` means discovery stopped at the scan
+budget: `total` counts only discovered entries and `hasMore` remains true.
+Otherwise, `hasMore` indicates whether another page of discovered entries exists.
+Ignored, sensitive and high-noise entries are omitted from visible results.
+
 ## ChatGPT Project bindings
 
 Each Hub connector serves its registered workspaces. Projects and Hubs have a
