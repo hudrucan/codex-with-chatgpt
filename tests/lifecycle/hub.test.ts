@@ -7,7 +7,7 @@ import {acquireHubLock,destroyHub,disconnectHub,lifecycleFile} from "../../src/l
 import {boundConnector,confirmConnectorBinding,connectorReconciliation,persistHubEndpoint,readLastEndpoint,writeLastEndpoint} from "../../src/config/endpoint.js";
 import {readTunnelState,writeTunnelState} from "../../src/tunnel/state.js";
 import {WorkspaceRegistry} from "../../src/workspace/registry.js";
-import {bindProject,projectInstructions} from "../../src/project/bindings.js";
+import {bindProject,projectInstructions,projectStatus} from "../../src/project/bindings.js";
 import {CloudflareApi} from "../../src/tunnel/cloudflare-api.js";
 import {verifyForkOrigin} from "../../src/config/update.js";
 import {cleanup,isolateStateDir,makeTmpDir,write} from "../helpers.js";
@@ -44,7 +44,8 @@ describe("Hub lifecycle",()=>{
   persistHubEndpoint({hubId:other.hubId,hubName:"Other",port:1,publicUrl:"https://other.example.com",mcpUrl:"https://other.example.com/mcp"});
   const name=readLastEndpoint(other.hubId)!.desiredConnectorName!;
   confirmConnectorBinding(other.hubId,{name,mcpUrl:"https://other.example.com/mcp",connectorId:"other_connector"});
-  const foreign=projectBinding(other.hubId,"https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/project");
+  const foreign=projectBinding(other.hubId,binding.projectUrl);
+  expect(foreign.projectId).toBe(binding.projectId);expect(foreign.workspaceIds).toEqual(binding.workspaceIds);
   const directory=path.join(state,"project-bindings",hub.hubId),file=path.join(directory,`${binding.projectId}.json`);
   const otherFile=path.join(state,"project-bindings",other.hubId,`${foreign.projectId}.json`),retained=fs.readFileSync(otherFile);
   const unlink=fs.unlinkSync,rmdir=fs.rmdirSync;
@@ -55,6 +56,7 @@ describe("Hub lifecycle",()=>{
   expect(fs.existsSync(hubFile(hub.hubId))).toBe(true);expect(fs.readFileSync(otherFile)).toEqual(retained);
   failure.mockRestore();expect((await destroyHub(hub.hubId,{account,confirm:true})).destroyed).toBe(true);
   expect(fs.existsSync(directory)).toBe(false);expect(fs.readFileSync(otherFile)).toEqual(retained);
+  expect(projectStatus(other.hubId,binding.projectUrl).status).toBe("current");
   expect(account.deleteDns).toHaveBeenCalledTimes(1);expect(account.deleteTunnel).toHaveBeenCalledTimes(1);
  });
  it.each(["malformed","foreign owner","wrong filename","directory symlink","file symlink","unexpected file"])("blocks destroy before remote deletion for %s Project state",async(kind)=>{

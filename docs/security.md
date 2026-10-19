@@ -63,9 +63,12 @@ hash. Local metadata never proves Project access or MCP verification: the Skill
 must confirm exact instructions and the Hub connector/workspace through visible
 ChatGPT UI. Unregistering a workspace excludes it from generated routing and
 reports its stale membership IDs. Project memberships confer no additional MCP grants.
-A Project is scoped to one Hub under an exclusive local lock; its workspaces may
-also belong to other Projects. URL slugs do not change Project identity. Removing
-a membership edits only its Project record. Pending destroy blocks binding mutations.
+Each Project record is scoped to its Hub under that Hub's lifecycle lock. Projects
+may use any number of Hubs, and Hubs may serve many Projects; no global Project
+scan or lock coordinates them. The same workspace ID may occur through different
+Hubs, so routing and verification use connector plus workspace ID. URL slugs do
+not change Project identity. Removing a membership edits only its Hub/Project
+record. Pending destroy blocks that Hub's binding mutations.
 Destroy rejects unsafe Project state before remote deletion and only removes
 validated local acknowledgements, never the ChatGPT Project or its Instructions.
 

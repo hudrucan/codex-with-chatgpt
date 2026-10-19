@@ -4,15 +4,14 @@ import { writeSecureJson } from "../config/paths.js";
 import { boundConnector, connectorReconciliation, normalizePublicUrl, readLastEndpoint } from "../config/endpoint.js";
 import { acquireHubLock, assertNoPendingDestroy } from "../lifecycle/hub.js";
 import { WorkspaceRegistry, WorkspaceRegistryError, type WorkspaceRegistration } from "../workspace/registry.js";
-import { bindingFile, bindingSchema, readBinding, workspaceIdSchema, projectIdentity, assertProjectAvailable, withProjectStateLock, type ProjectBinding } from "./state.js";
+import { bindingFile, bindingSchema, readBinding, workspaceIdSchema, projectIdentity, type ProjectBinding } from "./state.js";
 export type { ProjectBinding } from "./state.js";
 
-export const PROJECT_INSTRUCTION_VERSION = 2;
+export const PROJECT_INSTRUCTION_VERSION = 3;
 
 function context(hubId: string, projectUrl: string) {
   resolveHub(hubId);
   const projectId = projectIdentity(projectUrl);
-  assertProjectAvailable(hubId, projectUrl);
   const registry = new WorkspaceRegistry(hubId), registrations = registry.list();
   return { projectId, registry, registrations, binding: readBinding(hubId, projectId) };
 }
@@ -32,7 +31,7 @@ function intended(hubId: string, projectUrl: string, workspaceSelector?: string)
   const repositories = [...workspaceIds].filter(id => registeredIds.has(id)).map(id => {
     const workspace = current.registry.resolve(id);
     // Labels are display metadata; prevent them from injecting lines or block markers.
-    const name = workspace.name.replace(/[\r\n\t]/g, " ").replace(/\[\/?desk-c2c\]/gi, "").trim() || workspace.id;
+    const name = workspace.name.replace(/[\r\n\t]/g, " ").replace(/\[\/?desk-c2c\b[^\]]*\]/gi, "").trim() || workspace.id;
     return { name, workspaceId: workspace.id };
   }).sort((a, b) => {
     const compare = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
@@ -44,25 +43,25 @@ function intended(hubId: string, projectUrl: string, workspaceSelector?: string)
     throw new Error("PROJECT_CONNECTOR_UNVERIFIED: Verify this Hub's exact connector binding before applying Project instructions.");
   }
   const text = [
-    "[desk-c2c]",
-    "Use Desk C2C Hub for repository access.",
+    `[desk-c2c hub="${hubId}"]`,
     `Connector: ${connector.name}`,
-    "Use this connector for the listed repositories.",
     "",
     "Repositories:",
     ...repositories.map(repo => `- ${repo.name} -> workspace="${repo.workspaceId}"`),
     "",
+    "Always use this connector for repositories in this block.",
+    "Repository routing is the connector plus workspace ID.",
     "Always pass the explicit workspace ID to repository tools.",
     "Never omit workspace and never use list_workspaces() to choose a repository.",
     "Choose repositories from the user's request and conversation context.",
     "If one repository is clearly targeted, use only that workspace.",
-    "For cross-repository work, inspect every relevant repository.",
-    "If the target repository is ambiguous, ask before reading.",
+    "For cross-repository work, inspect every relevant repository through its block's connector.",
+    "If the target connector or repository is ambiguous, ask before reading.",
     "",
     "Before first use of a repository in a conversation, verify its exact workspace ID",
-    'with workspace_info(workspace="<id>"). Reuse that verification unless a tool/',
-    "connector error suggests the binding changed.",
-    "[/desk-c2c]",
+    'with workspace_info(workspace="<id>") through this connector. Reuse that',
+    "verification unless a tool/connector error suggests the binding changed.",
+    `[/desk-c2c hub="${hubId}"]`,
   ].join("\n");
   return { hubId, projectId: current.projectId, projectUrl, repositories, staleWorkspaceIds,
     connector: { ...connector, mcpUrl: normalizePublicUrl(connector.mcpUrl) },
@@ -70,7 +69,7 @@ function intended(hubId: string, projectUrl: string, workspaceSelector?: string)
     instructionHash: createHash("sha256").update(text, "utf8").digest("hex") };
 }
 
-/** Preview the Project, optionally including one new membership, without writing state. */
+/** Preview this Hub's Project block, optionally including one new membership, without writing state. */
 export function projectInstructions(hubId: string, projectUrl: string, workspaceSelector?: string) {
   return intended(hubId, projectUrl, workspaceSelector);
 }
@@ -97,22 +96,20 @@ export function projectStatus(hubId: string, projectUrl: string) {
     expectedInstructionHash: expected.instructionHash };
 }
 
-/** Acknowledges one Project's aggregate block; optional workspace adds only that membership. */
+/** Acknowledges this Hub's Project block; optional workspace adds only that membership. */
 export function bindProject(hubId: string, projectUrl: string, instructionHash: string, workspaceSelector?: string): ProjectBinding {
   const release = acquireHubLock(hubId);
   try {
     assertNoPendingDestroy(hubId);
-    return withProjectStateLock(() => {
-      const preview = intended(hubId, projectUrl, workspaceSelector);
-      if (instructionHash !== preview.instructionHash)
-        throw new Error("PROJECT_INSTRUCTIONS_CHANGED: Reapply and verify the current aggregate instructions before acknowledging binding.");
-      const workspaceIds = [...preview.repositories.map(repo => repo.workspaceId), ...preview.staleWorkspaceIds].sort();
-      const binding = bindingSchema.parse({ version: 2, hubId, projectId: preview.projectId, projectUrl,
-        workspaceIds, instructionVersion: PROJECT_INSTRUCTION_VERSION,
-        appliedInstructionHash: instructionHash, updatedAt: new Date().toISOString() });
-      writeSecureJson(bindingFile(hubId, binding.projectId), binding);
-      return binding;
-    });
+    const preview = intended(hubId, projectUrl, workspaceSelector);
+    if (instructionHash !== preview.instructionHash)
+      throw new Error("PROJECT_INSTRUCTIONS_CHANGED: Reapply and verify the current aggregate instructions before acknowledging binding.");
+    const workspaceIds = [...preview.repositories.map(repo => repo.workspaceId), ...preview.staleWorkspaceIds].sort();
+    const binding = bindingSchema.parse({ version: 2, hubId, projectId: preview.projectId, projectUrl,
+      workspaceIds, instructionVersion: PROJECT_INSTRUCTION_VERSION,
+      appliedInstructionHash: instructionHash, updatedAt: new Date().toISOString() });
+    writeSecureJson(bindingFile(hubId, binding.projectId), binding);
+    return binding;
   } finally { release(); }
 }
 
@@ -121,16 +118,14 @@ export function unbindProject(hubId: string, projectUrl: string, selector: strin
   const release = acquireHubLock(hubId);
   try {
     assertNoPendingDestroy(hubId);
-    return withProjectStateLock(() => {
-      const current = context(hubId, projectUrl);
-      if (!current.binding) throw new Error("PROJECT_NOT_BOUND: No local membership exists for this Project.");
-      const workspaceId = current.registrations.find(entry => entry.workspaceId === selector || entry.alias === selector)?.workspaceId ??
-        (workspaceIdSchema.safeParse(selector).success ? selector : undefined);
-      if (!workspaceId || !current.binding.workspaceIds.includes(workspaceId))
-        throw new Error("PROJECT_MEMBERSHIP_NOT_FOUND: Workspace does not belong to this Project.");
-      const next = { ...current.binding, workspaceIds: current.binding.workspaceIds.filter(id => id !== workspaceId), updatedAt: new Date().toISOString() };
-      writeSecureJson(bindingFile(hubId, current.projectId), next);
-      return { hubId, projectId: current.projectId, workspaceId, unbound: true };
-    });
+    const current = context(hubId, projectUrl);
+    if (!current.binding) throw new Error("PROJECT_NOT_BOUND: No local membership exists for this Project.");
+    const workspaceId = current.registrations.find(entry => entry.workspaceId === selector || entry.alias === selector)?.workspaceId ??
+      (workspaceIdSchema.safeParse(selector).success ? selector : undefined);
+    if (!workspaceId || !current.binding.workspaceIds.includes(workspaceId))
+      throw new Error("PROJECT_MEMBERSHIP_NOT_FOUND: Workspace does not belong to this Project.");
+    const next = { ...current.binding, workspaceIds: current.binding.workspaceIds.filter(id => id !== workspaceId), updatedAt: new Date().toISOString() };
+    writeSecureJson(bindingFile(hubId, current.projectId), next);
+    return { hubId, projectId: current.projectId, workspaceId, unbound: true };
   } finally { release(); }
 }

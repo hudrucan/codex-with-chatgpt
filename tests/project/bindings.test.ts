@@ -7,7 +7,7 @@ import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { saveWorkspaceDisplayName } from "../../src/config/naming.js";
 import { writeLastEndpoint, readLastEndpoint } from "../../src/config/endpoint.js";
 import { bindProject, projectInstructions, projectStatus, unbindProject } from "../../src/project/bindings.js";
-import { destroyHub, lifecycleFile } from "../../src/lifecycle/hub.js";
+import { acquireHubLock, destroyHub, lifecycleFile } from "../../src/lifecycle/hub.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
 
 const a = "https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-project-a/project";
@@ -26,9 +26,9 @@ beforeEach(() => {
   verifiedEndpoint(hubId);
 });
 afterEach(() => { [state, root].forEach(cleanup); delete process.env.C2C_STATE_DIR; });
-function verifiedEndpoint(id: string) {
+function verifiedEndpoint(id: string, name = "Desk C2C Hub · Foundation") {
   writeLastEndpoint({ hubId: id, port: 48765, publicUrl: "https://code.example.com", mcpUrl: "https://code.example.com/mcp",
-    desiredConnectorName: "Desk C2C Hub · Foundation", connectorName: "Desk C2C Hub · Foundation",
+    desiredConnectorName: name, connectorName: name,
     boundMcpUrl: "https://code.example.com/mcp", bindingVersion: 1, connectorId: "connector_verified" });
 }
 function file(url = a, id = hubId) { return path.join(state, "project-bindings", id, `${projectId(url)}.json`); }
@@ -42,13 +42,15 @@ it("supports a single-repo Project with explicit routing, deterministic hash and
   expect(fs.existsSync(path.dirname(file()))).toBe(false);
   expect(preview.instructionHash).toBe(createHash("sha256").update(preview.instructions).digest("hex"));
   expect(preview.instructions).toContain(`- frontend -> workspace="${frontend}"`);
-  expect(preview.instructions).toContain("Connector: Desk C2C Hub · Foundation\nUse this connector for the listed repositories.");
-  expect(preview.instructions.startsWith("[desk-c2c]\n")).toBe(true); expect(preview.instructions.endsWith("\n[/desk-c2c]")).toBe(true);
+  expect(preview.instructions).toContain("Connector: Desk C2C Hub · Foundation");
+  expect(preview.instructions).toContain("Always use this connector for repositories in this block.");
+  expect(preview.instructions.startsWith(`[desk-c2c hub="${hubId}"]\n`)).toBe(true);
+  expect(preview.instructions.endsWith(`\n[/desk-c2c hub="${hubId}"]`)).toBe(true);
   for (const hidden of ["connector_verified", "https://code.example.com", "Instruction version:", "frontend-generated-"]) expect(preview.instructions).not.toContain(hidden);
   expect(() => bindProject(hubId, a, "0".repeat(64), frontend)).toThrow("PROJECT_INSTRUCTIONS_CHANGED");
   expect(fs.existsSync(file())).toBe(false);
   const binding = acknowledge(a, frontend);
-  expect(binding).toMatchObject({ version: 2, hubId, projectId: projectId(a), workspaceIds: [frontend] });
+  expect(binding).toMatchObject({ version: 2, hubId, projectId: projectId(a), workspaceIds: [frontend], instructionVersion: 3 });
   expect(JSON.parse(fs.readFileSync(file(), "utf8"))).toEqual(binding);
   expect(Object.keys(binding).sort()).toEqual(["version", "hubId", "projectId", "projectUrl", "workspaceIds", "instructionVersion", "appliedInstructionHash", "updatedAt"].sort());
   expect(projectStatus(hubId, a).status).toBe("current");
@@ -86,25 +88,41 @@ it("previews additions without writing and orders aggregate routing independentl
   expect(projectInstructions(hubId, a, backend).instructionHash).toBe(preview.instructionHash);
   for (const policy of ["Never omit workspace and never use list_workspaces() to choose a repository.",
     "Choose repositories from the user's request and conversation context.",
-    "For cross-repository work, inspect every relevant repository.",
-    "If the target repository is ambiguous, ask before reading.", 'workspace_info(workspace="<id>")']) expect(preview.instructions).toContain(policy);
+    "For cross-repository work, inspect every relevant repository through its block's connector.",
+    "If the target connector or repository is ambiguous, ask before reading.", 'workspace_info(workspace="<id>")']) expect(preview.instructions).toContain(policy);
 });
 
-it("rejects a Project spanning Hubs without preventing the same workspace from joining other Projects", () => {
+it("binds the same Project and root independently across Hubs with separate routing blocks and locks", () => {
   acknowledge(a, frontend);
   const other = createHub("Other").hubId; verifiedEndpoint(other);
-  new WorkspaceRegistry(other).add(registry.resolve(frontend).root, "frontend");
-  const before = fs.readFileSync(file());
-  for (const url of [a, a.replace("project-a", "another-slug")]) {
-    expect(() => projectInstructions(other, url, frontend)).toThrow("PROJECT_BINDING_CONFLICT");
-    expect(() => bindProject(other, url, "0".repeat(64), frontend)).toThrow("PROJECT_BINDING_CONFLICT");
-    expect(() => projectStatus(other, url)).toThrow("PROJECT_BINDING_CONFLICT");
+  expect(new WorkspaceRegistry(other).add(registry.resolve(frontend).root, "shared").workspaceId).toBe(frontend);
+  const own = projectInstructions(hubId, a), sameConnector = projectInstructions(other, a, frontend);
+  expect(sameConnector.repositories).toEqual(own.repositories);
+  expect(sameConnector.instructionHash).not.toBe(own.instructionHash);
+  expect(sameConnector.instructions.replaceAll(other, hubId)).toBe(own.instructions);
+  verifiedEndpoint(other, "Desk C2C Hub · Other");
+  const otherPreview = projectInstructions(other, a, frontend), original = fs.readFileSync(file());
+  const release = acquireHubLock(hubId);
+  try {
+    expect(() => acknowledge(a, backend)).toThrow("LIFECYCLE_BUSY");
+    expect(() => unbindProject(hubId, a, frontend)).toThrow("LIFECYCLE_BUSY");
+    bindProject(other, a, otherPreview.instructionHash, frontend);
+  } finally { release(); }
+  expect(fs.readFileSync(file())).toEqual(original);
+  expect(fs.existsSync(file(a, other))).toBe(true);
+  expect(otherPreview.instructions).toContain(`[desk-c2c hub="${other}"]\nConnector: Desk C2C Hub · Other`);
+  expect(otherPreview.instructions).toContain(`[/desk-c2c hub="${other}"]`);
+  const renamed = a.replace("project-a", "another-slug");
+  bindProject(other, renamed, otherPreview.instructionHash, frontend);
+  acknowledge(renamed, frontend);
+  for (const owner of [hubId, other]) {
+    expect(fs.readdirSync(path.dirname(file(a, owner)))).toEqual([`${projectId(a)}.json`]);
+    expect(projectStatus(owner, a)).toMatchObject({ status: "current", binding: { projectId: projectId(a), projectUrl: renamed } });
   }
-  expect(fs.readFileSync(file())).toEqual(before);
-  const preview = projectInstructions(other, b, frontend);
-  bindProject(other, b, preview.instructionHash, frontend);
-  expect(projectStatus(other, b).status).toBe("current");
-  expect(projectStatus(hubId, a).status).toBe("current");
+  const preserved = fs.readFileSync(file(a, other));
+  acknowledge(a, backend); unbindProject(hubId, a, frontend); acknowledge(a);
+  expect(fs.readFileSync(file(a, other))).toEqual(preserved);
+  expect(projectStatus(other, a)).toMatchObject({ status: "current", binding: { workspaceIds: [frontend] } });
 });
 
 it("drops unregistered workspaces from routing while retaining explicit stale membership metadata", () => {

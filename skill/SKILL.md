@@ -11,7 +11,8 @@ description: >
 Use the existing Hub whenever possible. Successful setup or verification ends
 at **MCP READY**, then STOP. Optional ChatGPT Projects hold durable multi-repo
 routing instructions and reuse the Hub connector. Workspaces may belong to
-multiple Projects; each Project references only one Hub. Do not persist chat URLs, start a
+multiple Projects; Projects and Hubs have a many-to-many relationship. Route by
+connector plus workspace ID. Do not persist chat URLs, start a
 coding/planning loop, or use INIT/PLAN/EXECUTED/REVIEW or session/checkpoint orchestration.
 
 ## Boundaries

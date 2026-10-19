@@ -89,12 +89,15 @@ see [security](security.md).
 
 ## ChatGPT Project bindings
 
-One shared Hub connector serves many workspaces. Project/repository membership
+Each Hub connector serves its registered workspaces. Projects and Hubs have a
+**many-to-many** relationship; Project/repository membership
 is **many-to-many**: Project A can reference frontend + backend, Project B can
 reference backend + infra, and Project C can reference frontend. Membership is
 routing/context metadata, not workspace ownership or an additional read grant.
-A Project may use only one Hub. Its stable `g-p-...` ID is the identity; URL slugs
-and titles are labels. Cross-Hub membership returns `PROJECT_BINDING_CONFLICT`.
+A Project can combine any number of Hubs, and each Hub may appear in many Projects.
+Its stable `g-p-...` ID identifies the Project independently within each Hub; URL
+slugs and titles are labels. The same repo/root may be registered through several
+Hubs with the same workspace ID. Routing is **connector + workspace ID**.
 
 Select the exact Project URL on every Project command. Normal Hub selection
 still uses single-Hub discovery or `--hub <id>` when needed:
@@ -111,24 +114,29 @@ c2c project instructions --project-url "<project-url>" --json
 c2c project bind --project-url "<project-url>" --instruction-hash <verified-hash> --json
 ```
 
-Adding/removing a membership writes only that Project's record. Other Projects'
-records are untouched, even when they include the same workspace. `bind` adds
-idempotently when `--workspace` is supplied; without it, it only acknowledges the
+Adding/removing a membership writes only the selected Hub/Project record. Other
+Hubs' and Projects' records are untouched, even when they use the same Project
+ID or workspace. `bind` adds idempotently when `--workspace` is supplied; without
+it, it only acknowledges the
 current aggregate. `unbind` does not remove the Hub's read grant or edit ChatGPT.
 Its final removal retains an empty record for syncing an empty routing block.
 
-The generated `[desk-c2c]` ... `[/desk-c2c]` block maps human repo display names
-to authoritative workspace IDs. It always requires explicit selectors, prohibits
+Each generated block starts with `[desk-c2c hub="<hubId>"]` and ends with
+`[/desk-c2c hub="<hubId>"]`. Both markers name the owning Hub; the block maps
+human repo display names to workspace IDs through that Hub's verified connector.
+It always requires explicit selectors, prohibits
 using `list_workspaces()` to choose a repo, selects from the user's request/context,
 and asks before reading ambiguous targets. Cross-repo work inspects each relevant
-workspace explicitly. Verify `workspace_info(workspace="<id>")` before first use
-of each repo in a conversation; reuse that verification unless a tool/connector
-error suggests a binding change.
+workspace through its own block's connector. Verify `workspace_info(workspace="<id>")`
+through that connector before first use of each connector/workspace pair in a
+conversation; reuse that verification unless a tool/connector error suggests a
+binding change. A verification through one connector does not verify another.
 
 Ordering and SHA-256 hashing are deterministic. The block names the verified
 connector and directs ChatGPT to use it for the listed repositories. Membership,
-repo display-name or verified connector-name changes require sync. Generated
-aliases, connector ID/MCP URL, instruction version, runtime PID and port are
+repo display-name, Hub marker or verified connector-name changes affect the
+semantic hash and require sync. Generated aliases, connector ID/MCP URL,
+instruction version, runtime PID and port are
 absent from the block. Connector metadata remains in CLI output for Skill
 verification; ID/URL/PID/port changes do not change its semantic hash.
 An unreconciled connector still blocks acknowledgement.
@@ -141,13 +149,17 @@ Unavailable roots and unverified connector state fail closed. Missing/inaccessib
 Projects, ambiguous managed blocks, unconfirmed text and wrong MCP IDs require
 resolution through the [Skill procedure](../skill/references/projects.md), without
 replacement Projects/connectors. Preserve unrelated user instructions and replace
-only a single exact managed block.
+only the selected Hub's single exact managed block. Append a new Hub's block
+without changing other blocks; removing a Hub's block preserves all others. The
+same procedure covers a one-time visible sync from a singleton `[desk-c2c]`
+block without persistence compatibility.
 
 External state uses one atomic record per `(hubId, projectId)` at
 `project-bindings/<hubId>/<projectId>.json`. Each unique entry in `workspaceIds`
 represents `(projectId, hubId, workspaceId)`; the same ID can occur in other Project
-records. A global Project-state lock prevents concurrent cross-Hub assignment;
-Hub lifecycle locks protect mutations. The persisted format is:
+records and under other Hub IDs. Per-Hub lifecycle locks serialize bind/unbind
+and destroy; Project operations do not scan or lock other Hubs' Project state.
+The persisted format is:
 
 ```json
 {
@@ -156,7 +168,7 @@ Hub lifecycle locks protect mutations. The persisted format is:
   "projectId": "g-p-6ad414a9a390819194cd6a676854de21",
   "projectUrl": "https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-desk-home/project",
   "workspaceIds": ["0123456789ab", "abcdef123456"],
-  "instructionVersion": 2,
+  "instructionVersion": 3,
   "appliedInstructionHash": "<sha256-of-generated-block>",
   "updatedAt": "2026-10-18T14:00:00.000Z"
 }

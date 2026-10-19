@@ -1,7 +1,9 @@
 # ChatGPT Project repository memberships
 
-One shared Hub connector serves many workspaces. A Project may reference many
-workspaces from one Hub; a workspace may belong to many Projects independently.
+Each Hub connector serves its registered workspaces. Projects and Hubs have a
+many-to-many relationship: a Project may combine any number of Hubs, and a Hub
+may serve many Projects. A workspace may belong to many Projects independently,
+including through different Hubs. Routing is connector plus workspace ID.
 Membership is routing/context metadata, not ownership or an extra MCP grant.
 Adding a repo to Project B never moves it out of Project A. Never create a
 connector for a Project or use a Project title as identity evidence.
@@ -18,8 +20,8 @@ workspace already appears in it. Verify its exact visible landing URL with stabl
 c2c project status --project-url "<project-url>" --json
 ```
 
-Pass `--hub <id>` when multiple Hubs exist. A Project spanning different Hubs
-fails with `PROJECT_BINDING_CONFLICT`; stop, do not create replacement resources.
+Pass `--hub <id>` when multiple Hubs exist. Every command reads/writes only that
+Hub's Project membership record; it does not select or change another Hub.
 `current` means local aggregate metadata matches, not that the UI or MCP has been
 verified. `projectVerification: "not_checked"` requires visible verification.
 A missing/inaccessible/redirected saved Project is a blocker, never permission
@@ -31,7 +33,7 @@ to adopt another by title or create a replacement. `stale` or nonempty
 1. Register the repo locally to the selected Hub if necessary. Obtain its
    authoritative workspace ID from the local registration, not `list_workspaces()`
    as a routing decision. Select the Project without altering any other Project.
-2. Preview the complete target Project plus the new member:
+2. Preview the selected Hub's complete Project block plus the new member:
 
    ```bash
    c2c project instructions --project-url "<project-url>" --workspace <workspaceId> --json
@@ -43,13 +45,21 @@ to adopt another by title or create a replacement. `stale` or nonempty
    binding. The verified display name enters the managed text and semantic hash;
    connector ID/URL and runtime details do not. A verified name change requires sync.
 3. Open the exact Project's visible Instructions editor. Preserve unrelated
-   user instructions. Replace only the single complete block delimited by
-   `[desk-c2c]` and `[/desk-c2c]` with the exact generated text. If no C2C block
-   exists, append it. Multiple, nested, unmatched or ambiguous blocks or an
-   unmarked C2C binding require explicit resolution; never rewrite the whole field.
+   instructions and every other Hub's block verbatim. Replace only the single
+   complete block delimited by `[desk-c2c hub="<selected-hubId>"]` and
+   `[/desk-c2c hub="<selected-hubId>"]`, using the exact returned `hubId`.
+   If that Hub has no block, append its generated block. Other Hub IDs are not
+   duplicates. Duplicate blocks for the selected Hub, nested/overlapping blocks,
+   unmatched or mismatched markers require resolution; never rewrite the whole field.
+   For a singleton `[desk-c2c]` ... `[/desk-c2c]` from the current rollout, verify
+   its connector/repositories against the selected Hub's binding, then replace
+   only that span during this one-time visible sync. If it belongs to another
+   Hub, preserve it and append the selected Hub's block. If ownership is unclear,
+   stop for resolution. This is an instruction edit, not persistence migration.
 4. Save and reopen/read the editor to confirm the entire block exactly. Do this
    even for a locally `current` Project before reporting readiness. The hash
-   covers the generated block, not unrelated user instructions.
+   covers only the selected Hub's generated block. Confirm that every other
+   Hub's block and all unrelated instructions remain unchanged.
 5. In a normal chat inside that exact Project, select the existing shared Hub
    connector. Confirm its ID/name/MCP URL using returned local metadata. For
    each repository relevant to this verification, call
@@ -62,7 +72,7 @@ to adopt another by title or create a replacement. `stale` or nonempty
    ```
 
    Omit `--workspace` when acknowledging sync without adding a member. Only that
-   Project's record is written. A stale hash requires re-preview/apply/verify;
+   Hub/Project record is written. A stale hash requires re-preview/apply/verify;
    never bypass it. A `current` unchanged Project needs no redundant write.
 7. Report **MCP READY**, then stop. Do not store chat URLs or introduce task,
    planning, session or checkpoint orchestration.
@@ -75,23 +85,27 @@ c2c project instructions --project-url "<project-url>" --json
 ```
 
 Use an exact ID when the grant was removed. This changes only the selected
-Project's membership; other Projects and Hub read grants are unchanged. It does
-not edit ChatGPT. Sync the new aggregate through the same visible UI/MCP process,
+Hub/Project membership; other Hubs, Projects and Hub read grants are unchanged.
+It does not edit ChatGPT. Sync the new aggregate through the same visible UI/MCP process,
 then acknowledge with `project bind` without `--workspace`. The last removal
 retains an empty Project record so an empty routing block can be synced safely;
-it never deletes a ChatGPT Project. Removing a registry grant excludes that ID
-from every affected Project block and reports stale membership IDs until explicitly
+it never deletes a ChatGPT Project. If the user explicitly removes this Hub's
+instruction block, remove only its exact opening-to-closing span; preserve every
+other Hub's block and do not acknowledge removed text as applied. Removing a
+registry grant excludes that ID from every affected Project block and reports stale membership IDs until explicitly
 removed or re-registered. No silent membership transfer or rebind is involved.
 
 ## Repository routing in Project conversations
 
-Use only the explicit workspace IDs in the Project's aggregate mapping. Never
+Use each repository's connector plus explicit workspace ID from its Hub's block. Never
 omit `workspace` or use `list_workspaces()` to choose a repository. Choose from
 the user's request and conversation context; read only a clearly targeted repo,
-inspect each relevant repo explicitly for cross-repo work, and ask before reading
-when the target is ambiguous. Before first use of a repo in a conversation,
-verify its exact ID through `workspace_info`; reuse that verification unless a
-tool/connector error suggests the binding changed.
+inspect each relevant repo through its block's connector for cross-repo work,
+and ask before reading when the connector or repository is ambiguous. Before
+first use of a connector/workspace pair in a conversation, verify its exact ID
+through that connector's `workspace_info`; reuse that verification unless a
+tool/connector error suggests the binding changed. The same workspace ID reached
+through another connector requires its own verification.
 
 Missing Project access, unconfirmed instructions, connector mismatch or incorrect
 MCP workspace ID fails closed without recording success. `DESTROY_PENDING` blocks

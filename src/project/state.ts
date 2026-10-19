@@ -3,7 +3,6 @@ import path from "node:path";
 import { z } from "zod";
 import { hubIdSchema } from "../hub/store.js";
 import { stateFile } from "../config/state-files.js";
-import { ensureDir } from "../config/paths.js";
 
 export const workspaceIdSchema = z.string().regex(/^[a-f0-9]{12}$/);
 const projectIdSchema = z.string().regex(/^g-p-[a-f0-9]{32}$/);
@@ -55,17 +54,6 @@ export function readBinding(hubId: string, projectId: string): ProjectBinding | 
   } catch { throw new Error("PROJECT_BINDING_INVALID: Malformed or foreign Project binding; access denied."); }
 }
 
-/** Serializes cross-Hub uniqueness checks and writes, in addition to per-Hub locks. */
-export function withProjectStateLock<T>(operation: () => T): T {
-  const file = stateFile("project-bindings", ".lock");
-  ensureDir(path.dirname(file));
-  let fd: number;
-  try { fd = fs.openSync(file, "wx", 0o600); }
-  catch { throw new Error("PROJECT_BINDING_BUSY: Another local Project operation holds the lock."); }
-  try { return operation(); }
-  finally { fs.closeSync(fd); fs.unlinkSync(file); }
-}
-
 function directoryEntries(directory: string): string[] | null {
   try {
     const info = fs.lstatSync(directory);
@@ -98,37 +86,19 @@ export function projectIdentity(projectUrl: string): string {
   return new URL(projectUrl).pathname.match(/^\/g\/(g-p-[a-f0-9]{32})/)![1];
 }
 
-/** Caller holds the global Project lock through the subsequent atomic write. */
-export function assertProjectAvailable(hubId: string, projectUrl: string): void {
-  const id = projectIdentity(projectUrl);
-  const directory = path.dirname(stateFile("project-bindings", ".lock"));
-  for (const name of directoryEntries(directory) ?? []) {
-    if (name === ".lock") continue;
-    if (!hubIdSchema.safeParse(name).success)
-      throw new Error("PROJECT_BINDING_INVALID: Unexpected owner in Project state.");
-    for (const { binding } of inspectProjectBindings(name).files) {
-      if (projectIdentity(binding.projectUrl) === id && binding.hubId !== hubId) {
-        throw new Error("PROJECT_BINDING_CONFLICT: This ChatGPT Project belongs to another Hub; a Project cannot span Hubs.");
-      }
-    }
-  }
-}
-
-/** Local acknowledgements only. Never contacts or deletes ChatGPT Projects/instructions. */
+/** Caller holds this Hub's lifecycle lock. Never contacts or deletes ChatGPT Projects/instructions. */
 export function removeProjectBindings(hubId: string): void {
-  withProjectStateLock(() => {
-    const inspected = inspectProjectBindings(hubId);
-    for (const { file, binding } of inspected.files) {
-      // Recheck ownership/containment immediately before each exact-file deletion.
-      const current = readBinding(hubId, binding.projectId);
-      if (!current || JSON.stringify(current) !== JSON.stringify(binding))
-        throw new Error("PROJECT_BINDING_INVALID: Project binding changed during cleanup.");
-      fs.unlinkSync(file);
-    }
-    if (inspected.exists) {
-      stateFile("project-bindings", hubId);
-      fs.rmdirSync(inspected.directory);
-    }
-  });
+  const inspected = inspectProjectBindings(hubId);
+  for (const { file, binding } of inspected.files) {
+    // Recheck ownership/containment immediately before each exact-file deletion.
+    const current = readBinding(hubId, binding.projectId);
+    if (!current || JSON.stringify(current) !== JSON.stringify(binding))
+      throw new Error("PROJECT_BINDING_INVALID: Project binding changed during cleanup.");
+    fs.unlinkSync(file);
+  }
+  if (inspected.exists) {
+    stateFile("project-bindings", hubId);
+    fs.rmdirSync(inspected.directory);
+  }
 }
 

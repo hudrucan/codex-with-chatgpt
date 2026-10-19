@@ -62,8 +62,8 @@ One configured Hub is selected automatically; multiple Hubs require `--hub <id>`
 MCP calls select a registered alias or ID,
 for example `read_file({ "workspace": "backend", "path": "src/index.ts" })`.
 See [multi-repo access](docs/multi-repo.md) for selection rules and registry details.
-One Hub connector serves many workspaces. Optional [ChatGPT Projects](docs/multi-repo.md#chatgpt-project-bindings)
-can each reference several repos, and repos may appear in multiple Projects.
+Each Hub connector serves many workspaces. Optional [ChatGPT Projects](docs/multi-repo.md#chatgpt-project-bindings)
+can combine many Hubs with separate routing blocks; repos may appear in multiple Projects.
 
 ## MCP capabilities
 
