@@ -5,13 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SERVICE_NAME, VERSION } from "../../src/version.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { fixtureHub as resolveHub } from "../helpers.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
-import { readRuntimeState } from "../../src/bridge/runtime.js";
+import { readRuntimeState, runtimeFile } from "../../src/bridge/runtime.js";
+import { ensureSandboxAllowlist } from "../../src/config/sandbox-allow.js";
 import { readLastEndpoint, writeLastEndpoint, confirmConnectorBinding } from "../../src/config/endpoint.js";
 import { readTunnelState, writeTunnelState } from "../../src/tunnel/state.js";
 import type { TunnelProvider } from "../../src/tunnel/provider.js";
@@ -45,7 +48,7 @@ describe("naming through setup and repair commands", () => {
       env: { ...process.env, C2C_STATE_DIR: stateDir, CODEX_HOME: codexHome, ...env },
     };
     try {
-      const result = await execFileAsync(process.execPath, ["--import", "tsx", cliEntry, ...args, ...(args[0] === "setup" ? ["-w", root] : []), "--json", ...(bridge ? ["--hub",bridge.hubId] : [])], options);
+      const result = await execFileAsync(process.execPath, ["--import", "tsx", cliEntry, ...args, ...(args[0] === "setup" && !args.includes("-w") ? ["-w", root] : []), "--json", ...(bridge ? ["--hub",bridge.hubId] : [])], options);
       return { status: 0, payload: JSON.parse(result.stdout) };
     } catch (error) {
       const failed = error as Error & { stdout?: string; stderr?: string; code?: number };
@@ -79,7 +82,7 @@ describe("naming through setup and repair commands", () => {
     ownsDaemon = true;
     const first = await runCli(["setup", "--no-tunnel", "--hub-name", "Desk C2C Hub", "--workspace-name", "Desk C2C Hub", "--connector-name", "Desk Connector"]);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
-    expect(first.payload).toMatchObject({ workspaceId: workspace.id, workspaceName: "Desk C2C Hub", connectorName: "Desk Connector" });
+    expect(first.payload).toMatchObject({ workspaceId: workspace.id, hubName: "Desk C2C Hub", connectorName: "Desk Connector" });
     const initialPid = readRuntimeState(resolveHub(workspace).hubId)!.pid;
 
     const rerun = await runCli(["setup", "--no-tunnel"]);
@@ -90,18 +93,20 @@ describe("naming through setup and repair commands", () => {
 
     const renamed = await runCli(["setup", "--no-tunnel", "--workspace-name", "Renamed Workspace"]);
     expect(renamed.status).toBe(0);
-    expect(renamed.payload.workspaceName).toBe("Desk C2C Hub");
+    expect(renamed.payload.hubName).toBe("Desk C2C Hub");
     const hubRename=await runCli(["setup","--no-tunnel","--hub-name","Renamed Hub"]);
     expect(hubRename.status).toBe(1);expect(hubRename.payload.error).toContain("HUB_NAME_RESTART_REQUIRED");
     expect(readRuntimeState(resolveHub(workspace).hubId)!.pid).toBe(initialPid);
-    expect((await runCli(["status"])).payload).toMatchObject({ workspaceNameRestartRequired: true, configuredWorkspaceName: "Renamed Hub" });
+    expect((await runCli(["status"])).payload).toMatchObject({ hubNameRestartRequired: true, configuredHubName: "Renamed Hub" });
     const diagnosis = await runCli(["doctor"]);
-    expect(diagnosis.payload.workspaceNameRestartRequired).toBe(true);
+    expect(diagnosis.payload.hubNameRestartRequired).toBe(true);
     expect(readRuntimeState(resolveHub(workspace).hubId)!.pid).toBe(initialPid);
 
     const restarted = await runCli(["restart"]);
     expect(restarted.status, JSON.stringify(restarted.payload)).toBe(0);
-    expect(restarted.payload).toMatchObject({ workspaceId: workspace.id, workspaceName: "Renamed Hub", connectorName: "Desk Connector" });
+    expect(restarted.payload).toMatchObject({ hubId: nativeHub.hubId, hubName: "Renamed Hub", connectorName: "Desk Connector" });
+    expect(restarted.payload).not.toHaveProperty("workspaceId");
+    expect(restarted.payload).not.toHaveProperty("workspaceRoot");
     expect(new Workspace(root).id).toBe(workspace.id);
     expect(readLastEndpoint(resolveHub(workspace).hubId)?.desiredConnectorName).toBe("Desk Connector");
 
@@ -109,6 +114,41 @@ describe("naming through setup and repair commands", () => {
     const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, { headers: { authorization: `Bearer ${token}` } });
     expect(response.status).toBe(405); // Bearer guard accepted the original token.
     expect((await runCli(["setup", "--no-tunnel"])).payload.connectorName).toBe("Desk Connector");
+  });
+
+  it("inspects and reuses a deployed v1 runtime while omitting its startup repo metadata from CLI output", async () => {
+    const hub = fixtureHub(root), workspace = new Workspace(root);
+    ensureSandboxAllowlist({ configPath: path.join(codexHome, "config.toml"), stateDir });
+    const server = http.createServer((req, res) => {
+      if (req.url === "/mcp") { res.writeHead(401).end(); return; }
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/health") res.end(JSON.stringify({ service: SERVICE_NAME, version: VERSION, hubId: hub.hubId, workspaceId: workspace.id, status: "ok" }));
+      else if (req.url === "/admin/info" && req.headers.authorization === "Bearer test-admin") res.end(JSON.stringify({
+        hubId: hub.hubId, workspaceId: workspace.id, workspaceRoot: root, workspaceName: hub.displayName,
+        pid: process.pid, port, publicUrl: null, tunnel: { running: false, url: null, provider: "cloudflare-quick" },
+        tokenCount: 0, pairingActive: false, startedAt,
+      }));
+      else res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+    const port = (server.address() as import("node:net").AddressInfo).port;
+    const startedAt = new Date().toISOString();
+    const file = runtimeFile(hub.hubId);
+    const bytes = JSON.stringify({ service: SERVICE_NAME, version: VERSION, stateVersion: 1, hubId: hub.hubId,
+      workspaceId: workspace.id, workspaceRoot: root, pid: process.pid, port, adminToken: "test-admin", publicUrl: null, startedAt });
+    try {
+      write(stateDir, `runtime/${hub.hubId}.json`, bytes);
+      for (const command of [["status"], ["start"], ["doctor", "--no-fix"]]) {
+        const result = await runCli(command);
+        expect(result.status, JSON.stringify(result.payload)).toBe(0);
+        expect(result.payload).not.toHaveProperty("workspaceId");
+        expect(result.payload).not.toHaveProperty("workspaceRoot");
+        expect(result.payload).not.toHaveProperty("workspaceName");
+        if (command[0] === "status") expect(result.payload).toMatchObject({ hubId: hub.hubId, hubName: hub.displayName, hubNameRestartRequired: false });
+        if (command[0] === "doctor") expect(result.payload.hubNameRestartRequired).toBe(false);
+      }
+      expect(fs.readFileSync(file, "utf8")).toBe(bytes);
+    } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
   });
 
   it("disconnects the daemon while preserving naming and keeps doctor from restarting it", async () => {
@@ -121,7 +161,7 @@ describe("naming through setup and repair commands", () => {
     expect((await runCli(["doctor"])).payload.disconnected).toBe(true);
     expect(readRuntimeState(resolveHub(new Workspace(root)).hubId)).toBeNull();
     const reconnect = await runCli(["setup", "--no-tunnel"]);
-    expect(reconnect.payload).toMatchObject({ workspaceName: "Local Name", connectorName: "Retained Connector" });
+    expect(reconnect.payload).toMatchObject({ hubName: "Local Name", connectorName: "Retained Connector" });
     expect(readLastEndpoint(resolveHub(new Workspace(root)).hubId)?.disconnected).toBe(false);
   });
 
@@ -182,9 +222,12 @@ describe("naming through setup and repair commands", () => {
     writeLastEndpoint({hubId:bridge.hubId,port:bridge.port,publicUrl:url,mcpUrl:`${url}/mcp`,connectorName:"Existing Connector",desiredConnectorName:"Existing Connector",connectorId:"plugin_existing",bindingVersion:1,boundMcpUrl:`${url}/mcp`});
     const cert = write(stateDir, "test-cert.pem", "synthetic cert");
     const credential = write(stateDir, "test-credential.json", JSON.stringify({ TunnelID: tunnelId, TunnelSecret: "synthetic secret" }));
-    const setup = await runCli(["setup", "--no-tunnel"]);
+    const addedRoot = makeTmpDir("setup-additional-repo");
+    dirs.push(addedRoot);
+    const setup = await runCli(["setup", "--no-tunnel", "-w", addedRoot]);
     expect(setup.status, JSON.stringify(setup.payload)).toBe(0);
-    expect(setup.payload).toMatchObject({ connectorName: "Existing Connector", connectorId: "plugin_existing", connectorAction: "none" });
+    expect(setup.payload).toMatchObject({ workspaceId: new Workspace(addedRoot).id, hubId: bridge.hubId, hubName: bridge.hub.displayName,
+      connectorName: "Existing Connector", connectorId: "plugin_existing", connectorAction: "none" });
     const doctor = await runCli(["doctor"], { TUNNEL_ORIGIN_CERT: cert, TUNNEL_CRED_FILE: credential });
     expect(doctor.status, JSON.stringify(doctor.payload)).toBe(0);
     expect(starts).toBe(1);
@@ -247,7 +290,7 @@ if (args.includes("run")) {
     const flags = ["--workspace-name", "Desk C2C Hub", "--connector-name", "Desk Connector", "--tunnel-name", "desk-c2c", "--hostname", "code.example.com", "--zone", "example.com"];
     const first = await runCli(["setup", ...flags], env);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
-    expect(first.payload).toMatchObject({ workspaceName: "Desk C2C Hub", connectorName: "Desk Connector", tunnel: { name: "desk-c2c", hostname: "code.example.com" } });
+    expect(first.payload).toMatchObject({ hubName: "Desk C2C Hub", connectorName: "Desk Connector", tunnel: { name: "desk-c2c", hostname: "code.example.com" } });
     const pid = readRuntimeState(resolveHub(new Workspace(root)).hubId)!.pid;
     const rerun = await runCli(["setup", ...flags], env);
     expect(rerun.status, JSON.stringify(rerun.payload)).toBe(0);

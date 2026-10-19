@@ -7,12 +7,15 @@ import { SERVICE_NAME, VERSION } from "../version.js";
 
 const runtimeFields = {
   service: z.literal(SERVICE_NAME), version: z.string(),
-  workspaceId: z.string().regex(/^[a-f0-9]{12}$/).optional(),
-  workspaceRoot: z.string().optional(),
   pid: z.number().int().positive(), port: z.number().int().min(1).max(65535),
   adminToken: z.string().min(1), publicUrl: z.string().nullable(), startedAt: z.string().datetime(),
 };
 export const hubRuntimeSchema = z.object({ ...runtimeFields, stateVersion: z.literal(1), hubId: hubIdSchema }).strict();
+// Accept deployed v1 metadata during rollout, but never expose or persist it again.
+const runtimeReadSchema = hubRuntimeSchema.extend({
+  workspaceId: z.string().regex(/^[a-f0-9]{12}$/).optional(),
+  workspaceRoot: z.string().optional(),
+}).transform(({ workspaceId, workspaceRoot, ...state }) => state);
 export type HubRuntimeState = z.infer<typeof hubRuntimeSchema>;
 export type RuntimeState = HubRuntimeState;
 
@@ -22,7 +25,7 @@ export function runtimeFile(hubId: string): string {
 }
 
 export function writeRuntimeState(state: HubRuntimeState): void {
-  const parsed = hubRuntimeSchema.parse(state);
+  const parsed = runtimeReadSchema.parse(state);
   writeSecureJson(runtimeFile(parsed.hubId), parsed);
 }
 
@@ -34,8 +37,8 @@ function readRuntime(file: string, hubId?: string): RuntimeState | null {
     throw new Error("RUNTIME_STATE_INVALID: Cannot read runtime state.");
   }
   try {
-    const value = hubRuntimeSchema.parse(JSON.parse(raw));
-    if (hubId && (!('hubId' in value) || value.hubId !== hubId)) throw new Error("Wrong owner");
+    const value = runtimeReadSchema.parse(JSON.parse(raw));
+    if (hubId && value.hubId !== hubId) throw new Error("Wrong owner");
     return value;
   } catch { throw new Error("RUNTIME_STATE_INVALID: Runtime ownership or format is invalid."); }
 }
@@ -52,7 +55,6 @@ export interface HealthPayload {
   service: string;
   version: string;
   hubId?: string;
-  workspaceId?: string;
   status: string;
 }
 
@@ -71,7 +73,7 @@ export async function probeBridge(port: number, timeoutMs = 2000): Promise<Healt
 export type BridgeObservation =
   | { state: "healthy"; runtime: RuntimeState }
   | { state: "stopped"; runtime: RuntimeState | null; reason: "runtime_missing" | "pid_missing" }
-  | { state: "unknown"; runtime: RuntimeState | null; reason: "probe_failed" | "pid_unknown" | "workspace_mismatch" | "runtime_invalid" };
+  | { state: "unknown"; runtime: RuntimeState | null; reason: "probe_failed" | "pid_unknown" | "hub_mismatch" | "runtime_invalid" };
 
 function observePid(pid: number): "present" | "missing" | "unknown" {
   try { process.kill(pid, 0); return "present"; }
@@ -88,7 +90,7 @@ async function observe(file: string, hubId: string): Promise<BridgeObservation> 
   const health = await probeBridge(runtime.port);
   const matches = health && health.hubId === hubId;
   if (matches) return { state: "healthy", runtime };
-  if (health) return { state: "unknown", runtime, reason: "workspace_mismatch" };
+  if (health) return { state: "unknown", runtime, reason: "hub_mismatch" };
   return { state: "unknown", runtime, reason: pid === "unknown" ? "pid_unknown" : "probe_failed" };
 }
 

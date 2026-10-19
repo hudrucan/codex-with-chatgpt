@@ -51,7 +51,9 @@ No original repo path is needed to start, stop or inspect the Hub.
 The listener prefers port 48765 and falls back to a free port on collision.
 Runtime discovery reads only `runtime/<hubId>.json` and distinguishes healthy,
 stopped and uncertain processes before repair. Runtime reads only Hub-owned
-state; MCP selection remains stateless.
+state and stores no workspace identity or root. A bridge can run with zero or
+more registered repos; hot registration changes leave its health, admin metadata
+and process identity unchanged. MCP selection remains stateless.
 
 ## Public connection and binding
 

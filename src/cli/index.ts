@@ -113,9 +113,7 @@ interface PairingResponse {
 
 interface AdminInfo {
   hubId?: string;
-  workspaceId?: string;
-  workspaceName: string;
-  workspaceRoot?: string;
+  hubName: string;
   port: number;
   publicUrl: string | null;
   tunnel: { running: boolean; url: string | null; provider: string };
@@ -123,6 +121,14 @@ interface AdminInfo {
   pairingActive: boolean;
   pid: number;
   startedAt: string;
+}
+
+// Normalize metadata from a running pre-rollout process without exposing its repo fields.
+async function readAdminInfo(runtime: RuntimeState): Promise<AdminInfo> {
+  const { workspaceId, workspaceRoot, workspaceName, ...info } = await adminFetch<Omit<AdminInfo, "hubName"> & {
+    hubName?: string; workspaceId?: string; workspaceRoot?: string; workspaceName?: string;
+  }>(runtime, "GET", "/admin/info");
+  return { ...info, hubName: info.hubName ?? workspaceName ?? "" };
 }
 
 async function ensureBridgeAndTunnel(
@@ -133,11 +139,11 @@ async function ensureBridgeAndTunnel(
   readTunnelState(hub.hubId);
   readLastEndpoint(hub.hubId);
   const { runtime } = await ensureBridge(hub.hubId);
-  let info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+  let info = await readAdminInfo(runtime);
   const configuredName = hub.displayName;
-  if (info.workspaceName !== configuredName) {
+  if (info.hubName !== configuredName) {
     throw new Error(
-      `HUB_NAME_RESTART_REQUIRED: Running name "${info.workspaceName}" differs from configured name "${configuredName}". ` +
+      `HUB_NAME_RESTART_REQUIRED: Running name "${info.hubName}" differs from configured name "${configuredName}". ` +
       "Run c2c restart (with --tunnel to restore the public connection), then retry setup. Auth and workspace identity are retained."
     );
   }
@@ -151,7 +157,7 @@ async function ensureBridgeAndTunnel(
     }
     const result = await adminFetch<TunnelStartResponse>(runtime, "POST", "/admin/tunnel/start", 90_000);
     if (!result.url) throw new Error(result.message ?? "Tunnel start failed");
-    info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+    info = await readAdminInfo(runtime);
     mcpUrl = `${result.url}/mcp`;
   }
   return { hub, runtime, info, mcpUrl };
@@ -222,10 +228,10 @@ program
         mcpUrl: mcpUrl ?? previous?.mcpUrl ?? null,
       });
       if (opts.json) {
-        say(JSON.stringify({ ok: true, port: runtime.port, workspaceId: info.workspaceId, mcpUrl, connectorName }));
+        say(JSON.stringify({ ok: true, port: runtime.port, hubId: hub.hubId, mcpUrl, connectorName }));
         return;
       }
-      check(`Hub selected(${info.workspaceName})`);
+      check(`Hub selected(${info.hubName})`);
       check("Hub bridge started");
       if (mcpUrl) check("Secure connection established");
     } catch (error) {
@@ -324,8 +330,8 @@ program
             hubId: hub.hubId,
             registeredWorkspace: registration,
             needsPairing,
-            workspaceId: info.workspaceId,
-            workspaceName: info.workspaceName,
+            workspaceId: registration.workspaceId,
+            hubName: info.hubName,
             ...connectorReconciliation(readLastEndpoint(hub.hubId)),
             mcpUrl: mcpUrl ?? `http://127.0.0.1:${runtime.port}/mcp`,
             local: mcpUrl === null,
@@ -342,7 +348,7 @@ program
         );
         return;
       }
-      check(`Hub selected(${info.workspaceName})`);
+      check(`Hub selected(${info.hubName})`);
       check("Hub bridge started");
       if (mcpUrl) check("Secure connection established");
       say("");
@@ -405,10 +411,10 @@ program
         mcpUrl: mcpUrl ?? previous?.mcpUrl ?? null,
       });
       if (opts.json) {
-        say(JSON.stringify({ ok: true, workspaceId: info.workspaceId, workspaceName: info.workspaceName, connectorName, mcpUrl }));
+        say(JSON.stringify({ ok: true, hubId: hub.hubId, hubName: info.hubName, connectorName, mcpUrl }));
         return;
       }
-      check(`Bridge restarted(${info.workspaceName})`);
+      check(`Bridge restarted(${info.hubName})`);
       if (mcpUrl) check(`Secure connection established`);
     } catch (error) {
       handleCliError(error, opts.json);
@@ -440,19 +446,19 @@ program
       return;
     }
     const runtime = observation.runtime;
-    const info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+    const info = await readAdminInfo(runtime);
     if (opts.json) {
       say(JSON.stringify({
         ok: true, running: true, ...info, hubId: hub.hubId,
         ...connectorReconciliation(endpoint),
-        configuredWorkspaceName: hub.displayName,
-        workspaceNameRestartRequired: hub.displayName !== info.workspaceName,
+        configuredHubName: hub.displayName,
+        hubNameRestartRequired: hub.displayName !== info.hubName,
       }));
       return;
     }
     say(PRODUCT_NAME);
     say("");
-    check(`Workspace: ${info.workspaceName}`);
+    check(`Hub: ${info.hubName}`);
     check(`Bridge: running (port ${info.port})`);
     if (info.tunnel.running && info.tunnel.url) check(`Secure connection: ${info.tunnel.url}/mcp`);
     else say("· Secure connection: disabled (local mode)");
@@ -508,7 +514,7 @@ program
     // Bridge
     let runtime: RuntimeState | null = null;
     let bridgeUnknown = false;
-    let workspaceNameRestartRequired = false;
+    let hubNameRestartRequired = false;
     if (hub) {
       const observation = await findBridgeObservation(hub.hubId);
       if (observation.state === "healthy") {
@@ -543,7 +549,7 @@ program
       }
     }
 
-    // Tunnel + remote reachability. If this workspace once had a public URL,
+    // Tunnel + remote reachability. If this Hub once had a public URL,
     // a full quit reclaims it — restore a tunnel and tell the Skill to update
     // the existing ChatGPT connector (never treat that as "local mode").
     const lastEndpoint = hub ? readLastEndpoint(hub.hubId) : null;
@@ -588,19 +594,19 @@ program
     };
 
     if (runtime) {
-      let info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
-      workspaceNameRestartRequired = info.workspaceName !== hub.displayName;
-      if (workspaceNameRestartRequired) {
-        report.workspaceName = {
+      let info = await readAdminInfo(runtime);
+      hubNameRestartRequired = info.hubName !== hub.displayName;
+      if (hubNameRestartRequired) {
+        report.hubName = {
           ok: false,
-          detail: `HUB_NAME_RESTART_REQUIRED: Running name "${info.workspaceName}", configured name "${hub.displayName}". Run c2c restart --tunnel to apply it; auth and workspace identity are retained.`,
+          detail: `HUB_NAME_RESTART_REQUIRED: Running name "${info.hubName}", configured name "${hub.displayName}". Run c2c restart --tunnel to apply it; auth and workspace identity are retained.`,
         };
       }
-      if (namedReady && !namedCredentialFailure && opts.fix && !workspaceNameRestartRequired && runtime.hubId && info.tunnel.provider !== "cloudflare-named") {
+      if (namedReady && !namedCredentialFailure && opts.fix && !hubNameRestartRequired && runtime.hubId && info.tunnel.provider !== "cloudflare-named") {
         await stopBridge(selectedHub().hubId);
           try {
           runtime = (await ensureBridge(selectedHub().hubId)).runtime;
-          info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+          info = await readAdminInfo(runtime);
           results.push("Switched to the fixed-hostname connection");
         } catch (error) {
           report.tunnel = { ok: false, detail: (error as Error).message };
@@ -629,7 +635,7 @@ program
               const previousUrl = lastEndpoint?.publicUrl;
               currentUrl = started.url;
               healthy = true;
-              info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+              info = await readAdminInfo(runtime);
               const sameAddress =
                 previousUrl && normalizePublicUrl(previousUrl) === normalizePublicUrl(started.url);
               results.push(sameAddress ? "Restored the secure connection" : "Restored the secure connection (address changed)");
@@ -725,7 +731,7 @@ program
     }
 
     if (opts.json) {
-      say(JSON.stringify({ report, repairs: results, chatgptRepair, namedRepair, workspaceNameRestartRequired }));
+      say(JSON.stringify({ report, repairs: results, chatgptRepair, namedRepair, hubNameRestartRequired }));
       const hasFailures =
         Object.values(report).some((value) => !value.ok) || chatgptRepair.needed || namedRepair.needed;
       if (hasFailures) process.exitCode = 1;
@@ -737,7 +743,7 @@ program
       node: "Node.js",
       sandbox: "Sandbox",
       workspace: "Workspace",
-      workspaceName: "Workspace display name",
+      hubName: "Hub display name",
       bridge: "Bridge",
       mcp: "MCP",
       oauth: "OAuth",

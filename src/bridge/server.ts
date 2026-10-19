@@ -91,7 +91,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
 
   const hubId = hub.hubId;
   const registry = new WorkspaceRegistry(hubId);
-  const startup = registry.list()[0];
+  registry.list();
   const authStore = new AuthStore(hubId, { file: opts.authStoreFile });
   const pairing = new PairingManager(hubId, { ttlMs: opts.pairingTtlMs });
   const tunnel = opts.tunnelProvider ?? tunnelForHub(hubId, logger);
@@ -113,7 +113,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
   // ---- Health (public but minimal) ---------------------------------------
 
   app.get("/health", (_req, res) => {
-    res.json({ service: SERVICE_NAME, version: VERSION, hubId, workspaceId: startup?.workspaceId, status: "ok" });
+    res.json({ service: SERVICE_NAME, version: VERSION, hubId, status: "ok" });
   });
 
   // ---- OAuth + discovery ---------------------------------------------------
@@ -167,9 +167,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
       service: SERVICE_NAME,
       version: VERSION,
       hubId,
-      workspaceId: startup?.workspaceId,
-      workspaceName: hub.displayName,
-      workspaceRoot: startup?.root,
+      hubName: hub.displayName,
       port,
       publicUrl: publicBaseUrl,
       tunnel: tunnel.status(),
@@ -218,7 +216,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
 
   const { server, port } = await listen(app, host, opts.port ?? DEFAULT_PORT);
   const startedAt = new Date().toISOString();
-  logger.info(`Bridge listening on ${host}:${port} for workspace ${hub.displayName} (${hubId})`);
+  logger.info(`Bridge listening on ${host}:${port} for Hub ${hub.displayName} (${hubId})`);
 
   const persistRuntime = (): void => {
     if (opts.persistRuntime === false) return;
@@ -226,8 +224,6 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
       stateVersion: 1, hubId,
       service: SERVICE_NAME,
       version: VERSION,
-      workspaceId: startup?.workspaceId,
-      workspaceRoot: startup?.root,
       pid: process.pid,
       port,
       adminToken,

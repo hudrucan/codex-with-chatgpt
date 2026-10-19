@@ -1,4 +1,4 @@
-import { fixtureHub, fixtureWorkspace, fixtureAuthFile } from "../helpers.js";
+import { fixtureHub, fixtureAuthFile } from "../helpers.js";
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { startBridge } from "../../src/bridge/server.js";
@@ -31,12 +31,12 @@ describe("port collision handling", () => {
     expect(bridgeB.port).not.toBe(preferred);
     expect(bridgeB.port).toBeGreaterThan(0);
 
-    // health identifies each bridge's workspace, so callers can detect reuse
+    // Health identifies each Hub, so callers can detect reuse.
     const healthA = await probeBridge(bridgeA.port);
     const healthB = await probeBridge(bridgeB.port);
-    expect(healthA?.workspaceId).toBe(fixtureWorkspace(bridgeA).id);
-    expect(healthB?.workspaceId).toBe(fixtureWorkspace(bridgeB).id);
-    expect(healthA?.workspaceId).not.toBe(healthB?.workspaceId);
+    expect(healthA?.hubId).toBe(bridgeA.hubId);
+    expect(healthB?.hubId).toBe(bridgeB.hubId);
+    expect(healthA?.hubId).not.toBe(healthB?.hubId);
 
     await bridgeA.close();
     await bridgeB.close();

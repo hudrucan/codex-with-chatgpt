@@ -6,7 +6,7 @@ import { expect, it } from "vitest";
 import { adminFetch, ensureBridge, stopBridge } from "../../src/process/daemon.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { readTunnelState } from "../../src/tunnel/state.js";
-import { readRuntimeState } from "../../src/bridge/runtime.js";
+import { readRuntimeState, runtimeFile } from "../../src/bridge/runtime.js";
 import { fixtureHub as resolveHub } from "../helpers.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, isolateStateDir, makeTmpDir } from "../helpers.js";
@@ -31,18 +31,23 @@ it("starts, reuses and stops a Hub daemon independently of registered repo paths
       }
       for(const item of immutable)expect(fs.readFileSync(item.file)).toEqual(item.bytes);
     } finally {cleanup(extra);}
-    const info = await adminFetch<{ hubId: string; workspaceId: string }>(started.runtime, "GET", "/admin/info");
-    expect(info).toMatchObject({ hubId: hub.hubId, workspaceId: workspace.id });
+    const info = await adminFetch<{ hubId: string; hubName: string }>(started.runtime, "GET", "/admin/info");
+    expect(info).toMatchObject({ hubId: hub.hubId, hubName: hub.displayName });
+    expect(info).not.toHaveProperty("workspaceId");
+    expect(info).not.toHaveProperty("workspaceRoot");
     new WorkspaceRegistry(hub.hubId).remove(workspace.id);
     cleanup(root);
     expect((await ensureBridge(hub.hubId)).spawned).toBe(false);
     expect(fs.existsSync(path.join(state, "logs", `bridge-${hub.hubId}.out.log`))).toBe(true);
+    // An in-place rollout can still stop a deployed v1 process after its repo was removed.
+    fs.writeFileSync(runtimeFile(hub.hubId), JSON.stringify({ ...started.runtime, workspaceId: workspace.id, workspaceRoot: root }));
     expect(await stopBridge(hub.hubId)).toBe(true);
     for (let n = 0; n < 100 && readRuntimeState(hub.hubId); n++) await new Promise((resolve) => setTimeout(resolve, 50));
     expect(readRuntimeState(hub.hubId)).toBeNull();
     const restarted=await ensureBridge(hub.hubId,{port:0});spawnedPid=restarted.runtime.pid;
     expect(restarted.runtime.hubId).toBe(hub.hubId);
-    expect(restarted.runtime.workspaceRoot).toBeUndefined();
+    expect(restarted.runtime).not.toHaveProperty("workspaceId");
+    expect(restarted.runtime).not.toHaveProperty("workspaceRoot");
     expect(new WorkspaceRegistry(hub.hubId).choices()).toEqual([]);
     expect(await stopBridge(hub.hubId)).toBe(true);
   } finally {
