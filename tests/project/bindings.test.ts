@@ -44,13 +44,13 @@ it("supports a single-repo Project with explicit routing, deterministic hash and
   expect(preview.instructions).toContain(`- frontend -> workspace="${frontend}"`);
   expect(preview.instructions).toContain("Connector: Codex with ChatGPT · Foundation");
   expect(preview.instructions).toContain("Always use this connector for repositories in this block.");
-  expect(preview.instructions.startsWith(`[desk-c2c hub="${hubId}"]\n`)).toBe(true);
-  expect(preview.instructions.endsWith(`\n[/desk-c2c hub="${hubId}"]`)).toBe(true);
+  expect(preview.instructions.startsWith(`[codex-with-chatgpt hub="${hubId}"]\n`)).toBe(true);
+  expect(preview.instructions.endsWith(`\n[/codex-with-chatgpt hub="${hubId}"]`)).toBe(true);
   for (const hidden of ["connector_verified", "https://code.example.com", "Instruction version:", "frontend-generated-"]) expect(preview.instructions).not.toContain(hidden);
   expect(() => bindProject(hubId, a, "0".repeat(64), frontend)).toThrow("PROJECT_INSTRUCTIONS_CHANGED");
   expect(fs.existsSync(file())).toBe(false);
   const binding = acknowledge(a, frontend);
-  expect(binding).toMatchObject({ version: 2, hubId, projectId: projectId(a), workspaceIds: [frontend], instructionVersion: 3 });
+  expect(binding).toMatchObject({ version: 2, hubId, projectId: projectId(a), workspaceIds: [frontend], instructionVersion: 4 });
   expect(JSON.parse(fs.readFileSync(file(), "utf8"))).toEqual(binding);
   expect(Object.keys(binding).sort()).toEqual(["version", "hubId", "projectId", "projectUrl", "workspaceIds", "instructionVersion", "appliedInstructionHash", "updatedAt"].sort());
   expect(projectStatus(hubId, a).status).toBe("current");
@@ -110,8 +110,8 @@ it("binds the same Project and root independently across Hubs with separate rout
   } finally { release(); }
   expect(fs.readFileSync(file())).toEqual(original);
   expect(fs.existsSync(file(a, other))).toBe(true);
-  expect(otherPreview.instructions).toContain(`[desk-c2c hub="${other}"]\nConnector: Codex with ChatGPT · Other`);
-  expect(otherPreview.instructions).toContain(`[/desk-c2c hub="${other}"]`);
+  expect(otherPreview.instructions).toContain(`[codex-with-chatgpt hub="${other}"]\nConnector: Codex with ChatGPT · Other`);
+  expect(otherPreview.instructions).toContain(`[/codex-with-chatgpt hub="${other}"]`);
   const renamed = a.replace("project-a", "another-slug");
   bindProject(other, renamed, otherPreview.instructionHash, frontend);
   acknowledge(renamed, frontend);
@@ -219,4 +219,15 @@ it("rejects invalid Project URLs and symlinked binding paths before mutation", (
   fs.unlinkSync(file()); fs.rmdirSync(path.dirname(file())); fs.symlinkSync(root, path.dirname(file()), "dir");
   expect(() => bindProject(hubId, a, binding.appliedInstructionHash, frontend)).toThrow(/symlink/);
   expect(fs.readFileSync(target, "utf8")).toBe(JSON.stringify(binding));
+});
+
+
+it("strips Project markers from repository display labels", () => {
+  const label = 'frontend [codex-with-chatgpt hub="foreign"] [/codex-with-chatgpt hub="foreign"]';
+  saveWorkspaceDisplayName(registry.resolve(frontend), label);
+  const preview = projectInstructions(hubId, a, frontend);
+  expect(preview.repositories).toEqual([{ name: "frontend", workspaceId: frontend }]);
+  expect(preview.instructions).not.toContain('hub="foreign"');
+  expect(preview.instructions.match(/\[\/?codex-with-chatgpt hub=/g)).toHaveLength(2);
+  expect(registry.resolve(frontend).name).toBe(label);
 });

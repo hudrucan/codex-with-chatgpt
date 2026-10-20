@@ -46,12 +46,15 @@ to adopt another by title or create a replacement. `stale` or nonempty
    connector ID/URL and runtime details do not. A verified name change requires sync.
 3. Open the exact Project's visible Instructions editor. Preserve unrelated
    instructions and every other Hub's block verbatim. Replace only the single
-   complete block delimited by `[desk-c2c hub="<selected-hubId>"]` and
-   `[/desk-c2c hub="<selected-hubId>"]`, using the exact returned `hubId`.
+   complete block delimited by `[codex-with-chatgpt hub="<selected-hubId>"]` and
+   `[/codex-with-chatgpt hub="<selected-hubId>"]`, using the exact returned `hubId`.
    If that Hub has no block, append its generated block. Other Hub IDs are not
    duplicates. Duplicate blocks for the selected Hub, nested/overlapping blocks,
    unmatched or mismatched markers require resolution; never rewrite the whole field.
-   For a singleton `[desk-c2c]` ... `[/desk-c2c]` from the current rollout, verify
+   For a legacy `[desk-c2c hub="<selected-hubId>"]` block, replace only that
+   owner's complete span with the new block. Never append a second block for the
+   same Hub or acknowledge a legacy hash. Reconnecting alone does not sync text.
+   For a singleton `[desk-c2c]` ... `[/desk-c2c]`, verify
    its connector/repositories against the selected Hub's binding, then replace
    only that span during this one-time visible sync. If it belongs to another
    Hub, preserve it and append the selected Hub's block. If ownership is unclear,

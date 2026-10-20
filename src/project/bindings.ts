@@ -7,7 +7,7 @@ import { WorkspaceRegistry, WorkspaceRegistryError, type WorkspaceRegistration }
 import { bindingFile, bindingSchema, readBinding, workspaceIdSchema, projectIdentity, type ProjectBinding } from "./state.js";
 export type { ProjectBinding } from "./state.js";
 
-export const PROJECT_INSTRUCTION_VERSION = 3;
+export const PROJECT_INSTRUCTION_VERSION = 4;
 
 function context(hubId: string, projectUrl: string) {
   resolveHub(hubId);
@@ -31,7 +31,7 @@ function intended(hubId: string, projectUrl: string, workspaceSelector?: string)
   const repositories = [...workspaceIds].filter(id => registeredIds.has(id)).map(id => {
     const workspace = current.registry.resolve(id);
     // Labels are display metadata; prevent them from injecting lines or block markers.
-    const name = workspace.name.replace(/[\r\n\t]/g, " ").replace(/\[\/?desk-c2c\b[^\]]*\]/gi, "").trim() || workspace.id;
+    const name = workspace.name.replace(/[\r\n\t]/g, " ").replace(/\[\/?(?:codex-with-chatgpt|desk-c2c)\b[^\]]*\]/gi, "").trim() || workspace.id;
     return { name, workspaceId: workspace.id };
   }).sort((a, b) => {
     const compare = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
@@ -43,7 +43,7 @@ function intended(hubId: string, projectUrl: string, workspaceSelector?: string)
     throw new Error("PROJECT_CONNECTOR_UNVERIFIED: Verify this Hub's exact connector binding before applying Project instructions.");
   }
   const text = [
-    `[desk-c2c hub="${hubId}"]`,
+    `[codex-with-chatgpt hub="${hubId}"]`,
     `Connector: ${connector.name}`,
     "",
     "Repositories:",
@@ -61,7 +61,7 @@ function intended(hubId: string, projectUrl: string, workspaceSelector?: string)
     "Before first use of a repository in a conversation, verify its exact workspace ID",
     'with workspace_info(workspace="<id>") through this connector. Reuse that',
     "verification unless a tool/connector error suggests the binding changed.",
-    `[/desk-c2c hub="${hubId}"]`,
+    `[/codex-with-chatgpt hub="${hubId}"]`,
   ].join("\n");
   return { hubId, projectId: current.projectId, projectUrl, repositories, staleWorkspaceIds,
     connector: { ...connector, mcpUrl: normalizePublicUrl(connector.mcpUrl) },

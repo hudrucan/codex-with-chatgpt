@@ -134,10 +134,9 @@ it, it only acknowledges the
 current aggregate. `unbind` does not remove the Hub's read grant or edit ChatGPT.
 Its final removal retains an empty record for syncing an empty routing block.
 
-Each generated block starts with `[desk-c2c hub="<hubId>"]` and ends with
-`[/desk-c2c hub="<hubId>"]`. Both markers name the owning Hub; the block maps
+Each generated block starts with `[codex-with-chatgpt hub="<hubId>"]` and ends with
+`[/codex-with-chatgpt hub="<hubId>"]`. Both markers name the owning Hub; the block maps
 human repo display names to workspace IDs through that Hub's verified connector.
-These stable markers preserve existing Project bindings across product renames.
 It always requires explicit selectors, prohibits
 using `list_workspaces()` to choose a repo, selects from the user's request/context,
 and asks before reading ambiguous targets. Cross-repo work inspects each relevant
@@ -164,9 +163,9 @@ Projects, ambiguous managed blocks, unconfirmed text and wrong MCP IDs require
 resolution through the [Skill procedure](../skill/references/projects.md), without
 replacement Projects/connectors. Preserve unrelated user instructions and replace
 only the selected Hub's single exact managed block. Append a new Hub's block
-without changing other blocks; removing a Hub's block preserves all others. The
-same procedure covers a one-time visible sync from a singleton `[desk-c2c]`
-block without persistence compatibility.
+without changing other blocks; removing a Hub's block preserves all others.
+Reconnecting alone does not update Project instructions; apply the current
+block, verify MCP access, and acknowledge its hash to complete sync.
 
 External state uses one atomic record per `(hubId, projectId)` at
 `project-bindings/<hubId>/<projectId>.json`. Each unique entry in `workspaceIds`
@@ -182,7 +181,7 @@ The persisted format is:
   "projectId": "g-p-6ad414a9a390819194cd6a676854de21",
   "projectUrl": "https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-desk-home/project",
   "workspaceIds": ["0123456789ab", "abcdef123456"],
-  "instructionVersion": 3,
+  "instructionVersion": 4,
   "appliedInstructionHash": "<sha256-of-generated-block>",
   "updatedAt": "2026-10-18T14:00:00.000Z"
 }
