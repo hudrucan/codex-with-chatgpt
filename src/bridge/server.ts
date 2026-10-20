@@ -7,8 +7,9 @@ import { AuthStore } from "../auth/store.js";
 import { createOAuthRouter } from "../auth/oauth.js";
 import { bearerAuth } from "../auth/middleware.js";
 import { PairingManager } from "../pairing/manager.js";
+import { DiffSnapshots } from "../workspace/diff-snapshots.js";
 import { createMcpServer } from "../mcp/server.js";
-import { createMcpHttpHandler } from "../mcp/http.js";
+import { createMcpHttpHandler, traceMcpHttp } from "../mcp/http.js";
 import { CloudflaredQuickTunnel } from "../tunnel/cloudflared.js";
 import { CloudflaredNamedTunnel } from "../tunnel/cloudflared-named.js";
 import type { TunnelProvider } from "../tunnel/provider.js";
@@ -130,9 +131,11 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
 
   // ---- MCP endpoint (bearer-protected) --------------------------------------
 
-  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ hubId, logger, registry }), logger);
+  const diffSnapshots = new DiffSnapshots(hubId);
+  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ hubId, logger, registry, diffSnapshots }), logger);
   app.all(
     "/mcp",
+    traceMcpHttp(logger),
     bearerAuth({ store: authStore, hubId, getBaseUrl, logger }),
     express.json({ limit: "8mb" }),
     (req: Request, res: Response) => {
@@ -240,6 +243,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
     closed = true;
     await tunnel.stop().catch(() => undefined);
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await diffSnapshots.close();
     if (opts.persistRuntime !== false) clearRuntimeState(hubId);
     logger.info("Bridge stopped");
   };

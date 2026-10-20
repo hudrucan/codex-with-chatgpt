@@ -139,6 +139,7 @@ export interface GitDiffOptions {
   path?: string;
   offset?: number;
   maxBytes?: number;
+  signal?: AbortSignal;
 }
 
 export interface GitDiffResult {
@@ -192,9 +193,20 @@ const MAX_AGGREGATE_DIFF_BYTES = 64 * 1024 * 1024;
 const MAX_GIT_STDERR_BYTES = 64 * 1024;
 const GIT_PROCESS_TIMEOUT_MS = 30_000;
 
+export class GitDiffError extends Error {
+  constructor(public code: string, message: string) {
+    super(message);
+    this.name = "GitDiffError";
+  }
+}
+
 /** Drain each process completely; failure is reported only after its streams close. */
-function streamGit(root: string, args: string[], consume: (chunk: Buffer) => boolean): Promise<boolean> {
-  return new Promise(resolve => {
+function streamGit(root: string, args: string[], consume: (chunk: Buffer) => void, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new GitDiffError("GIT_ABORTED", "Diff preparation was cancelled."));
+      return;
+    }
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawn("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", ...args], {
@@ -202,34 +214,43 @@ function streamGit(root: string, args: string[], consume: (chunk: Buffer) => boo
         env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" },
         windowsHide: true,
       });
-    } catch { resolve(false); return; }
-    let failed = false;
+    } catch {
+      reject(new GitDiffError("GIT_FAILED", "Cannot start Git."));
+      return;
+    }
+    let failure: Error | undefined;
     let stderrBytes = 0;
-    const fail = (): void => {
-      if (failed) return;
-      failed = true;
+    const fail = (error: Error): void => {
+      if (failure) return;
+      failure = error;
       try { child.kill("SIGKILL"); }
       catch { /* Still wait for close; never resolve with partial output. */ }
     };
-    const timer = setTimeout(fail, GIT_PROCESS_TIMEOUT_MS);
-    child.on("error", fail);
-    child.stdin.on("error", fail);
-    child.stdout.on("error", fail);
-    child.stderr.on("error", fail);
+    const onError = (): void => fail(new GitDiffError("GIT_FAILED", "Git process failed."));
+    const onAbort = (): void => fail(new GitDiffError("GIT_ABORTED", "Diff preparation was cancelled."));
+    const timer = setTimeout(() => fail(new GitDiffError("GIT_TIMEOUT", "Git exceeded its 30-second process deadline.")), GIT_PROCESS_TIMEOUT_MS);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.on("error", onError);
+    child.stdin.on("error", onError);
+    child.stdout.on("error", onError);
+    child.stderr.on("error", onError);
     child.stdin.end();
     child.stdout.on("data", (chunk: Buffer) => {
-      if (failed) return;
-      try { if (!consume(chunk)) fail(); }
-      catch { fail(); }
+      if (failure) return;
+      try { consume(chunk); }
+      catch (error) { fail(error instanceof Error ? error : new GitDiffError("GIT_FAILED", "Cannot consume Git output.")); }
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      if (failed) return;
+      if (failure) return;
       stderrBytes += chunk.length;
-      if (stderrBytes > MAX_GIT_STDERR_BYTES) fail();
+      if (stderrBytes > MAX_GIT_STDERR_BYTES) fail(new GitDiffError("GIT_FAILED", "Git stderr exceeded its 64 KiB limit."));
     });
     child.once("close", code => {
       clearTimeout(timer);
-      resolve(!failed && code === 0);
+      signal?.removeEventListener("abort", onAbort);
+      if (failure) reject(failure);
+      else if (code !== 0) reject(new GitDiffError("GIT_FAILED", "Git exited unsuccessfully."));
+      else resolve();
     });
   });
 }
@@ -243,25 +264,21 @@ function utf8PageEnd(page: Buffer): number {
   return start + width > page.length ? start : page.length;
 }
 
-export async function gitDiff(
+/** Stream filtered diff bytes once to a bounded consumer; never expose partial success. */
+export async function streamGitDiff(
   target: GitTarget,
-  opts: GitDiffOptions = {},
-  relPath?: string
-): Promise<GitDiffResult> {
+  mode: DiffMode,
+  consume: (chunk: Buffer) => void,
+  relPath?: string,
+  signal?: AbortSignal
+): Promise<number> {
   const root = typeof target === "string" ? target : target.root;
   const ignoreRules =
     typeof target === "object" && target.ignoreRules
       ? target.ignoreRules
       : new IgnoreRules(root);
 
-  const mode = opts.mode ?? "unstaged";
-  const offset = Math.max(0, Math.floor(opts.offset ?? 0));
-  const maxBytes = Math.min(256 * 1024, Math.max(1024, Math.floor(opts.maxBytes ?? 64 * 1024)));
   const modeArgs = getDiffModeArgs(mode);
-  const failure: GitDiffResult = {
-    isRepo: false, mode, totalBytes: 0, offset: 0, returnedBytes: 0,
-    hasMore: false, nextOffset: null, diff: "",
-  };
 
   // 1. Full-workspace inventory using NUL separation and global rename detection
   const listArgs = [
@@ -277,25 +294,24 @@ export async function gitDiff(
   ];
   let inventory: Buffer[] = [];
   let inventoryBytes = 0;
-  const listed = await streamGit(root, listArgs, chunk => {
-    if (inventoryBytes + chunk.length > MAX_GIT_INVENTORY_BYTES) return false;
+  await streamGit(root, listArgs, chunk => {
+    if (inventoryBytes + chunk.length > MAX_GIT_INVENTORY_BYTES)
+      throw new GitDiffError("DIFF_TOO_LARGE", "Git inventory exceeds 64 MiB; narrow the diff scope.");
     inventory.push(chunk);
     inventoryBytes += chunk.length;
-    return true;
-  });
-  if (!listed) return failure;
+  }, signal);
   const tokens = Buffer.concat(inventory, inventoryBytes).toString("utf8").split("\0");
   inventory = [];
   // Never use a partial inventory, even if a process unexpectedly exits successfully.
-  if (tokens.pop() !== "") return failure;
+  if (tokens.pop() !== "") throw new GitDiffError("GIT_FAILED", "Git returned an incomplete inventory.");
   const safePaths: string[] = [];
   for (let i = 0; i < tokens.length; ) {
     const status = tokens[i++];
-    if (!status) return failure;
+    if (!status) throw new GitDiffError("GIT_FAILED", "Git returned an incomplete inventory.");
     if (status.startsWith("R") || status.startsWith("C")) {
       const oldPath = tokens[i++];
       const newPath = tokens[i++];
-      if (!oldPath || !newPath) return failure;
+      if (!oldPath || !newPath) throw new GitDiffError("GIT_FAILED", "Git returned an incomplete inventory.");
       // Layer 1: Security - EITHER side sensitive -> completely unsafe
       const isSafe = !ignoreRules.isSensitive(oldPath) && !ignoreRules.isSensitive(newPath);
       // Layer 2: Scope - EITHER side in scope -> relevant
@@ -305,7 +321,7 @@ export async function gitDiff(
       }
     } else {
       const filePath = tokens[i++];
-      if (!filePath) return failure;
+      if (!filePath) throw new GitDiffError("GIT_FAILED", "Git returned an incomplete inventory.");
       const isSafe = !ignoreRules.isSensitive(filePath);
       const isRelevant = isPathInScope(filePath, relPath);
       if (isSafe && isRelevant) {
@@ -314,12 +330,10 @@ export async function gitDiff(
     }
   }
 
-  if (safePaths.length === 0) return { ...failure, isRepo: true };
+  if (safePaths.length === 0) return 0;
 
-  // 2. Count every safe diff byte, retaining only the requested page across batches.
+  // Both rename paths have already passed the policy check before generating patches.
   const batches = chunkSafePaths(safePaths);
-  const page = Buffer.allocUnsafe(maxBytes);
-  let pageBytes = 0;
   let totalBytes = 0;
 
   for (const batch of batches) {
@@ -334,21 +348,19 @@ export async function gitDiff(
       "--",
       ...pathspecs,
     ];
-    const completed = await streamGit(root, diffArgs, chunk => {
-      if (totalBytes + chunk.length > MAX_AGGREGATE_DIFF_BYTES) return false;
-      const skip = Math.max(0, offset - totalBytes);
-      if (skip < chunk.length && pageBytes < maxBytes) {
-        const count = Math.min(chunk.length - skip, maxBytes - pageBytes);
-        chunk.copy(page, pageBytes, skip, skip + count);
-        pageBytes += count;
-      }
+    await streamGit(root, diffArgs, chunk => {
+      if (totalBytes + chunk.length > MAX_AGGREGATE_DIFF_BYTES)
+        throw new GitDiffError("DIFF_TOO_LARGE", "Diff exceeds 64 MiB; narrow the diff scope.");
+      consume(chunk);
       totalBytes += chunk.length;
-      return true;
-    });
-    if (!completed) return failure;
+    }, signal);
   }
+  return totalBytes;
+}
 
-  let slice = page.subarray(0, pageBytes);
+/** Decode a bounded page without splitting UTF-8 characters or drifting byte offsets. */
+export function diffPage(page: Buffer, mode: DiffMode, offset: number, totalBytes: number): GitDiffResult {
+  let slice = page;
   // Keep newline trimming byte-based; sequential page offsets must not drift on UTF-8.
   if (offset + slice.length < totalBytes) {
     const lastNewline = slice.lastIndexOf(0x0a);
@@ -367,4 +379,28 @@ export async function gitDiff(
     nextOffset: hasMore ? offset + sliceLen : null,
     diff: text,
   };
+}
+
+export async function gitDiff(target: GitTarget, opts: GitDiffOptions = {}, relPath?: string): Promise<GitDiffResult> {
+  const mode = opts.mode ?? "unstaged";
+  const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+  const maxBytes = Math.min(256 * 1024, Math.max(1024, Math.floor(opts.maxBytes ?? 64 * 1024)));
+  const page = Buffer.allocUnsafe(maxBytes);
+  let pageBytes = 0;
+  let consumedBytes = 0;
+  try {
+    const totalBytes = await streamGitDiff(target, mode, chunk => {
+      const skip = Math.max(0, offset - consumedBytes);
+      if (skip < chunk.length && pageBytes < maxBytes) {
+        const count = Math.min(chunk.length - skip, maxBytes - pageBytes);
+        chunk.copy(page, pageBytes, skip, skip + count);
+        pageBytes += count;
+      }
+      consumedBytes += chunk.length;
+    }, relPath, opts.signal);
+    return diffPage(page.subarray(0, pageBytes), mode, offset, totalBytes);
+  } catch (error) {
+    if (!(error instanceof GitDiffError)) throw error;
+    return { isRepo: false, mode, totalBytes: 0, offset: 0, returnedBytes: 0, hasMore: false, nextOffset: null, diff: "" };
+  }
 }

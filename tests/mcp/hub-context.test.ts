@@ -7,9 +7,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { createMcpServer } from "../../src/mcp/server.js";
+import { DiffSnapshots } from "../../src/workspace/diff-snapshots.js";
 import { nullLogger } from "../../src/logger/index.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
-import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
+import { callGitDiffReady, cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
 
 let state: string;
 let root: string;
@@ -64,7 +65,7 @@ async function connect(): Promise<void> {
 }
 
 async function call(name: string, args: Record<string, unknown> = {}) {
-  const result = await client!.callTool({ name, arguments: args });
+  const result = name === "git_diff" ? await callGitDiffReady(client!, args) : await client!.callTool({ name, arguments: args });
   return { result, data: JSON.parse((result.content as { text: string }[])[0].text) };
 }
 
@@ -84,9 +85,9 @@ describe("MCP uses the Hub resolved at startup", () => {
     const hubId = `hub-${randomUUID()}`;
     const registry = new WorkspaceRegistry(hubId);
     const before = ownershipSnapshot();
-    expect(() => createMcpServer({ hubId: `hub-${randomUUID()}`, registry, logger: nullLogger }))
+    expect(() => createMcpServer({ hubId: `hub-${randomUUID()}`, registry, logger: nullLogger, diffSnapshots: new DiffSnapshots(hubId) }))
       .toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE_OWNER" }));
-    const server = createMcpServer({ hubId, registry, logger: nullLogger });
+    const server = createMcpServer({ hubId, registry, logger: nullLogger, diffSnapshots: new DiffSnapshots(hubId) });
     await server.close();
     expect(ownershipSnapshot()).toEqual(before);
     expect(fs.readdirSync(state)).toEqual([]);

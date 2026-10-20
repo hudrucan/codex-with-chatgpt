@@ -4,8 +4,9 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { WorkspaceError } from "../workspace/manager.js";
 import { WorkspaceRegistry, WorkspaceRegistryError } from "../workspace/registry.js";
 import { SearchError, searchWorkspace } from "../workspace/search.js";
-import { gitDiff, gitInfo, gitStatus, type DiffMode } from "../workspace/git.js";
+import { GitDiffError, gitInfo, gitStatus } from "../workspace/git.js";
 import type { Logger } from "../logger/index.js";
+import { DiffSnapshots } from "../workspace/diff-snapshots.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
 import { readWorkspaceImage } from "../workspace/media.js";
 
@@ -46,7 +47,7 @@ function mapError(error: unknown): ToolResult {
       isError: true,
     };
   }
-  if (error instanceof WorkspaceError || error instanceof SearchError) return fail(error.code, error.message);
+  if (error instanceof WorkspaceError || error instanceof SearchError || error instanceof GitDiffError) return fail(error.code, error.message);
   return fail("INTERNAL_ERROR", error instanceof Error ? error.message : String(error));
 }
 
@@ -147,14 +148,18 @@ const gitStatusOutputSchema = {
 };
 
 const gitDiffOutputSchema = {
-  isRepo: z.boolean(),
-  mode: z.enum(["unstaged", "staged", "head"]),
-  totalBytes: z.number().int().nonnegative(),
-  offset: z.number().int().nonnegative(),
-  returnedBytes: z.number().int().nonnegative(),
-  hasMore: z.boolean(),
-  nextOffset: z.number().int().nonnegative().nullable(),
-  diff: z.string(),
+  status: z.enum(["preparing", "ready"]),
+  snapshotId: z.string(),
+  expiresAt: z.string(),
+  retryAfterMs: z.number().int().positive().optional(),
+  isRepo: z.boolean().optional(),
+  mode: z.enum(["unstaged", "staged", "head"]).optional(),
+  totalBytes: z.number().int().nonnegative().optional(),
+  offset: z.number().int().nonnegative().optional(),
+  returnedBytes: z.number().int().nonnegative().optional(),
+  hasMore: z.boolean().optional(),
+  nextOffset: z.number().int().nonnegative().nullable().optional(),
+  diff: z.string().optional(),
 };
 
 const workspaceSelector = z.string().optional().describe(
@@ -165,6 +170,7 @@ export interface McpContext {
   hubId: string;
   logger: Logger;
   registry: WorkspaceRegistry;
+  diffSnapshots: DiffSnapshots;
 }
 
 export function createMcpServer(ctx: McpContext): McpServer {
@@ -379,13 +385,14 @@ export function createMcpServer(ctx: McpContext): McpServer {
     {
       title: "Git diff",
       description:
-        `Git diff with byte-offset pagination. mode: 'unstaged' (default), 'staged', or 'head' ` +
-        `(working tree vs HEAD). When hasMore is true, call again with offset=nextOffset. ${UNTRUSTED_NOTE}`,
+        `Git diff from a stable snapshot with byte-offset pagination. mode: 'unstaged' (default), 'staged', or 'head' ` +
+        `(working tree vs HEAD). Start at offset 0 without snapshot_id. When status is ready and hasMore is true, continue with the returned snapshotId as snapshot_id and offset=nextOffset, repeating the same workspace, mode and path. If status is preparing, wait retryAfterMs then poll the same snapshot_id and offset. Never start a new snapshot to retry a page. ${UNTRUSTED_NOTE}`,
       inputSchema: {
         workspace: workspaceSelector,
         mode: z.enum(["unstaged", "staged", "head"]).default("unstaged"),
         path: z.string().optional().describe("Limit the diff to one workspace-relative path"),
-        offset: z.number().int().min(0).default(0).describe("Byte offset for pagination"),
+        snapshot_id: z.string().uuid().optional().describe("Snapshot ID from the first response; required for continuation and polling"),
+        offset: z.number().int().min(0).default(0).describe("Byte offset within the same snapshot; use nextOffset"),
         max_bytes: z.number().int().min(1024).max(262144).default(65536),
       },
       outputSchema: gitDiffOutputSchema,
@@ -400,13 +407,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
         if (args.path) {
           relPath = workspace.resolve(args.path).rel;
         }
-        return okStructured(
-          await gitDiff(
-            workspace,
-            { mode: args.mode as DiffMode, offset: args.offset, maxBytes: args.max_bytes },
-            relPath
-          )
-        );
+        const page = await ctx.diffSnapshots.read(workspace, extra.authInfo?.clientId ?? "local", {
+          mode: args.mode, offset: args.offset, maxBytes: args.max_bytes,
+          path: relPath, snapshotId: args.snapshot_id,
+        });
+        // Grants can change while a snapshot is being prepared.
+        const current = registry.resolve(args.workspace);
+        if (current.id !== workspace.id || current.ignoreRules.fingerprint !== workspace.ignoreRules.fingerprint)
+          throw new GitDiffError("DIFF_SNAPSHOT_POLICY_CHANGED", "Workspace access changed; start a new diff at offset 0.");
+        return okStructured(page);
       } catch (error) {
         return mapError(error);
       }

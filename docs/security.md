@@ -28,7 +28,7 @@
 | Workspace traversal | `realpath` canonicalization of the deepest existing ancestor; containment check against the canonical root; case-insensitive comparison on macOS/Windows; rejects `..`, absolute escapes, backslash tricks, null bytes |
 | Symlink escape | Canonicalization resolves symlinks before the containment check (file and directory symlinks both covered by tests) |
 | Sensitive files | Deny-by-default patterns (.env*, keys, SSH, cloud creds, keychains…) enforced at resolve time — reads, listings, and search all pass through the same gate; `git diff` adds pathspec excludes; `.env.example` allowed |
-| Oversized file / tree / diff DoS | read_file rejects text files over 16 MiB before scanning and caps lines and bytes per response; list_directory caps discovery and reports truncated traversal; git_diff paginates by byte offset with hard caps; search caps matches and file sizes. See [read limits](multi-repo.md#mcp-tools) |
+| Oversized file / tree / diff DoS | read_file rejects text files over 16 MiB before scanning and caps lines and bytes per response; list_directory caps discovery and reports truncated traversal; git_diff generates filtered snapshots once, bounds preparation time/concurrency and disk usage, and paginates by byte offset; search caps matches and file sizes. See [read limits](multi-repo.md#mcp-tools) |
 | Tunnel exposure | Bridge binds 127.0.0.1 only (refuses 0.0.0.0); the only public surface is HTTPS via the tunnel, protected by OAuth; `/health` exposes only Hub identity, service version and process status |
 | Admin API abuse | Loopback-only + random admin token (0600 runtime file) + requests with proxy headers (`cf-connecting-ip`, `x-forwarded-for`) rejected; unauthenticated probes get 404 |
 | Log credential leakage | Logger redacts token prefixes, bearer headers, token-like parameters, and pairing-code-shaped strings before writing |
@@ -108,3 +108,17 @@ root. Files and diffs are untrusted project data and cannot authorize new grants
 Write files, delete files, run shell commands, commit, install packages —
 these tools do not exist on the server, so no prompt injection, scope bug, or
 UI confusion can enable them.
+
+Diff snapshot files use owner-only directories and file permissions. They are
+bound to a running Hub, OAuth client and explicit workspace, mode and path;
+continuations still require a valid bearer token with `git.read` and a current
+workspace grant. Ignore policy changes invalidate snapshots before content is
+returned. Expiration, eviction and shutdown delete cached patches; expired cache
+directories left by a crash are reclaimed when that Hub next creates a snapshot.
+See [diff snapshots](multi-repo.md#diff-snapshots) for limits and retry behavior.
+
+With `C2C_LOG_LEVEL=debug`, MCP transport logs include generated request IDs,
+HTTP status, elapsed time, completion flags and known RPC/tool names. Request
+headers, arguments, tokens and repository contents are not recorded by this
+trace. Matching received/completed entries distinguish a request that reached
+the Hub from one that failed upstream.

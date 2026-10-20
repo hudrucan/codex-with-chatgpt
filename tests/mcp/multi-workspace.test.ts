@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { WorkspaceRegistry, type WorkspaceRegistration } from "../../src/workspace/registry.js";
-import { cleanup, git, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
+import { callGitDiffReady, cleanup, git, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
 
 let state: string;
 let root: string;
@@ -27,7 +27,7 @@ const calls = [
 ] as const;
 
 async function call(name: string, args: Record<string, unknown> = {}, activeClient = client) {
-  const result = await activeClient.callTool({ name, arguments: args });
+  const result = name === "git_diff" ? await callGitDiffReady(activeClient, args) : await activeClient.callTool({ name, arguments: args });
   const data = JSON.parse((result.content as { text: string }[])[0].text);
   return { result, data };
 }
@@ -165,7 +165,9 @@ describe("multiple workspaces through one existing MCP connection", () => {
   });
 
   it("observes removals immediately and does not re-register the bridge root on each HTTP call", async () => {
+    const snapshot = (await call("git_diff", { workspace: primary.workspaceId })).data.snapshotId;
     registry.remove(primary.alias);
+    expect((await call("git_diff", { workspace: primary.workspaceId, snapshot_id: snapshot })).data.error).toBe("WORKSPACE_NOT_FOUND");
     expect((await call("workspace_info")).data.workspaceId).toBe(secondary.workspaceId);
     expect((await call("read_file", { workspace: primary.workspaceId, path: "hello.txt" })).data.error).toBe("WORKSPACE_NOT_FOUND");
     registry.remove(secondary.workspaceId);

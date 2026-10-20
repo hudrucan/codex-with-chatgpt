@@ -1,3 +1,5 @@
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { DiffSnapshotPage } from "../src/workspace/diff-snapshots.js";
 import { createHub as createFixtureHub, listHubs as fixtureHubs } from "../src/hub/store.js";
 import { Workspace as FixtureWorkspace } from "../src/workspace/manager.js";
 import { WorkspaceRegistry as FixtureRegistry } from "../src/workspace/registry.js";
@@ -95,4 +97,25 @@ export function fixtureWorkspace(bridge: {hubId:string}) {
 export function fixtureAuthFile(hubId: string, file: string): string {
   fs.mkdirSync(path.dirname(file),{recursive:true});
   fs.copyFileSync(path.join(process.env.C2C_STATE_DIR!,"auth",`${hubId}.json`),file);return file;
+}
+
+/** Poll a single immutable snapshot with one deadline for requests and retry delays. */
+export async function callGitDiffReady(client: Pick<Client, "callTool">, args: Record<string, unknown> = {}, timeoutMs = 5000) {
+  const deadline = performance.now() + timeoutMs;
+  let snapshotId = args.snapshot_id;
+  for (;;) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new Error(`git_diff did not become ready within ${timeoutMs} ms`);
+    const result = await client.callTool({
+      name: "git_diff", arguments: { ...args, ...(snapshotId ? { snapshot_id: snapshotId } : {}) },
+    }, undefined, { timeout: remaining });
+    if (result.isError) return result;
+    const page = result.structuredContent as DiffSnapshotPage | undefined;
+    if (!page || !page.snapshotId || (snapshotId && page.snapshotId !== snapshotId)) throw new Error("git_diff returned an invalid snapshot response");
+    if (page.status === "ready") return result;
+    if (page.status !== "preparing") throw new Error("git_diff returned an invalid snapshot status");
+    snapshotId = page.snapshotId;
+    const delay = Math.min(page.retryAfterMs, deadline - performance.now());
+    if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+  }
 }

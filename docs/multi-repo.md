@@ -85,7 +85,7 @@ see [security](security.md).
 | `read_image` | Bounded, validated PNG, JPEG, GIF, WebP or SVG reads | `workspace.read` |
 | `search_workspace` | Search using ripgrep or Node fallback | `workspace.search` |
 | `git_status` | Branch and working-tree status | `git.read` |
-| `git_diff` | Scoped git diff with byte-offset pagination | `git.read` |
+| `git_diff` | Scoped immutable diff snapshots with byte-offset pagination | `git.read` |
 
 `read_file` rejects files larger than **16 MiB (16,777,216 bytes)** with
 `FILE_TOO_LARGE` before scanning lines; no partial content is returned. Files
@@ -99,6 +99,50 @@ depth and `total` is exact. `truncated=true` means discovery stopped at the scan
 budget: `total` counts only discovered entries and `hasMore` remains true.
 Otherwise, `hasMore` indicates whether another page of discovered entries exists.
 Ignored, sensitive and high-noise entries are omitted from visible results.
+
+### Diff snapshots
+
+Start `git_diff` at `offset=0` without `snapshot_id`, using the registered
+`workspace` and desired `mode` and `path`. The Hub generates the filtered diff
+once and returns a `snapshotId`. Every continuation or retry must supply that
+ID as `snapshot_id`, together with the same workspace, mode and path.
+
+- `status="ready"`: read `diff`; when `hasMore=true`, continue at `nextOffset`.
+  `totalBytes` is the exact snapshot size. Page size defaults to 64 KiB, with
+  a 256 KiB maximum. Offsets count UTF-8 bytes.
+- `status="preparing"`: no patch or byte counts are available yet. Wait
+  `retryAfterMs`, then poll the same snapshot and offset. Preparation continues
+  independently of the HTTP request; do not create another snapshot to poll.
+
+For example, after a ready first page:
+
+```json
+{"workspace":"<workspace-id>","mode":"head","snapshot_id":"<returned-snapshotId>","offset":65536,"max_bytes":65536}
+```
+
+Use the actual `nextOffset`, which may be smaller than the requested page size
+to preserve line and UTF-8 boundaries. Retrying a page returns the same bytes;
+working-tree changes after preparation do not change subsequent pages. Start a
+new snapshot to capture new edits. The capture itself reads the live working
+tree; avoid editing it while `status="preparing"` if a single Git state is needed.
+
+Snapshots are private runtime files outside registered repositories, scoped to
+the running Hub, OAuth client, workspace, mode and path. Workspace registration,
+Git scope and current ignore rules are checked on every call. Changes to
+`.c2cignore` invalidate saved content. Snapshots expire after 10 minutes, are
+lost on Hub restart, and the oldest completed snapshot can be evicted sooner
+when capacity is reached. At most four snapshots (64 MiB each) are retained,
+with two preparations at a time. Each Git process has a 30-second deadline;
+the entire preparation has a two-minute deadline. HTTP calls wait at most
+500 ms for preparation before returning `preparing`.
+
+`DIFF_SNAPSHOT_UNAVAILABLE` requires starting a new snapshot at offset 0.
+`DIFF_SNAPSHOT_REQUIRED` means a continuation omitted `snapshot_id`.
+`DIFF_SNAPSHOT_POLICY_CHANGED` requires a fresh capture under the current policy.
+`DIFF_SNAPSHOT_BUSY` means two preparations are active; retry shortly.
+`GIT_TIMEOUT`, `GIT_FAILED`, `DIFF_TOO_LARGE` and `DIFF_SNAPSHOT_IO_ERROR` return
+explicit tool errors without partial patches. A size error requires a narrower
+path scope. An expired or invalid snapshot never silently reruns Git.
 
 ## ChatGPT Project bindings
 

@@ -1,6 +1,7 @@
 import { fixtureHub, fixtureWorkspace, fixtureAuthFile } from "../helpers.js";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -8,7 +9,12 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { Logger } from "../../src/logger/index.js";
 import { AuthStore } from "../../src/auth/store.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
-import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir, pkceVerifierAndChallenge } from "../helpers.js";
+import { callGitDiffReady, makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir, pkceVerifierAndChallenge } from "../helpers.js";
+
+vi.mock("node:child_process", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 let root: string;
 let bridge: Bridge;
@@ -111,6 +117,28 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "search_workspace", ["matches", "matchCount", "truncated", "engine"]);
     expectToolOutputSchema(tools, "git_status", ["isRepo", "branch", "staged", "unstaged", "untracked", "hidden"]);
     expectToolOutputSchema(tools, "git_diff", ["isRepo", "mode", "diff", "hasMore", "nextOffset"]);
+  });
+
+  it("traces authenticated and rejected MCP requests without recording request secrets", async () => {
+    const marker = "private-request-payload-do-not-log";
+    const response = await fetch(`${bridge.localBaseUrl()}/mcp`, {
+      method: "POST", headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 551, method: "unknown", params: { secret: marker } }),
+    });
+    await response.text();
+    const id = response.headers.get("x-request-id");
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    const unauthorized = await fetch(`${bridge.localBaseUrl()}/mcp`, { method: "POST" });
+    await unauthorized.text();
+    expect(unauthorized.status).toBe(401);
+    const logs = fs.readFileSync(path.join(stateDir, "mcp-http.log"), "utf8");
+    const entries = logs.split("\n").filter(line => line.includes(id!));
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toContain("MCP HTTP received");
+    expect(entries[1]).toContain('"responseComplete":true');
+    expect(entries[1]).toContain('"rpcMethod":"unknown"');
+    expect(logs).not.toContain(marker);
+    expect(logs).not.toContain(accessToken);
   });
 
   it("documents git_diff pagination with its output field names", async () => {
@@ -300,8 +328,78 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(status.unstaged.some((entry) => entry.path === "src/index.ts")).toBe(true);
   });
 
+  it("polls repeated preparing responses across HTTP calls without rerunning Git", async () => {
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const release = path.join(stateDir, "release-snapshot");
+    const callsBefore = vi.mocked(spawn).mock.calls.length;
+    vi.mocked(spawn).mockImplementation((_, args, options) => actual.spawn(process.execPath, ["-e", args?.includes("--name-status")
+      ? 'process.stdout.write("M\\0hello.txt\\0")'
+      : `const fs = require("node:fs"); const timer = setInterval(() => {
+          if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); process.stdout.write("background patch\\n"); }
+        }, 10);`], options));
+    let poll: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const workspace = fixtureWorkspace(bridge).id;
+      const first = structuredJsonOf<{ status: string; snapshotId: string }>(await client.callTool({
+        name: "git_diff", arguments: { workspace },
+      }));
+      expect(first.status).toBe("preparing");
+      const callTool = client.callTool.bind(client);
+      let preparing = 0;
+      poll = vi.spyOn(client, "callTool").mockImplementation(async (...args) => {
+        expect(args[0].arguments).toMatchObject({ workspace, snapshot_id: first.snapshotId });
+        const result = await callTool(...args);
+        if (result.structuredContent?.status === "preparing" && ++preparing === 2) write(stateDir, "release-snapshot", "ready");
+        return result;
+      });
+      const ready = structuredJsonOf<{ status: string; snapshotId: string; diff: string }>(await callGitDiffReady(client, {
+        workspace, snapshot_id: first.snapshotId,
+      }));
+      expect(preparing).toBeGreaterThanOrEqual(2);
+      expect(ready).toMatchObject({ status: "ready", snapshotId: first.snapshotId, diff: "background patch\n" });
+      expect(vi.mocked(spawn).mock.calls.length - callsBefore).toBe(2);
+    } finally {
+      poll?.mockRestore();
+      write(stateDir, "release-snapshot", "ready");
+      vi.mocked(spawn).mockImplementation(actual.spawn);
+    }
+  });
+
+  it("bounds polling time and preserves snapshot identity and scope on every retry", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const callTool = vi.fn().mockResolvedValue({ structuredContent: {
+        status: "preparing", snapshotId: "pending-snapshot", retryAfterMs: 100,
+      } });
+      const args = { workspace: "registered-workspace", mode: "head", path: "src", offset: 1024, snapshot_id: "pending-snapshot" };
+      const assertion = expect(callGitDiffReady({ callTool }, args, 300)).rejects.toThrow("git_diff did not become ready within 300 ms");
+      await vi.advanceTimersByTimeAsync(300);
+      await assertion;
+      expect(callTool.mock.calls.length).toBeGreaterThan(1);
+      for (const [request, , options] of callTool.mock.calls) {
+        expect(request.arguments).toEqual(args);
+        expect(options.timeout).toBeGreaterThan(0);
+        expect(options.timeout).toBeLessThanOrEqual(300);
+      }
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("returns a sanitized snapshot I/O error through MCP when a cache file disappears", async () => {
+    const args = { mode: "unstaged" };
+    const first = structuredJsonOf<{ snapshotId: string }>(await callGitDiffReady(client, args));
+    const base = path.join(stateDir, "diff-snapshots");
+    const directory = fs.readdirSync(base).find(name => fs.existsSync(path.join(base, name, first.snapshotId)))!;
+    const file = path.join(base, directory, first.snapshotId);
+    fs.unlinkSync(file);
+    const result = await client.callTool({ name: "git_diff", arguments: { ...args, snapshot_id: first.snapshotId } });
+    expect(result.isError).toBe(true);
+    expect(jsonOf(result)).toEqual({ error: "DIFF_SNAPSHOT_IO_ERROR", message: "Cannot access the diff snapshot." });
+    const response = JSON.stringify(result);
+    for (const localPath of [file, stateDir, root]) expect(response).not.toContain(localPath);
+  });
+
   it("git_diff shows the change", async () => {
-    const result = await client.callTool({ name: "git_diff", arguments: { mode: "unstaged" } });
+    const result = await callGitDiffReady(client, { mode: "unstaged" });
     const diff = structuredJsonOf<{ diff: string; hasMore: boolean }>(result);
     expect(diff.diff).toContain("answer = 43");
     expect(diff.hasMore).toBe(false);
@@ -311,16 +409,14 @@ describe("MCP tools over Streamable HTTP", () => {
     const big = Array.from({ length: 20000 }, (_, i) => `content line ${i}`).join("\n");
     write(root, "big-change.txt", big);
     git(root, "add", "big-change.txt");
-    const first = structuredJsonOf<{ hasMore: boolean; nextOffset: number; totalBytes: number; returnedBytes: number }>(
-      await client.callTool({ name: "git_diff", arguments: { mode: "staged", max_bytes: 4096 } })
+    const first = structuredJsonOf<{ snapshotId: string; status: string; hasMore: boolean; nextOffset: number; totalBytes: number; returnedBytes: number }>(
+      await callGitDiffReady(client, { mode: "staged", max_bytes: 4096 })
     );
+    expect(first.status).toBe("ready");
     expect(first.hasMore).toBe(true);
     expect(first.returnedBytes).toBeLessThanOrEqual(4096);
     const second = structuredJsonOf<{ offset: number; diff: string }>(
-      await client.callTool({
-        name: "git_diff",
-        arguments: { mode: "staged", max_bytes: 4096, offset: first.nextOffset },
-      })
+      await callGitDiffReady(client, { mode: "staged", snapshot_id: first.snapshotId, max_bytes: 4096, offset: first.nextOffset })
     );
     expect(second.offset).toBe(first.nextOffset);
     expect(second.diff.length).toBeGreaterThan(0);
@@ -353,7 +449,7 @@ describe("MCP tools over Streamable HTTP", () => {
     git(root, "add", "-f", ".npmrc", "service-account-test.json", "src/visible.ts");
 
     const result = jsonOf<{ diff: string; isRepo: boolean }>(
-      await client.callTool({ name: "git_diff", arguments: { mode: "staged" } })
+      await callGitDiffReady(client, { mode: "staged" })
     );
 
     expect(result.isRepo).toBe(true);
@@ -372,7 +468,7 @@ describe("MCP tools over Streamable HTTP", () => {
     git(root, "mv", ".npmrc", "public_harmless.txt");
 
     const result = jsonOf<{ diff: string; isRepo: boolean }>(
-      await client.callTool({ name: "git_diff", arguments: { mode: "staged" } })
+      await callGitDiffReady(client, { mode: "staged" })
     );
 
     expect(result.isRepo).toBe(true);
@@ -391,10 +487,7 @@ describe("MCP tools over Streamable HTTP", () => {
     git(root, "mv", ".npmrc", "src/public.txt");
 
     const result = jsonOf<{ diff: string; isRepo: boolean }>(
-      await client.callTool({
-        name: "git_diff",
-        arguments: { mode: "staged", path: "src" },
-      })
+      await callGitDiffReady(client, { mode: "staged", path: "src" })
     );
 
     expect(result.isRepo).toBe(true);

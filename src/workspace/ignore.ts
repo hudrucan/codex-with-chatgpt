@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import ignore, { type Ignore } from "ignore";
 import fs from "node:fs";
 import path from "node:path";
@@ -73,6 +74,7 @@ export const NOISE_PATTERNS: string[] = [
 ];
 
 export class IgnoreRules {
+  readonly fingerprint: string;
   private sensitive: Ignore;
   private noise: Ignore;
   private custom: Ignore;
@@ -82,13 +84,16 @@ export class IgnoreRules {
     this.noise = ignore().add(NOISE_PATTERNS);
     this.custom = ignore();
     const c2cignore = path.join(workspaceRoot, ".c2cignore");
+    let customRules = "";
     try {
       if (fs.existsSync(c2cignore)) {
-        this.custom.add(fs.readFileSync(c2cignore, "utf8"));
+        customRules = fs.readFileSync(c2cignore, "utf8");
+        this.custom.add(customRules);
       }
     } catch {
       // unreadable .c2cignore: fall back to defaults only
     }
+    this.fingerprint = createHash("sha256").update(JSON.stringify(SENSITIVE_PATTERNS)).update(customRules).digest("hex");
   }
 
   /** True when the path must be denied with ACCESS_DENIED_SENSITIVE_FILE. */

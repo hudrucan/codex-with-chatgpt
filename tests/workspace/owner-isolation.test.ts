@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
-import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
+import { callGitDiffReady, cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
 
 async function connect(bridge: Bridge, existingToken?: string): Promise<Client> {
   const token = existingToken ?? bridge.authStore.issueTokens({
@@ -21,7 +21,7 @@ async function connect(bridge: Bridge, existingToken?: string): Promise<Client> 
 }
 
 async function call(client: Client, name: string, args: Record<string, unknown> = {}) {
-  const result = await client.callTool({ name, arguments: args });
+  const result = name === "git_diff" ? await callGitDiffReady(client, args) : await client.callTool({ name, arguments: args });
   return { result, data: JSON.parse((result.content as { text: string }[])[0].text) };
 }
 
