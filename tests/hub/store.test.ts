@@ -11,20 +11,20 @@ afterEach(() => { [state, root].forEach(cleanup); delete process.env.C2C_STATE_D
 
 describe("native Hub discovery and grants",()=>{
   it("keeps stable persisted identity through display-name changes",()=>{
-    const first=createHub("Desk"), renamed=renameHub(first.hubId,"Chosen Hub");
+    const first=createHub("Demo Hub"), renamed=renameHub(first.hubId,"Chosen Hub");
     expect(renamed).toEqual({...first,displayName:"Chosen Hub"});
     expect(discoverHub()).toEqual(renamed);
     expect(JSON.parse(fs.readFileSync(hubFile(first.hubId),"utf8"))).toEqual(renamed);
     expect(fs.readdirSync(root)).toEqual([]);
   });
   it.each(["malformed","foreign identity"])("fails closed on %s Hub state",kind=>{
-    const first=createHub("Desk");
+    const first=createHub("Demo Hub");
     fs.writeFileSync(hubFile(first.hubId),kind==="malformed"?"{":JSON.stringify({...first,hubId:createHub("Other").hubId}));
     expect(()=>discoverHub()).toThrow(/HUB_STATE_INVALID/);
   });
   it("creates a self-sufficient Hub independently of repo identity",()=>{
     expect(()=>discoverHub()).toThrow(/HUB_NOT_CONFIGURED/);
-    const hub=createHub("Desk");
+    const hub=createHub("Demo Hub");
     expect(hub.hubId).toMatch(/^hub-[a-f0-9-]{36}$/);
     expect(discoverHub()).toEqual(hub);expect(discoverHub(hub.hubId)).toEqual(hub);
     const registry=new WorkspaceRegistry(hub.hubId);const grant=registry.add(root,"first");

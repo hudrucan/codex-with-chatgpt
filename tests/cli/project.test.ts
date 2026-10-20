@@ -11,12 +11,12 @@ import { writeSecureJson } from "../../src/config/paths.js";
 import { cleanup, isolateStateDir, makeTmpDir } from "../helpers.js";
 
 it("previews/adds/syncs/removes memberships in the selected Project without touching other Projects or connection state", async () => {
-  const state = isolateStateDir(), root = makeTmpDir("project-cli"), secondRoot = makeTmpDir("second-project-cli"), hub = createHub("Desk");
+  const state = isolateStateDir(), root = makeTmpDir("project-cli"), secondRoot = makeTmpDir("second-project-cli"), hub = createHub("Demo Hub");
   const registry = new WorkspaceRegistry(hub.hubId), first = registry.add(root, "frontend"), second = registry.add(secondRoot, "backend");
   const a = "https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-project-a/project";
   const b = "https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-project-b/project";
   writeLastEndpoint({ hubId: hub.hubId, port: 48765, publicUrl: "https://code.example.com", mcpUrl: "https://code.example.com/mcp",
-    connectorName: "Desk", desiredConnectorName: "Desk", connectorId: "connector_verified", boundMcpUrl: "https://code.example.com/mcp", bindingVersion: 1 });
+    connectorName: "Demo Hub", desiredConnectorName: "Demo Hub", connectorId: "connector_verified", boundMcpUrl: "https://code.example.com/mcp", bindingVersion: 1 });
   const immutable = ["auth", "hubs", "tunnels", "endpoints", "workspace-registries"].map(dir => {
     const file = path.join(state, dir, `${hub.hubId}.json`); return { file, bytes: fs.readFileSync(file) };
   });

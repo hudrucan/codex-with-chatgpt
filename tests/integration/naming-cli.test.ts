@@ -80,16 +80,16 @@ describe("naming through setup and repair commands", () => {
     const nativeHub = fixtureHub(root);
     const token = new AuthStore(nativeHub.hubId).issueTokens({clientId: "naming-test", scopes: ["workspace.read"]}).accessToken;
     ownsDaemon = true;
-    const first = await runCli(["setup", "--no-tunnel", "--hub-name", "Codex with ChatGPT", "--workspace-name", "Codex with ChatGPT", "--connector-name", "Desk Connector"]);
+    const first = await runCli(["setup", "--no-tunnel", "--hub-name", "Codex with ChatGPT", "--workspace-name", "Codex with ChatGPT", "--connector-name", "Chosen Connector"]);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
-    expect(first.payload).toMatchObject({ workspaceId: workspace.id, hubName: "Codex with ChatGPT", connectorName: "Desk Connector" });
+    expect(first.payload).toMatchObject({ workspaceId: workspace.id, hubName: "Codex with ChatGPT", connectorName: "Chosen Connector" });
     const initialPid = readRuntimeState(resolveHub(workspace).hubId)!.pid;
 
     const rerun = await runCli(["setup", "--no-tunnel"]);
     expect(rerun.status).toBe(0);
-    expect(rerun.payload.connectorName).toBe("Desk Connector");
+    expect(rerun.payload.connectorName).toBe("Chosen Connector");
     expect(readRuntimeState(resolveHub(workspace).hubId)!.pid).toBe(initialPid);
-    expect((await runCli(["doctor"])).payload.chatgptRepair.connectorName).toBe("Desk Connector");
+    expect((await runCli(["doctor"])).payload.chatgptRepair.connectorName).toBe("Chosen Connector");
 
     const renamed = await runCli(["setup", "--no-tunnel", "--workspace-name", "Renamed Workspace"]);
     expect(renamed.status).toBe(0);
@@ -104,16 +104,16 @@ describe("naming through setup and repair commands", () => {
 
     const restarted = await runCli(["restart"]);
     expect(restarted.status, JSON.stringify(restarted.payload)).toBe(0);
-    expect(restarted.payload).toMatchObject({ hubId: nativeHub.hubId, hubName: "Renamed Hub", connectorName: "Desk Connector" });
+    expect(restarted.payload).toMatchObject({ hubId: nativeHub.hubId, hubName: "Renamed Hub", connectorName: "Chosen Connector" });
     expect(restarted.payload).not.toHaveProperty("workspaceId");
     expect(restarted.payload).not.toHaveProperty("workspaceRoot");
     expect(new Workspace(root).id).toBe(workspace.id);
-    expect(readLastEndpoint(resolveHub(workspace).hubId)?.desiredConnectorName).toBe("Desk Connector");
+    expect(readLastEndpoint(resolveHub(workspace).hubId)?.desiredConnectorName).toBe("Chosen Connector");
 
     const runtime = readRuntimeState(resolveHub(workspace).hubId)!;
     const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, { headers: { authorization: `Bearer ${token}` } });
     expect(response.status).toBe(405); // Bearer guard accepted the original token.
-    expect((await runCli(["setup", "--no-tunnel"])).payload.connectorName).toBe("Desk Connector");
+    expect((await runCli(["setup", "--no-tunnel"])).payload.connectorName).toBe("Chosen Connector");
   });
 
   it("inspects and reuses a deployed v1 runtime while omitting its startup repo metadata from CLI output", async () => {
@@ -177,13 +177,13 @@ describe("naming through setup and repair commands", () => {
       doctor: async () => ({ provider: "cloudflare-named", binaryFound: true, binaryPath: "test", running: url !== null, url, problems: [] }),
     };
     bridge = await startBridge({ hubId: fixtureHub(root).hubId, port: 0, tunnelProvider: tunnel });
-    const setup = await runCli(["setup", "--no-tunnel", "--connector-name", "Desk Connector"]);
+    const setup = await runCli(["setup", "--no-tunnel", "--connector-name", "Chosen Connector"]);
     expect(setup.status).toBe(0);
     const workspaceId = fixtureWorkspace(bridge).id;
     const tunnelId = "11111111-1111-4111-8111-111111111111";
     const savedTunnel = writeTunnelState({
       hubId: bridge.hubId, preference: "named", provider: "cloudflare-named", tunnelId,
-      tunnelName: "desk-c2c", hostname: "code.example.com", zone: "example.com",
+      tunnelName: "codex-with-chatgpt", hostname: "code.example.com", zone: "example.com",
     });
     const cert = write(stateDir, "test-cert.pem", "synthetic certificate");
     const credential = write(stateDir, "test-credential.json", JSON.stringify({ TunnelID: tunnelId, TunnelSecret: "synthetic secret" }));
@@ -191,14 +191,14 @@ describe("naming through setup and repair commands", () => {
       method: "POST", headers: { authorization: `Bearer ${bridge.adminToken}` },
     });
     writeLastEndpoint({ ...readLastEndpoint(bridge.hubId)!, publicUrl: "https://old.example.com", mcpUrl: "https://old.example.com/mcp" });
-    confirmConnectorBinding(bridge.hubId, { name: "Desk Connector", mcpUrl: "https://old.example.com/mcp", connectorId: "plugin_owned" });
+    confirmConnectorBinding(bridge.hubId, { name: "Chosen Connector", mcpUrl: "https://old.example.com/mcp", connectorId: "plugin_owned" });
     const result = await runCli(["doctor"], { TUNNEL_ORIGIN_CERT: cert, TUNNEL_CRED_FILE: credential });
-    expect(result.payload.chatgptRepair).toMatchObject({ needed: true, connectorAction: "update", connectorName: "Desk Connector" });
-    expect(readLastEndpoint(bridge.hubId)).toMatchObject({ connectorName: "Desk Connector", publicUrl: url });
+    expect(result.payload.chatgptRepair).toMatchObject({ needed: true, connectorAction: "update", connectorName: "Chosen Connector" });
+    expect(readLastEndpoint(bridge.hubId)).toMatchObject({ connectorName: "Chosen Connector", publicUrl: url });
     expect(readTunnelState(bridge.hubId)).toEqual(savedTunnel);
     const secondDoctor = await runCli(["doctor"], { TUNNEL_ORIGIN_CERT: cert, TUNNEL_CRED_FILE: credential });
     expect(secondDoctor.payload.chatgptRepair).toMatchObject({ needed: true, previousMcpUrl: "https://old.example.com/mcp" });
-    const bind = await runCli(["connector", "bind", "--name", "Desk Connector", "--mcp-url", `${url!}/mcp`, "--connector-id", "plugin_new", "--verified-workspace", workspaceId]);
+    const bind = await runCli(["connector", "bind", "--name", "Chosen Connector", "--mcp-url", `${url!}/mcp`, "--connector-id", "plugin_new", "--verified-workspace", workspaceId]);
     expect(bind.status, JSON.stringify(bind.payload)).toBe(0);
     expect((await runCli(["doctor"], { TUNNEL_ORIGIN_CERT: cert, TUNNEL_CRED_FILE: credential })).payload.chatgptRepair.needed).toBe(false);
   });
@@ -287,21 +287,21 @@ if (args.includes("run")) {
     const cert = write(stateDir, "fake-cert.pem", "synthetic certificate");
     const env = { C2C_CLOUDFLARED_PATH: binary, TUNNEL_ORIGIN_CERT: cert, C2C_TEST_ACCOUNT_FILE: accountFile };
     ownsDaemon = true;
-    const flags = ["--workspace-name", "Codex with ChatGPT", "--connector-name", "Desk Connector", "--tunnel-name", "desk-c2c", "--hostname", "code.example.com", "--zone", "example.com"];
+    const flags = ["--workspace-name", "Codex with ChatGPT", "--connector-name", "Chosen Connector", "--tunnel-name", "codex-with-chatgpt", "--hostname", "code.example.com", "--zone", "example.com"];
     const first = await runCli(["setup", ...flags], env);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
-    expect(first.payload).toMatchObject({ hubName: "Codex with ChatGPT", connectorName: "Desk Connector", tunnel: { name: "desk-c2c", hostname: "code.example.com" } });
+    expect(first.payload).toMatchObject({ hubName: "Codex with ChatGPT", connectorName: "Chosen Connector", tunnel: { name: "codex-with-chatgpt", hostname: "code.example.com" } });
     const pid = readRuntimeState(resolveHub(new Workspace(root)).hubId)!.pid;
     const rerun = await runCli(["setup", ...flags], env);
     expect(rerun.status, JSON.stringify(rerun.payload)).toBe(0);
     expect(rerun.payload.tunnel).toEqual(first.payload.tunnel);
-    expect(rerun.payload.connectorName).toBe("Desk Connector");
+    expect(rerun.payload.connectorName).toBe("Chosen Connector");
     expect(readRuntimeState(resolveHub(new Workspace(root)).hubId)!.pid).toBe(pid);
     const saved = await runCli(["setup"], env);
     expect(saved.payload.tunnel).toEqual(first.payload.tunnel);
-    expect(saved.payload.connectorName).toBe("Desk Connector");
+    expect(saved.payload.connectorName).toBe("Chosen Connector");
     const choice = await runCli(["tunnel", "choose", "--mode", "named"], env);
-    expect(choice.payload.state).toMatchObject({ tunnelName: "desk-c2c", hostname: "code.example.com" });
+    expect(choice.payload.state).toMatchObject({ tunnelName: "codex-with-chatgpt", hostname: "code.example.com" });
     expect(readRuntimeState(resolveHub(new Workspace(root)).hubId)!.pid).toBe(pid);
     const account = JSON.parse(fs.readFileSync(accountFile, "utf8"));
     expect(account.tunnels).toHaveLength(1);

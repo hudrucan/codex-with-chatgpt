@@ -31,7 +31,7 @@ function intended(hubId: string, projectUrl: string, workspaceSelector?: string)
   const repositories = [...workspaceIds].filter(id => registeredIds.has(id)).map(id => {
     const workspace = current.registry.resolve(id);
     // Labels are display metadata; prevent them from injecting lines or block markers.
-    const name = workspace.name.replace(/[\r\n\t]/g, " ").replace(/\[\/?(?:codex-with-chatgpt|desk-c2c)\b[^\]]*\]/gi, "").trim() || workspace.id;
+    const name = workspace.name.replace(/[\r\n\t]/g, " ").replace(/\[\/?codex-with-chatgpt\b[^\]]*\]/gi, "").trim() || workspace.id;
     return { name, workspaceId: workspace.id };
   }).sort((a, b) => {
     const compare = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;

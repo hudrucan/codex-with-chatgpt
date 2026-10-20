@@ -13,7 +13,7 @@ import {verifyForkOrigin} from "../../src/config/update.js";
 import {cleanup,isolateStateDir,makeTmpDir,write} from "../helpers.js";
 const originalApiToken=process.env.CLOUDFLARE_API_TOKEN;
 let state:string,root:string,hub:ReturnType<typeof createHub>;
-beforeEach(()=>{state=isolateStateDir();root=makeTmpDir("hub-lifecycle");hub=createHub("Desk");new WorkspaceRegistry(hub.hubId).add(root);});
+beforeEach(()=>{state=isolateStateDir();root=makeTmpDir("hub-lifecycle");hub=createHub("Demo Hub");new WorkspaceRegistry(hub.hubId).add(root);});
 afterEach(()=>{vi.restoreAllMocks();[root,state].forEach(cleanup);delete process.env.C2C_STATE_DIR;if(originalApiToken===undefined)delete process.env.CLOUDFLARE_API_TOKEN;else process.env.CLOUDFLARE_API_TOKEN=originalApiToken;});
 function endpoint(name="Original") {return persistHubEndpoint({hubId:hub.hubId,hubName:hub.displayName,connectorName:name,port:1234,publicUrl:"https://code.example.com",mcpUrl:"https://code.example.com/mcp"});}
 function bind(name="Original"){return confirmConnectorBinding(hub.hubId,{name,mcpUrl:"https://code.example.com/mcp",connectorId:"plugin_owned"});}

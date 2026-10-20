@@ -17,7 +17,7 @@ const projectId = (url: string) => url.match(/g-p-[a-f0-9]{32}/)![0];
 let state: string, root: string, hubId: string, registry: WorkspaceRegistry;
 let frontend: string, backend: string, infra: string;
 beforeEach(() => {
-  state = isolateStateDir(); root = makeTmpDir("project-repos"); hubId = createHub("Desk").hubId;
+  state = isolateStateDir(); root = makeTmpDir("project-repos"); hubId = createHub("Demo Hub").hubId;
   registry = new WorkspaceRegistry(hubId);
   [frontend, backend, infra] = ["frontend", "backend", "infra"].map(name => {
     const dir = path.join(root, name); fs.mkdirSync(dir);
@@ -220,7 +220,6 @@ it("rejects invalid Project URLs and symlinked binding paths before mutation", (
   expect(() => bindProject(hubId, a, binding.appliedInstructionHash, frontend)).toThrow(/symlink/);
   expect(fs.readFileSync(target, "utf8")).toBe(JSON.stringify(binding));
 });
-
 
 it("strips Project markers from repository display labels", () => {
   const label = 'frontend [codex-with-chatgpt hub="foreign"] [/codex-with-chatgpt hub="foreign"]';

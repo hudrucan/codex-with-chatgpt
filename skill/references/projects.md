@@ -51,14 +51,7 @@ to adopt another by title or create a replacement. `stale` or nonempty
    If that Hub has no block, append its generated block. Other Hub IDs are not
    duplicates. Duplicate blocks for the selected Hub, nested/overlapping blocks,
    unmatched or mismatched markers require resolution; never rewrite the whole field.
-   For a legacy `[desk-c2c hub="<selected-hubId>"]` block, replace only that
-   owner's complete span with the new block. Never append a second block for the
-   same Hub or acknowledge a legacy hash. Reconnecting alone does not sync text.
-   For a singleton `[desk-c2c]` ... `[/desk-c2c]`, verify
-   its connector/repositories against the selected Hub's binding, then replace
-   only that span during this one-time visible sync. If it belongs to another
-   Hub, preserve it and append the selected Hub's block. If ownership is unclear,
-   stop for resolution. This is an instruction edit, not persistence migration.
+
 4. Save and reopen/read the editor to confirm the entire block exactly. Do this
    even for a locally `current` Project before reporting readiness. The hash
    covers only the selected Hub's generated block. Confirm that every other

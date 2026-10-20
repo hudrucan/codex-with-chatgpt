@@ -19,9 +19,9 @@ describe("Cloudflare naming conflicts", () => {
   it("does not adopt a tunnel created concurrently even if the error contains a UUID", async () => {
     spawnSync
       .mockReturnValueOnce({ status: 0, stdout: "[]", stderr: "" })
-      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "desk-c2c already exists: 11111111-1111-4111-8111-111111111111" });
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "codex-with-chatgpt already exists: 11111111-1111-4111-8111-111111111111" });
     const account = new ProcessCloudflaredAccount("test-cloudflared");
-    await expect(account.createTunnel("desk-c2c")).rejects.toThrow(/TUNNEL_NAMING_CONFLICT/);
+    await expect(account.createTunnel("codex-with-chatgpt")).rejects.toThrow(/TUNNEL_NAMING_CONFLICT/);
   });
   it("does not delete a tunnel whose UUID/name no longer match", async () => {
     spawnSync.mockReturnValueOnce({ status: 0, stdout: JSON.stringify([{ id: "owned", name: "externally-renamed" }]), stderr: "" });

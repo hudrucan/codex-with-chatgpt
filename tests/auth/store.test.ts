@@ -9,7 +9,7 @@ beforeEach(() => { state = isolateStateDir(); });
 afterEach(() => { vi.restoreAllMocks(); cleanup(state); delete process.env.C2C_STATE_DIR; });
 
 function fullClientStore() {
-  const hub = createHub("Desk"), file = path.join(state, "auth", `${hub.hubId}.json`);
+  const hub = createHub("Demo Hub"), file = path.join(state, "auth", `${hub.hubId}.json`);
   const clients = Array.from({ length: MAX_OAUTH_CLIENTS }, (_, index) => ({
     clientId: `client-${String(index).padStart(3, "0")}`, redirectUris: ["http://localhost/callback"],
     createdAt: index === 2 ? "1999-01-01T00:00:00.000Z" : "2000-01-01T00:00:00.000Z",
@@ -65,7 +65,7 @@ it("rejects a fully code-protected store without losing approvals, then recovers
 });
 
 it("persists Hub clients and hashed tokens, and rotates refresh credentials across reloads", () => {
-  const hub = createHub("Desk"), store = new AuthStore(hub.hubId);
+  const hub = createHub("Demo Hub"), store = new AuthStore(hub.hubId);
   const client = store.registerClient({ clientName: "ChatGPT", redirectUris: ["http://localhost/callback"] });
   const tokens = store.issueTokens({ clientId: client.clientId, scopes: ["workspace.read", "offline_access"] });
   const file = path.join(state, "auth", `${hub.hubId}.json`), persisted = fs.readFileSync(file, "utf8");
@@ -93,7 +93,7 @@ it("isolates Hub credentials and rejects a foreign store without merging or over
 });
 
 it.each(["missing", "malformed"])("fails closed on %s authoritative auth state", kind => {
-  const hub = createHub("Desk"), file = path.join(state, "auth", `${hub.hubId}.json`);
+  const hub = createHub("Demo Hub"), file = path.join(state, "auth", `${hub.hubId}.json`);
   if (kind === "missing") fs.unlinkSync(file); else fs.writeFileSync(file, "{");
   expect(() => new AuthStore(hub.hubId)).toThrow(/AUTH_STATE_CONFLICT/);
   expect(fs.existsSync(file)).toBe(kind !== "missing");

@@ -17,7 +17,7 @@ it("inspects a repo without configuring a Hub; registry commands discover one Hu
   expect(json(["-w",root])).toMatchObject({workspaceId:id,root});
   expect(fs.readdirSync(state)).toEqual([]);
   expect(JSON.parse(cli(["list","--json"]).stdout).error).toContain("HUB_NOT_CONFIGURED");
-  const hub=createHub("Desk");
+  const hub=createHub("Demo Hub");
   const immutable=["auth","tunnels","endpoints","hubs"].map(dir=>{const file=path.join(state,dir,`${hub.hubId}.json`);return {file,bytes:fs.readFileSync(file)};});
   expect(json(["list"]).workspaces).toEqual([]);
   expect(json(["add",root,"--alias","backend"])).toMatchObject({workspaceId:id,alias:"backend"});
@@ -39,7 +39,7 @@ it("requires --hub for multiple Hubs and keeps grants isolated regardless of cwd
   expect(cli(["remove",new Workspace(root).id,"--hub",b.hubId]).status).toBe(1);
 });
 it("rejects root ownership flags, invalid aliases, missing paths and unknown removals",()=>{
-  createHub("Desk");
+  createHub("Demo Hub");
   expect(cli(["add"]).status).not.toBe(0);
   expect(cli(["add","-w",root]).status).not.toBe(0);
   json(["add",root,"--alias","alpha"]);
