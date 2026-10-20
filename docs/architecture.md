@@ -1,4 +1,4 @@
-# Desk C2C Hub architecture
+# Codex with ChatGPT architecture
 
 ```text
 ChatGPT MCP client → HTTPS tunnel → loopback bridge → Hub's registered repos

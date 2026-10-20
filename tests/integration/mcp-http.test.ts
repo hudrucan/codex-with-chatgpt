@@ -135,7 +135,7 @@ describe("MCP tools over Streamable HTTP", () => {
   it("read_file returns hello.txt", async () => {
     const result = await client.callTool({ name: "read_file", arguments: { path: "hello.txt" } });
     const file = structuredJsonOf<{ content: string; totalLines: number }>(result);
-    expect(file.content).toContain("Hello from Desk C2C Hub!");
+    expect(file.content).toContain("Hello from Codex with ChatGPT!");
   });
 
   it("returns typed range and regex errors through MCP instead of generic or successful results", async () => {

@@ -26,7 +26,7 @@ beforeEach(() => {
   verifiedEndpoint(hubId);
 });
 afterEach(() => { [state, root].forEach(cleanup); delete process.env.C2C_STATE_DIR; });
-function verifiedEndpoint(id: string, name = "Desk C2C Hub · Foundation") {
+function verifiedEndpoint(id: string, name = "Codex with ChatGPT · Foundation") {
   writeLastEndpoint({ hubId: id, port: 48765, publicUrl: "https://code.example.com", mcpUrl: "https://code.example.com/mcp",
     desiredConnectorName: name, connectorName: name,
     boundMcpUrl: "https://code.example.com/mcp", bindingVersion: 1, connectorId: "connector_verified" });
@@ -42,7 +42,7 @@ it("supports a single-repo Project with explicit routing, deterministic hash and
   expect(fs.existsSync(path.dirname(file()))).toBe(false);
   expect(preview.instructionHash).toBe(createHash("sha256").update(preview.instructions).digest("hex"));
   expect(preview.instructions).toContain(`- frontend -> workspace="${frontend}"`);
-  expect(preview.instructions).toContain("Connector: Desk C2C Hub · Foundation");
+  expect(preview.instructions).toContain("Connector: Codex with ChatGPT · Foundation");
   expect(preview.instructions).toContain("Always use this connector for repositories in this block.");
   expect(preview.instructions.startsWith(`[desk-c2c hub="${hubId}"]\n`)).toBe(true);
   expect(preview.instructions.endsWith(`\n[/desk-c2c hub="${hubId}"]`)).toBe(true);
@@ -100,7 +100,7 @@ it("binds the same Project and root independently across Hubs with separate rout
   expect(sameConnector.repositories).toEqual(own.repositories);
   expect(sameConnector.instructionHash).not.toBe(own.instructionHash);
   expect(sameConnector.instructions.replaceAll(other, hubId)).toBe(own.instructions);
-  verifiedEndpoint(other, "Desk C2C Hub · Other");
+  verifiedEndpoint(other, "Codex with ChatGPT · Other");
   const otherPreview = projectInstructions(other, a, frontend), original = fs.readFileSync(file());
   const release = acquireHubLock(hubId);
   try {
@@ -110,7 +110,7 @@ it("binds the same Project and root independently across Hubs with separate rout
   } finally { release(); }
   expect(fs.readFileSync(file())).toEqual(original);
   expect(fs.existsSync(file(a, other))).toBe(true);
-  expect(otherPreview.instructions).toContain(`[desk-c2c hub="${other}"]\nConnector: Desk C2C Hub · Other`);
+  expect(otherPreview.instructions).toContain(`[desk-c2c hub="${other}"]\nConnector: Codex with ChatGPT · Other`);
   expect(otherPreview.instructions).toContain(`[/desk-c2c hub="${other}"]`);
   const renamed = a.replace("project-a", "another-slug");
   bindProject(other, renamed, otherPreview.instructionHash, frontend);

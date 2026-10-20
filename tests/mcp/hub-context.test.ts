@@ -75,7 +75,7 @@ async function expectWorkspaceReads(): Promise<void> {
     const { result, data } = await call(name, args);
     expect(result.isError ?? false, `${name}: ${JSON.stringify(data)}`).toBe(false);
     if (name === "workspace_info") expect(data.workspaceId).toBe(fixtureWorkspace(bridge!).id);
-    if (name === "read_file") expect(data.content).toContain("Hello from Desk");
+    if (name === "read_file") expect(data.content).toContain("Hello from Codex with ChatGPT");
   }
 }
 

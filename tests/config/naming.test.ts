@@ -44,7 +44,7 @@ describe("runtime naming", () => {
   it("honors an explicit tunnel name and hostname without a hash suffix", async () => {
     const account = accountFixture();
     const result = await provisionNamedTunnel({
-      hubId, hubName: "Desk C2C Hub", zone: "example.com",
+      hubId, hubName: "Codex with ChatGPT", zone: "example.com",
       tunnelName: "desk-c2c", hostname: "code.example.com", account,
     });
     expect(result).toMatchObject({ ok: true, fallback: false, state: { tunnelName: "desk-c2c", hostname: "code.example.com" } });
@@ -187,7 +187,7 @@ describe("runtime naming", () => {
     expect(() => connectorNameFor({ hubName: "Demo", explicitName: " " })).toThrow(/INVALID_NAME/);
   });
 
-  it("persists the connector name across local setup, reruns, display changes and endpoint repair", () => {
+  it("preserves a legacy connector name across setup, display changes and endpoint repair", () => {
     const endpoint = { hubId, hubName: "Demo", port: 1234, publicUrl: null, mcpUrl: null };
     expect(persistHubEndpoint({ ...endpoint, connectorName: "Desk C2C Hub" })).toBe("Desk C2C Hub");
     expect(persistHubEndpoint({ ...endpoint, hubName: "Changed" })).toBe("Desk C2C Hub");
@@ -200,12 +200,12 @@ describe("runtime naming", () => {
     const root = makeTmpDir("display-name");
     dirs.push(root);
     const original = new Workspace(root);
-    saveWorkspaceDisplayName(original, "Desk C2C Hub");
+    saveWorkspaceDisplayName(original, "Codex with ChatGPT");
     const renamed = new Workspace(root);
-    expect(renamed.name).toBe("Desk C2C Hub");
+    expect(renamed.name).toBe("Codex with ChatGPT");
     expect(renamed.id).toBe(original.id);
     expect(renamed.root).toBe(original.root);
     expect(fs.readdirSync(root)).toEqual([]);
-    expect(JSON.parse(fs.readFileSync(workspaceRegistrationFile(original.id), "utf8"))).toMatchObject({ workspaceId: original.id, workspaceRoot: original.root, displayName: "Desk C2C Hub" });
+    expect(JSON.parse(fs.readFileSync(workspaceRegistrationFile(original.id), "utf8"))).toMatchObject({ workspaceId: original.id, workspaceRoot: original.root, displayName: "Codex with ChatGPT" });
   });
 });

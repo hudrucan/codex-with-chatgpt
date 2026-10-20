@@ -8,7 +8,7 @@ tokens, runtime state, connectors or tunnel UUIDs.
 
 ## Setup and naming
 
-Ask Codex to set up Desk C2C Hub using the [Skill](../skill/SKILL.md). It resolves
+Ask Codex to set up Codex with ChatGPT using the [Skill](../skill/SKILL.md). It resolves
 names from explicit user values, saved settings, project-derived suggestions
 and defaults. New setups ask one grouped decision for the Hub display
 name, tunnel name, hostname and connector name. Saved setups reuse their values
@@ -93,7 +93,7 @@ For diagnostics and lock recovery, see [troubleshooting](troubleshooting.md).
 
 ## Explicit updates
 
-`c2c update --json` verifies the exact `hudrucan/desk-c2c-hub` origin and a clean
+`c2c update --json` verifies the exact `hudrucan/codex-with-chatgpt` origin and a clean
 branch checkout, then pulls with `--ff-only`. It does not stash or reset changes.
 Build and reinstall the complete Skill directory after an update. Explicitly
 restart and verify active connections; disconnected Hubs stay stopped.

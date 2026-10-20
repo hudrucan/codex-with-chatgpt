@@ -179,10 +179,10 @@ describe("Cloudflare cleanup API", () => {
 });
 
 describe("fork update origin guard", () => {
-  it.each(["git@github.com:hudrucan/desk-c2c-hub.git", "https://github.com/hudrucan/desk-c2c-hub", "ssh://git@github.com/hudrucan/desk-c2c-hub.git"])("accepts the exact fork: %s", (url) => {
+  it.each(["git@github.com:hudrucan/codex-with-chatgpt.git", "https://github.com/hudrucan/codex-with-chatgpt", "ssh://git@github.com/hudrucan/codex-with-chatgpt.git"])("accepts the exact fork: %s", (url) => {
     expect(() => verifyForkOrigin(() => ({ ok: true, stdout: url }))).not.toThrow();
   });
-  it.each(["https://github.com/XiaoDuoYa/codex-with-chatgpt.git", "https://github.com/hudrucan/desk-c2c-hub-evil", "https://github.com.evil/hudrucan/desk-c2c-hub", "https://github.com/hudrucan/desk-c2c-hub\nhttps://foreign.example/repo", ""])("rejects an unverified origin: %s", (url) => {
+  it.each(["https://github.com/XiaoDuoYa/codex-with-chatgpt.git", "https://github.com/hudrucan/codex-with-chatgpt-evil", "https://github.com.evil/hudrucan/codex-with-chatgpt", "https://github.com/hudrucan/codex-with-chatgpt\nhttps://foreign.example/repo", ""])("rejects an unverified origin: %s", (url) => {
     const run = vi.fn(() => ({ ok: true, stdout: url }));
     expect(() => verifyForkOrigin(run)).toThrow(/UPDATE_ORIGIN_CONFLICT/);
     expect(run).toHaveBeenCalledTimes(1); // no fetch/pull

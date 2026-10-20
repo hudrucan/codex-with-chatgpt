@@ -36,14 +36,14 @@ describe("Cloudflare naming conflicts", () => {
   });
 
   it("refuses dirty checkouts without stashing or pulling", () => {
-    spawnSync.mockReturnValueOnce({ status: 0, stdout: "git@github.com:hudrucan/desk-c2c-hub.git" })
+    spawnSync.mockReturnValueOnce({ status: 0, stdout: "git@github.com:hudrucan/codex-with-chatgpt.git" })
       .mockReturnValueOnce({ status: 0, stdout: " M README.md" });
     expect(() => pullFork("/temporary-checkout")).toThrow(/UPDATE_DIRTY_CHECKOUT/);
     expect(spawnSync).toHaveBeenCalledTimes(2);
   });
 
   it("pulls the current branch explicitly from the verified fork, ignoring other upstream remotes", () => {
-    spawnSync.mockReturnValueOnce({ status: 0, stdout: "git@github.com:hudrucan/desk-c2c-hub.git" })
+    spawnSync.mockReturnValueOnce({ status: 0, stdout: "git@github.com:hudrucan/codex-with-chatgpt.git" })
       .mockReturnValueOnce({ status: 0, stdout: "" })
       .mockReturnValueOnce({ status: 0, stdout: "main" })
       .mockReturnValueOnce({ status: 0, stdout: "Already up to date." });

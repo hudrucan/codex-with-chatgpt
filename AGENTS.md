@@ -44,7 +44,7 @@
 - Keep docs limited to meaningful product areas such as architecture, security, lifecycle, multi-repo behavior, and troubleshooting.
 - Keep normal setup/reconnect guidance concise. Experimental or rare destructive flows should remain isolated in dedicated references rather than bloating the main Skill or README.
 
-## Desk C2C Hub invariants
+## Codex with ChatGPT invariants
 
 - Remote MCP remains read-only unless a task explicitly changes that product boundary.
 - Do not add shell execution, package installation, git commit, arbitrary filesystem write, or similar privileged tools to the remote MCP surface by default.

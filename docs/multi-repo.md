@@ -137,6 +137,7 @@ Its final removal retains an empty record for syncing an empty routing block.
 Each generated block starts with `[desk-c2c hub="<hubId>"]` and ends with
 `[/desk-c2c hub="<hubId>"]`. Both markers name the owning Hub; the block maps
 human repo display names to workspace IDs through that Hub's verified connector.
+These stable markers preserve existing Project bindings across product renames.
 It always requires explicit selectors, prohibits
 using `list_workspaces()` to choose a repo, selects from the user's request/context,
 and asks before reading ambiguous targets. Cross-repo work inspects each relevant

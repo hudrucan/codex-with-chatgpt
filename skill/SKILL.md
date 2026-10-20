@@ -1,12 +1,12 @@
 ---
 name: codex-with-chatgpt
 description: >
-  Set up and operate Desk C2C Hub, a secure read-only MCP connection from ChatGPT
+  Set up and operate Codex with ChatGPT, a secure read-only MCP connection from ChatGPT
   to explicitly registered local repos. Use for setup, adding a repo, Project binding, verification,
   doctor/repair, disconnect, or an explicit update.
 ---
 
-# Desk C2C Hub
+# Codex with ChatGPT
 
 Use the existing Hub whenever possible. Successful setup or verification ends
 at **MCP READY**, then STOP. Optional ChatGPT Projects hold durable multi-repo

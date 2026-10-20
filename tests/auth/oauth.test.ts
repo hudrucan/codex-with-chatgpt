@@ -459,7 +459,7 @@ describe("bridge-only OAuth scopes", () => {
     const metadata = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
     expect(metadata.scopes_supported).toEqual(["workspace.read", "workspace.search", "git.read", "offline_access"]);
     const resource = await (await fetch(`${base}/.well-known/oauth-protected-resource/mcp`)).json();
-    expect(resource.resource_name).toBe("Desk C2C Hub");
+    expect(resource.resource_name).toBe("Codex with ChatGPT");
     expect(resource.scopes_supported).toEqual(metadata.scopes_supported);
   });
 });

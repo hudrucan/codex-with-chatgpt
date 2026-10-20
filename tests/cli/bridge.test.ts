@@ -14,10 +14,10 @@ function cli(args: string[]) {
 }
 
 describe("bridge-first CLI surface", () => {
-  it("advertises bridge/lifecycle commands with Desk C2C Hub branding", () => {
+  it("advertises bridge/lifecycle commands with Codex with ChatGPT branding", () => {
     const result = cli(["--help"]);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Desk C2C Hub");
+    expect(result.stdout).toContain("Codex with ChatGPT");
     expect(result.stdout).not.toMatch(/planning brain|ChatGPT thinks|Codex works/i);
     for (const command of ["setup", "connector", "doctor", "disconnect", "destroy", "start", "stop", "restart", "status", "pair", "unpair", "logs", "workspace", "tunnel", "prefs", "sandbox-allow", "update", "update-check"]) {
       expect(result.stdout).toMatch(new RegExp(`^  ${command}(?: |$)`, "m"));

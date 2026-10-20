@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PRODUCT_NAME } from "../version.js";
 import { hubIdSchema } from "../hub/store.js";
 import { resourceFile, withHubResource } from "../hub/resource-state.js";
 import { userFacingName } from "./naming.js";
@@ -8,7 +9,7 @@ export const CHATGPT_PLUGINS_URL = "https://chatgpt.com/plugins";
 export const CHATGPT_CREATE_CONNECTOR_URL =
   "https://chatgpt.com/settings/plugins-settings";
 
-export const DEFAULT_CONNECTOR_NAME = "Desk C2C Hub";
+export const DEFAULT_CONNECTOR_NAME = PRODUCT_NAME;
 
 const fields = {
   port: z.number().int().min(0).max(65535),

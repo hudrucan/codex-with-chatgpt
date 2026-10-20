@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   connectorAction,
   connectorNameFor,
-  DEFAULT_CONNECTOR_NAME,
   mcpUrlFromPublic,
   normalizePublicUrl,
   reclaimUserMessage,
@@ -43,7 +42,7 @@ describe("connectorNameFor", () => {
       connectorNameFor({
         hubName: "Landing",
       })
-    ).toBe(`${DEFAULT_CONNECTOR_NAME} · Landing`);
+    ).toBe("Codex with ChatGPT · Landing");
   });
 });
 

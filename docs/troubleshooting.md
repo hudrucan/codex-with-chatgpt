@@ -1,4 +1,4 @@
-# Troubleshooting Desk C2C Hub
+# Troubleshooting Codex with ChatGPT
 
 For an existing setup start with `c2c doctor --json`. Use `--no-fix`
 for read-only diagnosis. For a new setup, resolve names before a repairing

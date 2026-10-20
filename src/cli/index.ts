@@ -50,7 +50,7 @@ import {
   readLastEndpoint,
   reclaimUserMessage,
 } from "../config/endpoint.js";
-import { pullFork, verifyForkOrigin } from "../config/update.js";
+import { FORK_REPOSITORY, pullFork, verifyForkOrigin } from "../config/update.js";
 import { acquireHubLock, destroyHub, disconnectHub, lifecycleFile } from "../lifecycle/hub.js";
 import { addProjectCommands } from "../project/cli.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
@@ -1002,7 +1002,7 @@ program.command("update").description("Explicitly fast-forward this fork after c
     try {
       pullFork(repoRoot);
       if (opts.json) say(JSON.stringify({ ok: true, next: "Build the checkout and reinstall the Skill before restarting bridges." }));
-      else check("Pulled hudrucan/desk-c2c-hub; build and reinstall the Skill to finish updating");
+      else check(`Pulled ${FORK_REPOSITORY}; build and reinstall the Skill to finish updating`);
     } catch (error) { handleCliError(error, opts.json); }
   });
 

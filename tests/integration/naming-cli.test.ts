@@ -80,9 +80,9 @@ describe("naming through setup and repair commands", () => {
     const nativeHub = fixtureHub(root);
     const token = new AuthStore(nativeHub.hubId).issueTokens({clientId: "naming-test", scopes: ["workspace.read"]}).accessToken;
     ownsDaemon = true;
-    const first = await runCli(["setup", "--no-tunnel", "--hub-name", "Desk C2C Hub", "--workspace-name", "Desk C2C Hub", "--connector-name", "Desk Connector"]);
+    const first = await runCli(["setup", "--no-tunnel", "--hub-name", "Codex with ChatGPT", "--workspace-name", "Codex with ChatGPT", "--connector-name", "Desk Connector"]);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
-    expect(first.payload).toMatchObject({ workspaceId: workspace.id, hubName: "Desk C2C Hub", connectorName: "Desk Connector" });
+    expect(first.payload).toMatchObject({ workspaceId: workspace.id, hubName: "Codex with ChatGPT", connectorName: "Desk Connector" });
     const initialPid = readRuntimeState(resolveHub(workspace).hubId)!.pid;
 
     const rerun = await runCli(["setup", "--no-tunnel"]);
@@ -93,7 +93,7 @@ describe("naming through setup and repair commands", () => {
 
     const renamed = await runCli(["setup", "--no-tunnel", "--workspace-name", "Renamed Workspace"]);
     expect(renamed.status).toBe(0);
-    expect(renamed.payload.hubName).toBe("Desk C2C Hub");
+    expect(renamed.payload.hubName).toBe("Codex with ChatGPT");
     const hubRename=await runCli(["setup","--no-tunnel","--hub-name","Renamed Hub"]);
     expect(hubRename.status).toBe(1);expect(hubRename.payload.error).toContain("HUB_NAME_RESTART_REQUIRED");
     expect(readRuntimeState(resolveHub(workspace).hubId)!.pid).toBe(initialPid);
@@ -287,10 +287,10 @@ if (args.includes("run")) {
     const cert = write(stateDir, "fake-cert.pem", "synthetic certificate");
     const env = { C2C_CLOUDFLARED_PATH: binary, TUNNEL_ORIGIN_CERT: cert, C2C_TEST_ACCOUNT_FILE: accountFile };
     ownsDaemon = true;
-    const flags = ["--workspace-name", "Desk C2C Hub", "--connector-name", "Desk Connector", "--tunnel-name", "desk-c2c", "--hostname", "code.example.com", "--zone", "example.com"];
+    const flags = ["--workspace-name", "Codex with ChatGPT", "--connector-name", "Desk Connector", "--tunnel-name", "desk-c2c", "--hostname", "code.example.com", "--zone", "example.com"];
     const first = await runCli(["setup", ...flags], env);
     expect(first.status, JSON.stringify(first.payload)).toBe(0);
-    expect(first.payload).toMatchObject({ hubName: "Desk C2C Hub", connectorName: "Desk Connector", tunnel: { name: "desk-c2c", hostname: "code.example.com" } });
+    expect(first.payload).toMatchObject({ hubName: "Codex with ChatGPT", connectorName: "Desk Connector", tunnel: { name: "desk-c2c", hostname: "code.example.com" } });
     const pid = readRuntimeState(resolveHub(new Workspace(root)).hubId)!.pid;
     const rerun = await runCli(["setup", ...flags], env);
     expect(rerun.status, JSON.stringify(rerun.payload)).toBe(0);

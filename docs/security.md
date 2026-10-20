@@ -1,4 +1,4 @@
-# Desk C2C Hub security model
+# Codex with ChatGPT security model
 
 ## Trust boundaries
 

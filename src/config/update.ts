@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 
-export const FORK_REPOSITORY = "hudrucan/desk-c2c-hub";
+export const FORK_REPOSITORY = "hudrucan/codex-with-chatgpt";
 export function isForkOrigin(url: string): boolean {
-  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)hudrucan\/desk-c2c-hub(?:\.git)?\/?$/.test(url.trim());
+  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)hudrucan\/codex-with-chatgpt(?:\.git)?\/?$/.test(url.trim());
 }
 
 export function verifyForkOrigin(run: (args: string[]) => { ok: boolean; stdout: string }): void {

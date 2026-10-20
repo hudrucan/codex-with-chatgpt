@@ -1,4 +1,4 @@
-# Desk C2C Hub
+# Codex with ChatGPT
 
 A secure read-only MCP bridge from ChatGPT to explicitly registered local repos.
 Codex manages setup and connection lifecycle; ChatGPT reads repo content through
@@ -10,8 +10,8 @@ Requirements: Node.js >= 22.13 for the pinned pnpm toolchain, git, Corepack, and
 cloudflared for a public ChatGPT connection. The bridge runtime supports Node.js >= 20.
 
 ```bash
-git clone https://github.com/hudrucan/desk-c2c-hub.git
-cd desk-c2c-hub
+git clone https://github.com/hudrucan/codex-with-chatgpt.git
+cd codex-with-chatgpt
 corepack pnpm install --frozen-lockfile
 corepack pnpm build
 ```
@@ -24,7 +24,7 @@ Run `node <checkout>/bin/c2c.js <command>`, or `c2c` when linked.
 
 ## Quick setup
 
-Ask Codex: **"Set up Desk C2C Hub for this repo."** The [Skill](skill/SKILL.md)
+Ask Codex: **"Set up Codex with ChatGPT for this repo."** The [Skill](skill/SKILL.md)
 resolves names, reuses saved settings, completes ChatGPT authorization and
 verifies the actual MCP connection. Successful setup ends at **MCP READY**.
 

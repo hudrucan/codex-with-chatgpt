@@ -1,5 +1,5 @@
 {
-  "name": "desk-c2c-hub",
+  "name": "codex-with-chatgpt",
   "version": "0.2.0",
   "description": "Secure read-only MCP Hub connecting ChatGPT to registered local repositories.",
   "type": "module",
@@ -34,6 +34,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hudrucan/desk-c2c-hub.git"
+    "url": "git+https://github.com/hudrucan/codex-with-chatgpt.git"
   }
 }
