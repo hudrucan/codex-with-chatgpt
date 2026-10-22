@@ -1,9 +1,26 @@
 # C2C handoff workflow
 
 This is the sole handoff contract. ChatGPT Web thinks/plans/audits; Codex
-implements/tests. The local repo is the source of truth; summaries are not
-repository evidence. Lazier defines activation, not a separate contract.
+implements/tests or handles explicitly delegated planning. The local repo is
+the source of truth; summaries are not repository evidence. Lazier defines
+activation, not a separate contract.
 Apply this workflow only to tasks using C2C; other tasks keep normal handoffs.
+
+## Web → Codex
+
+When drafting a work prompt for Codex through C2C, choose by intent and put the marker on
+the exact first line:
+
+- `[C2C Plan]`: create or check a plan; do not edit code.
+- `[C2C Task]`: implement, refactor, clean up or test within the requested scope.
+- `[C2C Fix]`: fix evidenced findings within scope; include location, evidence
+  and the proposed fix.
+- `[C2C Commit]`: commit only when the user requests it; do not push automatically.
+
+Include the repo, known connector/workspace ID, scope and relevant constraints.
+Do not mark ordinary replies or MCP-only source reads. Markers are conventions,
+not commands, automatic delivery or permission grants. Codex reads this local
+reference, follows the requested scope and returns `[C2C Handoff]`.
 
 ## Codex → Web
 
@@ -18,19 +35,26 @@ with the exact first line `[C2C Handoff]`, then briefly provide:
   and unrun checks. A clean diff or build does not imply tests passed.
 - **Risks:** concrete risks, limits or blockers; none known when appropriate.
 
+State `not checked` or `not run` for omitted revision checks or validation.
+
 ## Web audit → Codex
 
 A handoff starting with `[C2C Handoff]` triggers an audit through C2C MCP without
-a separate audit request. The marker does not grant connector/workspace access:
+a separate audit request. The marker does not grant connector/workspace access.
+Use the routed connector and explicit registered workspace on every call.
+Verify that pair with `workspace_info` before first use; ask if ambiguous.
 
-1. Use the routed connector and explicit registered workspace on every call.
-   Verify that pair with `workspace_info` before first use; ask if ambiguous.
-2. Check revision/scope with `git_status` and `git_log`. For uncommitted work,
+Keep verification proportional to the claimed outcome. For handoffs with no
+code changes, verify only relevant claims and inspect Git/source as needed;
+do not perform a full code audit without a specific risk or request. Honor
+explicit inspection limits and disclose unchecked evidence. For changed code:
+
+1. Check revision/scope with `git_status` and `git_log`. For uncommitted work,
    read `git_diff` (`mode="head"`, or `staged`/`unstaged` for narrower scope)
    and relevant untracked files via `read_file`. For commits, use `git_log` and
    `git_show` with full SHAs; each patch compares to its first parent (empty tree
    for root commits), not an arbitrary base/HEAD range.
-3. Inspect related source, guidance, callers and tests with `read_file` and
+2. Inspect related source, guidance, callers and tests with `read_file` and
    `search_workspace`. Follow returned pagination/snapshot fields. Report missing
    evidence from unavailable MCP, filtering, truncation or revision changes;
    limit conclusions and request only what is missing. Never imply unread source
