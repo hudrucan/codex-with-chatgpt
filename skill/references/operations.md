@@ -48,7 +48,7 @@ auto-remove locks by age or kill an unverified PID.
 ## ChatGPT UI recovery
 
 For a stale tool surface, open the exact existing connector in Manage and use
-Refresh tools. Then select that connector and verify all eight tools and the
+Refresh tools. Then select that connector and verify all ten tools and the
 optional workspace selector in a new ordinary chat
 in the same IAB tab and verify there. Tool refresh does not create a Project;
 reuse an existing Project binding when applicable. Do not persist a chat pointer,

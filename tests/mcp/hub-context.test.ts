@@ -10,7 +10,7 @@ import { createMcpServer } from "../../src/mcp/server.js";
 import { DiffSnapshots } from "../../src/workspace/diff-snapshots.js";
 import { nullLogger } from "../../src/logger/index.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
-import { callGitDiffReady, cleanup, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
+import { callGitDiffReady, cleanup, git, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
 
 let state: string;
 let root: string;
@@ -20,7 +20,8 @@ const ownershipDirectories = ["hubs", "workspace-registries"];
 const workspaceCalls = [
   ["workspace_info", {}], ["list_directory", {}], ["read_file", { path: "hello.txt" }],
   ["read_image", { path: "pixel.png" }], ["search_workspace", { query: "Hello" }],
-  ["git_status", {}], ["git_diff", {}],
+  ["git_status", {}], ["git_diff", {}], ["git_log", {}],
+  ["git_show", { commit: "0".repeat(40) }],
 ] as const;
 
 beforeEach(() => { state = isolateStateDir(); root = makeTmpDir("mcp-hub-context"); });
@@ -65,12 +66,13 @@ async function connect(): Promise<void> {
 }
 
 async function call(name: string, args: Record<string, unknown> = {}) {
+  if (name === "git_show") args = { ...args, commit: git(root, "rev-parse", "HEAD").trim() };
   const result = name === "git_diff" ? await callGitDiffReady(client!, args) : await client!.callTool({ name, arguments: args });
   return { result, data: JSON.parse((result.content as { text: string }[])[0].text) };
 }
 
 async function expectWorkspaceReads(): Promise<void> {
-  expect((await client!.listTools()).tools).toHaveLength(8);
+  expect((await client!.listTools()).tools).toHaveLength(10);
   expect((await call("list_workspaces")).data.workspaces).toHaveLength(1);
   for (const [name, args] of workspaceCalls) {
     const { result, data } = await call(name, args);

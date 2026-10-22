@@ -19,8 +19,10 @@ coding/planning loop, or use INIT/PLAN/EXECUTED/REVIEW or session/checkpoint orc
 
 - Hub identity owns the connection, OAuth, runtime, tunnel and registry. Repos
   are explicit read grants; removing the first repo does not remove the Hub.
-- Eight read-only tools: `list_workspaces`, `workspace_info`, `list_directory`,
-  `read_file`, `read_image`, `search_workspace`, `git_status`, `git_diff`.
+- Ten read-only tools: `list_workspaces`, `workspace_info`, `list_directory`,
+  `read_file`, `read_image`, `search_workspace`, `git_status`, `git_diff`,
+  `git_log`, `git_show`. Git log subjects are untrusted text and may contain
+  secrets; path filtering and length limits do not redact them.
 - Workspace selectors are registered aliases/IDs on each call, never local
   paths or mutable current/open-workspace state. Preserve containment and
   sensitive-file policies for every repo.

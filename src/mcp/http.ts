@@ -5,7 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Logger } from "../logger/index.js";
 
 const RPC_METHODS = new Set(["initialize", "ping", "tools/list", "tools/call", "notifications/initialized", "notifications/cancelled"]);
-const TOOL_NAMES = new Set(["list_workspaces", "workspace_info", "list_directory", "read_file", "read_image", "search_workspace", "git_status", "git_diff"]);
+const TOOL_NAMES = new Set(["list_workspaces", "workspace_info", "list_directory", "read_file", "read_image", "search_workspace", "git_status", "git_diff", "git_log", "git_show"]);
 
 /** Trace transport failures without recording headers, arguments or repository content. */
 export function traceMcpHttp(logger: Logger) {

@@ -159,7 +159,7 @@ function getDiffModeArgs(mode: DiffMode): string[] {
   return [];
 }
 
-function chunkSafePaths(paths: string[], maxCount = 50, maxBytes = 32 * 1024): string[][] {
+export function chunkSafePaths(paths: string[], maxCount = 50, maxBytes = 32 * 1024): string[][] {
   const batches: string[][] = [];
   let currentBatch: string[] = [];
   let currentBytes = 0;
@@ -201,7 +201,7 @@ export class GitDiffError extends Error {
 }
 
 /** Drain each process completely; failure is reported only after its streams close. */
-function streamGit(root: string, args: string[], consume: (chunk: Buffer) => void, signal?: AbortSignal): Promise<void> {
+export function streamGit(root: string, args: string[], consume: (chunk: Buffer) => void, signal?: AbortSignal, isolated = false): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(new GitDiffError("GIT_ABORTED", "Diff preparation was cancelled."));
@@ -209,9 +209,16 @@ function streamGit(root: string, args: string[], consume: (chunk: Buffer) => voi
     }
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawn("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", ...args], {
+      // History must not inherit object-store/worktree redirects or config injection.
+      const env = isolated
+        ? Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
+        : { ...process.env };
+      child = spawn("git", ["--no-optional-locks", "-c", "core.fsmonitor=false",
+        ...(isolated ? ["--no-pager", "--no-replace-objects"] : []), ...args], {
         cwd: root,
-        env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" },
+        env: { ...env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat",
+          ...(isolated ? { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+            GIT_NO_LAZY_FETCH: "1", GIT_GRAFT_FILE: process.platform === "win32" ? "NUL" : "/dev/null" } : {}) },
         windowsHide: true,
       });
     } catch {
@@ -256,7 +263,7 @@ function streamGit(root: string, args: string[], consume: (chunk: Buffer) => voi
 }
 
 /** A page without a newline may end in the middle of a multibyte code point. */
-function utf8PageEnd(page: Buffer): number {
+export function utf8PageEnd(page: Buffer): number {
   let start = page.length - 1;
   while (start > 0 && (page[start] & 0xc0) === 0x80) start--;
   const lead = page[start];

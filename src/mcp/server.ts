@@ -5,6 +5,7 @@ import { WorkspaceError } from "../workspace/manager.js";
 import { WorkspaceRegistry, WorkspaceRegistryError } from "../workspace/registry.js";
 import { SearchError, searchWorkspace } from "../workspace/search.js";
 import { GitDiffError, gitInfo, gitStatus } from "../workspace/git.js";
+import { gitLog, gitShow } from "../workspace/git-history.js";
 import type { Logger } from "../logger/index.js";
 import { DiffSnapshots } from "../workspace/diff-snapshots.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
@@ -419,6 +420,71 @@ export function createMcpServer(ctx: McpContext): McpServer {
       } catch (error) {
         return mapError(error);
       }
+    }
+  );
+
+  server.registerTool(
+    "git_log",
+    {
+      title: "Git log",
+      description: `Bounded HEAD history of visible workspace changes, newest first. Returns SHA, subject (up to 256 UTF-8 bytes), UTC committer date and up to 20 filtered workspace-relative paths (512 bytes each), with truncation flags. Subjects may contain secrets; length limits and path filtering do not redact them. Commit bodies and author/email identities are withheld. ${UNTRUSTED_NOTE}`,
+      inputSchema: {
+        workspace: workspaceSelector,
+        path: z.string().optional().describe("Filter by a literal workspace-relative file or directory"),
+        limit: z.number().int().min(1).max(100).default(20),
+      },
+      outputSchema: {
+        commits: z.array(z.object({
+          sha: z.string(), subject: z.string().max(256), subjectTruncated: z.boolean(), date: z.string().datetime(),
+          paths: z.array(z.string().max(512)).max(20), pathsTruncated: z.boolean(),
+        })).max(100),
+        hasMore: z.boolean(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (args, extra) => {
+      const denied = requireScope(extra.authInfo, "git.read");
+      if (denied) return denied;
+      try {
+        const workspace = registry.resolve(args.workspace);
+        const result = await gitLog(workspace, { ...args, signal: extra.signal });
+        const current = registry.resolve(args.workspace);
+        if (current.id !== workspace.id || current.ignoreRules.fingerprint !== workspace.ignoreRules.fingerprint)
+          throw new GitDiffError("GIT_HISTORY_POLICY_CHANGED", "Workspace access changed; retry the history read.");
+        return okStructured(result);
+      } catch (error) { return mapError(error); }
+    }
+  );
+
+  server.registerTool(
+    "git_show",
+    {
+      title: "Git show",
+      description: `Read a bounded filtered commit patch by full SHA. Root commits compare against an empty tree; other commits compare against their first parent. No commit metadata is returned. ${UNTRUSTED_NOTE}`,
+      inputSchema: {
+        workspace: workspaceSelector,
+        commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).describe("Full lowercase commit SHA from git_log; refs and revision expressions are rejected"),
+        path: z.string().optional().describe("Limit the patch to a literal workspace-relative file or directory"),
+        max_bytes: z.number().int().min(1024).max(262144).default(65536),
+      },
+      outputSchema: {
+        commit: z.string(), comparison: z.enum(["root", "first-parent"]),
+        totalBytes: z.number().int().nonnegative(), returnedBytes: z.number().int().nonnegative(),
+        truncated: z.boolean(), diff: z.string(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (args, extra) => {
+      const denied = requireScope(extra.authInfo, "git.read");
+      if (denied) return denied;
+      try {
+        const workspace = registry.resolve(args.workspace);
+        const result = await gitShow(workspace, { commit: args.commit, path: args.path, maxBytes: args.max_bytes, signal: extra.signal });
+        const current = registry.resolve(args.workspace);
+        if (current.id !== workspace.id || current.ignoreRules.fingerprint !== workspace.ignoreRules.fingerprint)
+          throw new GitDiffError("GIT_HISTORY_POLICY_CHANGED", "Workspace access changed; retry the history read.");
+        return okStructured(result);
+      } catch (error) { return mapError(error); }
     }
   );
 

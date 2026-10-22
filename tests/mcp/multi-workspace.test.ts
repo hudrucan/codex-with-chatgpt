@@ -16,6 +16,7 @@ let client: Client;
 let registry: WorkspaceRegistry;
 let primary: WorkspaceRegistration;
 let secondary: WorkspaceRegistration;
+let historyCommit: string;
 const calls = [
   ["workspace_info", {}],
   ["list_directory", {}],
@@ -24,9 +25,12 @@ const calls = [
   ["search_workspace", { query: "repo-marker" }],
   ["git_status", {}],
   ["git_diff", {}],
+  ["git_log", {}],
+  ["git_show", { commit: "0".repeat(40) }],
 ] as const;
 
 async function call(name: string, args: Record<string, unknown> = {}, activeClient = client) {
+  if (name === "git_show" && historyCommit) args = { ...args, commit: historyCommit };
   const result = name === "git_diff" ? await callGitDiffReady(activeClient, args) : await activeClient.callTool({ name, arguments: args });
   const data = JSON.parse((result.content as { text: string }[])[0].text);
   return { result, data };
@@ -52,6 +56,9 @@ beforeAll(async () => {
     fs.writeFileSync(path.join(dir, "pixel.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
   }
   git(other, "checkout", "-b", "secondary-branch");
+  write(other, "history.txt", "secondary history-marker\n");
+  git(other, "add", "history.txt"); git(other, "commit", "-m", "secondary history");
+  historyCommit = git(other, "rev-parse", "HEAD").trim();
   // Deliberately track a secret to verify per-repo git filtering as well.
   git(other, "add", "-f", ".env");
   fs.symlinkSync(root, path.join(other, "escape"), "junction");
@@ -77,7 +84,7 @@ describe("multiple workspaces through one existing MCP connection", () => {
     expect(JSON.stringify(data)).not.toContain(root);
   });
 
-  it("adds optional string selectors to all seven tool schemas without changing scope requirements", async () => {
+  it("adds optional string selectors to all workspace tool schemas without changing scope requirements", async () => {
     const { tools } = await client.listTools();
     for (const [name] of calls) {
       const tool = tools.find((tool) => tool.name === name)!;
@@ -111,7 +118,7 @@ describe("multiple workspaces through one existing MCP connection", () => {
     }
   });
 
-  it("routes all seven tools by alias and ID and keeps output schemas compatible", async () => {
+  it("routes all workspace tools by alias and ID and keeps output schemas compatible", async () => {
     for (const selector of [secondary.alias, secondary.workspaceId]) {
       for (const [name, args] of calls) {
         const { result, data } = await call(name, { ...args, workspace: selector });
@@ -127,6 +134,11 @@ describe("multiple workspaces through one existing MCP connection", () => {
           expect(JSON.stringify(data)).not.toContain(".env");
         }
         if (name === "git_diff") expect(data.diff).toContain("secondary repo-marker");
+        if (name === "git_log") {
+          expect(data.commits).toContainEqual(expect.objectContaining({ sha: historyCommit, subject: "secondary history", paths: ["history.txt"] }));
+          expect(JSON.stringify(data)).not.toContain("primary repo-marker");
+        }
+        if (name === "git_show") expect(data.diff).toContain("secondary history-marker");
       }
     }
   });
@@ -137,6 +149,10 @@ describe("multiple workspaces through one existing MCP connection", () => {
     })));
     results.forEach(({ data }, index) => expect(data.content).toBe(`${index % 2 ? "secondary" : "primary"} repo-marker`));
     expect((await call("read_file", { path: "hello.txt" })).data.error).toBe("WORKSPACE_REQUIRED");
+    const logs = await Promise.all([primary.workspaceId, secondary.workspaceId].map(workspace => call("git_log", { workspace })));
+    expect(logs[0].data.commits).not.toContainEqual(expect.objectContaining({ sha: historyCommit }));
+    expect(logs[1].data.commits).toContainEqual(expect.objectContaining({ sha: historyCommit }));
+    expect((await call("git_show", { workspace: primary.workspaceId })).result.isError).toBe(true);
   });
 
   it("rejects unregistered selectors on all tools and preserves containment/sensitive/git policies", async () => {
@@ -149,10 +165,11 @@ describe("multiple workspaces through one existing MCP connection", () => {
       ["read_file", { path: ".env" }], ["read_image", { path: ".env" }],
       ["list_directory", { path: ".env" }], ["search_workspace", { query: "secret", path: ".env" }],
       ["git_diff", { path: ".env" }],
+      ["git_log", { path: ".env" }], ["git_show", { path: ".env" }],
     ] as const) {
       expect((await call(name, { ...args, workspace: secondary.alias })).data.error).toBe("ACCESS_DENIED_SENSITIVE_FILE");
     }
-    for (const name of ["read_file", "list_directory", "read_image", "search_workspace", "git_diff"]) {
+    for (const name of ["read_file", "list_directory", "read_image", "search_workspace", "git_diff", "git_log", "git_show"]) {
       const args = { workspace: secondary.alias, query: "repo-marker", path: "escape/hello.txt" };
       expect((await call(name, args)).data.error).toBe("PATH_OUTSIDE_WORKSPACE");
     }

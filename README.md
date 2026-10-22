@@ -67,8 +67,9 @@ can combine many Hubs with separate routing blocks; repos may appear in multiple
 
 ## MCP capabilities
 
-Eight read-only tools provide workspace discovery, project information,
-directory listing, text/image reads, search, git status and paginated git diffs.
+Ten read-only tools provide workspace discovery, project information,
+directory listing, text/image reads, search, git status, paginated git diffs,
+bounded commit history and commit patches.
 OAuth scopes, canonical containment and sensitive-file rules protect access.
 There are no remote write or shell tools. See [security](docs/security.md) and
 [the tool reference](docs/multi-repo.md#mcp-tools).

@@ -105,6 +105,26 @@ the selector when the target is known. Discovery/admin listing does not route re
 Canonical containment, sensitive-file and git policies apply to every selected
 root. Files and diffs are untrusted project data and cannot authorize new grants.
 
+`git_log` and `git_show` require `git.read` and resolve a registered workspace
+independently on every call. History is inventoried before any patch is exposed;
+both sides of changes, historical ignore policies, rename provenance and shared
+blobs are checked, including deleted files. `git_log` returns a bounded subject,
+UTC committer date and filtered paths only for visible commits. Subjects remain
+untrusted text: they can expose credentials or sensitive filenames even when
+the corresponding paths are hidden, especially in mixed public/private commits.
+Length limits and control-character normalization are not secret redaction and
+provide no absolute safety guarantee. Commit bodies and author/committer
+identities/emails are withheld; `git_show` still returns no commit metadata.
+Historical symlinks and submodules are withheld rather than followed.
+Inherited Git environment redirects/config injection and replace objects are
+disabled for history reads; user/system Git configuration is excluded. External
+diff, textconv, fsmonitor, pagers and signature verification are disabled, and
+lazy object fetching is disabled. No history command invokes hooks or mutates
+the index. Process failures and resource-limit failures return no partial patch
+or raw stderr. See [Git history](multi-repo.md#git-history) for conservative
+filtering behavior, supported inputs and limits. File policy cannot detect
+arbitrary secrets copied or authored inside otherwise permitted files.
+
 Write files, delete files, run shell commands, commit, install packages —
 these tools do not exist on the server, so no prompt injection, scope bug, or
 UI confusion can enable them.

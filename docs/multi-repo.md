@@ -86,6 +86,8 @@ see [security](security.md).
 | `search_workspace` | Search using ripgrep or Node fallback | `workspace.search` |
 | `git_status` | Branch and working-tree status | `git.read` |
 | `git_diff` | Scoped immutable diff snapshots with byte-offset pagination | `git.read` |
+| `git_log` | Bounded HEAD commit history, optionally filtered by path | `git.read` |
+| `git_show` | Bounded commit patch by full SHA | `git.read` |
 
 `read_file` rejects files larger than **16 MiB (16,777,216 bytes)** with
 `FILE_TOO_LARGE` before scanning lines; no partial content is returned. Files
@@ -99,6 +101,73 @@ depth and `total` is exact. `truncated=true` means discovery stopped at the scan
 budget: `total` counts only discovered entries and `hasMore` remains true.
 Otherwise, `hasMore` indicates whether another page of discovered entries exists.
 Ignored, sensitive and high-noise entries are omitted from visible results.
+
+### Git history
+
+`git_log` accepts `workspace`, optional literal workspace-relative `path`, and
+`limit` (default 20, maximum 100). It returns `commits` in HEAD topology order,
+newest first, and `hasMore`. Only commits with visible changes in scope are
+listed. Each commit includes:
+
+- `sha`: full commit SHA, usable with `git_show`.
+- `subject`: Git's subject (`%s`, the first message paragraph), with control
+  characters replaced by spaces, trimmed and limited to 256 UTF-8 bytes without
+  splitting a character. `subjectTruncated` reports byte-limit truncation.
+- `date`: committer date normalized to UTC ISO 8601; no author/committer identity
+  or email is returned.
+- `paths`: up to 20 unique, filtered workspace-relative changed paths within the
+  requested scope. Paths longer than 512 UTF-8 bytes are omitted rather than
+  shortened. `pathsTruncated` reports omitted visible paths due to these limits;
+  it does not count sensitive paths. Merge paths include changes against each
+  parent, matching the history inventory.
+
+Metadata is read only for the selected visible commits, under the existing
+16 MiB per-read budget and shared request deadline. Commit bodies, signatures,
+notes and decorations are withheld. There is no pagination cursor; increase
+`limit` up to the cap.
+
+Subjects are untrusted free-form text and may contain credentials, sensitive
+filenames or information unrelated to visible paths. A mixed public/private
+commit still exposes its subject when it has a visible change. Path filtering,
+control-character normalization and length limits do **not** redact secrets;
+no automatic subject redaction or absolute safety guarantee is provided.
+Keep secrets out of commit subjects when exposing repository history.
+
+`git_show` requires `commit`, a full lowercase 40- or 64-character commit SHA;
+branches, tags, abbreviated IDs and revision expressions are rejected.
+Commits outside HEAD ancestry are rejected with `GIT_FAILED`, even if their
+objects exist locally or in an alternate object store. Optional
+`path` limits the patch to a literal workspace-relative file or directory.
+`max_bytes` defaults to 64 KiB and permits 1–256 KiB. The response includes
+`commit`, `comparison`, `diff`, exact `totalBytes`, `returnedBytes` and `truncated`.
+The UTF-8 patch ends within the byte limit. There is no snapshot or continuation;
+narrow `path` when truncated. Root commits compare against an empty tree
+(`comparison="root"`); every other commit, including merges, compares against
+its first parent (`comparison="first-parent"`). Only Git objects are read;
+uncommitted working-tree contents are not included.
+
+Both tools apply current sensitive-file rules and every recorded version of the
+workspace's `.c2cignore` in history reachable from local refs, HEAD and the
+requested commit. Policy files themselves are withheld. Paths associated with
+sensitive or out-of-workspace paths through renames or identical blob copies
+are withheld across all scanned revisions, including later sanitized edits.
+Deletion/addition pairs in one commit are linked conservatively, protecting
+rewritten renames even when Git detects no similarity. This can hide unrelated
+files with shared content or additions made alongside a sensitive deletion.
+Symlinks and submodules are withheld. Filtering is based on file policy and
+provenance, not general secret detection inside otherwise permitted files.
+
+At most two history reads run at once per Hub process; additional calls return
+`GIT_HISTORY_BUSY` and can be retried. Each call has a 30-second deadline
+including every Git subprocess. Inventory is
+capped at 16 MiB, 10,000 commits and 50,000 change records; historical ignore
+policies are limited to 100 distinct blobs of 64 KiB each. Generated patches
+are capped at 16 MiB before response truncation. Exceeding these budgets returns
+`GIT_HISTORY_TOO_LARGE` without partial content. Shallow or malformed history
+returns `GIT_HISTORY_UNAVAILABLE`; missing objects, an unborn HEAD and Git process
+failures return `GIT_FAILED`. Cancellation/deadline failures return `GIT_ABORTED`
+or `GIT_TIMEOUT`. Workspace grants and current ignore policy are rechecked
+before returning content; `GIT_HISTORY_POLICY_CHANGED` requires retrying.
 
 ### Diff snapshots
 

@@ -92,11 +92,13 @@ afterAll(async () => {
 });
 
 describe("MCP tools over Streamable HTTP", () => {
-  it("lists eight read-only bridge tools", async () => {
+  it("lists ten read-only bridge tools", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
       "git_diff",
+      "git_log",
+      "git_show",
       "git_status",
       "list_directory",
       "list_workspaces",
@@ -117,6 +119,14 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "search_workspace", ["matches", "matchCount", "truncated", "engine"]);
     expectToolOutputSchema(tools, "git_status", ["isRepo", "branch", "staged", "unstaged", "untracked", "hidden"]);
     expectToolOutputSchema(tools, "git_diff", ["isRepo", "mode", "diff", "hasMore", "nextOffset"]);
+    expectToolOutputSchema(tools, "git_log", ["commits", "hasMore"]);
+    expect(tools.find(tool => tool.name === "git_log")?.outputSchema).toMatchObject({
+      properties: { commits: { maxItems: 100, items: {
+        required: expect.arrayContaining(["sha", "subject", "subjectTruncated", "date", "paths", "pathsTruncated"]),
+        properties: { subject: { maxLength: 256 }, date: { format: "date-time" }, paths: { maxItems: 20, items: { maxLength: 512 } } },
+      } } },
+    });
+    expectToolOutputSchema(tools, "git_show", ["commit", "comparison", "diff", "truncated", "returnedBytes"]);
   });
 
   it("traces authenticated and rejected MCP requests without recording request secrets", async () => {
@@ -405,6 +415,39 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(diff.hasMore).toBe(false);
   });
 
+  it("git_log and git_show expose structured bounded history and reject revision expressions", async () => {
+    const id = git(root, "rev-parse", "HEAD").trim();
+    const log = await client.callTool({ name: "git_log", arguments: { path: "src", limit: 1 } });
+    expect(structuredJsonOf(log)).toEqual({ commits: [{
+      sha: id, subject: "initial commit", subjectTruncated: false,
+      date: new Date(git(root, "show", "-s", "--format=%cI", id).trim()).toISOString(),
+      paths: ["src/index.ts"], pathsTruncated: false,
+    }], hasMore: false });
+    const patch = await client.callTool({ name: "git_show", arguments: { commit: id, path: "src", max_bytes: 1024 } });
+    expect(structuredJsonOf(patch)).toMatchObject({ commit: id, comparison: "root", truncated: false, diff: expect.stringContaining("answer = 42") });
+    for (const [name, args] of [
+      ["git_show", { commit: "HEAD" }], ["git_log", { limit: 101 }], ["git_show", { commit: id, max_bytes: 262145 }],
+    ] as const) expect((await client.callTool({ name, arguments: args })).isError).toBe(true);
+  });
+
+  it.each(["git_log", "git_show"])("%s rechecks changed workspace policy before returning history", async name => {
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const id = git(root, "rev-parse", "HEAD").trim();
+    vi.mocked(spawn).mockImplementation((command, args, options) => {
+      if ((args as string[]).includes("log")) write(root, ".c2cignore", "hello.txt\n");
+      return actual.spawn(command, args, options);
+    });
+    try {
+      const result = await client.callTool({ name, arguments: { commit: id } });
+      expect(result.isError).toBe(true);
+      expect(jsonOf(result)).toMatchObject({ error: "GIT_HISTORY_POLICY_CHANGED" });
+      expect(textOf(result)).not.toContain("Hello from Codex");
+    } finally {
+      fs.rmSync(path.join(root, ".c2cignore"), { force: true });
+      vi.mocked(spawn).mockImplementation(actual.spawn);
+    }
+  });
+
   it("git_diff paginates large diffs", async () => {
     const big = Array.from({ length: 20000 }, (_, i) => `content line ${i}`).join("\n");
     write(root, "big-change.txt", big);
@@ -433,6 +476,11 @@ describe("MCP tools over Streamable HTTP", () => {
     const denied = await limitedClient.callTool({ name: "git_diff", arguments: {} });
     expect(denied.isError).toBe(true);
     expect(textOf(denied)).toContain("INSUFFICIENT_SCOPE");
+    for (const name of ["git_log", "git_show"]) {
+      const result = await limitedClient.callTool({ name, arguments: { commit: "0".repeat(40) } });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("INSUFFICIENT_SCOPE");
+    }
     const searchDenied = await limitedClient.callTool({ name: "search_workspace", arguments: { query: "hello" } });
     expect(searchDenied.isError).toBe(true);
     expect(textOf(searchDenied)).toContain("INSUFFICIENT_SCOPE");
