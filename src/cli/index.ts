@@ -312,7 +312,7 @@ program
       const sandbox = trySandboxAllow();
       const { hub, runtime, info, mcpUrl } = await ensureBridgeAndTunnel(selectedHub().hubId, { tunnel: opts.tunnel });
       const previousEndpoint = readLastEndpoint(hub.hubId);
-      const connectorName = persistHubEndpoint({
+      persistHubEndpoint({
         hubId: hub.hubId,
         hubName: hub.displayName,
         port: runtime.port,

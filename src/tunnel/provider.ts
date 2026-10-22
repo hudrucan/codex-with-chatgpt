@@ -1,9 +1,4 @@
-/**
- * Tunnel abstraction. Business logic never talks to a specific vendor;
- * it only sees this interface. V1 ships a Cloudflare Quick Tunnel provider,
- * but ngrok / Tailscale / custom providers can be added without touching
- * the bridge.
- */
+/** Lifecycle and status contracts shared by Cloudflare Quick and Named Tunnels. */
 export interface TunnelStatus {
   running: boolean;
   url: string | null;

@@ -27,8 +27,7 @@ export const endpointSchema = z.object({ version: z.literal(1), hubId: hubIdSche
 const emptySchema = z.object({ version: z.literal(1), hubId: hubIdSchema, empty: z.literal(true) }).strict();
 export const endpointStateSchema = z.union([endpointSchema, emptySchema]);
 export type LastEndpoint = z.infer<typeof endpointSchema>;
-const fieldsSchema = z.object(fields);
-type EndpointBinding = z.infer<typeof fieldsSchema>;
+type EndpointBinding = Omit<LastEndpoint, "version" | "hubId">;
 
 export function endpointFile(hubId: string): string { return resourceFile("endpoint", hubId); }
 
@@ -52,10 +51,7 @@ export function mcpUrlFromPublic(publicUrl: string | null | undefined): string |
   return `${base}/mcp`;
 }
 
-/** What the Skill should do to this Hub's ChatGPT connector.
- *  `update` means the public address changed: Delete the old connector
- *  in ChatGPT, then create it again. Never click Reconnect (the old
- *  URL is dead and hangs on "This site cannot be reached"). */
+/** Classify endpoint changes; `update` requires explicit connector reconciliation. */
 export function connectorAction(
   previousMcpUrl: string | null | undefined,
   nextMcpUrl: string | null | undefined
