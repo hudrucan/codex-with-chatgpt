@@ -27,8 +27,8 @@ results before reporting `MCP READY`.
 
 Fresh setup creates an independent Hub and registers the selected repo. With
 one healthy connected Hub, register another repo using `c2c workspace add`
-and verify through `list_workspaces`/`workspace_info`; no new tunnel, connector
-or OAuth setup is needed.
+and verify the returned registration ID with `workspace_info(workspace="<id>")`;
+no new tunnel, connector or OAuth setup is needed.
 
 `setup --workspace-name` changes only a repo label in external workspace state.
 It does not rename or own the Hub. `setup --hub-name` changes the Hub display
@@ -62,9 +62,9 @@ Endpoint state separates desired settings from the verified ChatGPT binding:
 | `connectorName`, `boundMcpUrl`, `connectorId` | Verified plugin binding |
 | `bindingVersion: 1` | Explicit desired/bound state format |
 
-Inspect the exact plugin ID, name and Server URL. Verify `workspace_info` through
-the plugin, selecting a workspace currently registered to this Hub when it has multiple
-entries, then acknowledge the observed binding:
+Inspect the exact plugin ID, name and Server URL. Verify
+`workspace_info(workspace="<id>")` through the plugin using a currently registered
+workspace ID, then acknowledge the observed binding:
 
 ```bash
 c2c connector bind --name "<desired-name>" --mcp-url "<desired-url>" --connector-id "<observed-plugin-id>" --verified-workspace "<observed-workspace-id>" --json
@@ -102,9 +102,3 @@ Updates run only when requested.
 Experimental resource removal is isolated in the
 [Skill deprovisioning reference](../skill/references/deprovision.md); setup,
 reconnect and repair do not invoke that workflow.
-Destroy validates this Hub's Project-binding directory before remote deletion
-and removes only validated local acknowledgements before the Hub identity.
-Malformed, foreign, unexpected or symlinked Project state blocks cleanup.
-Local cleanup failures retain the destroy receipt for retry. ChatGPT Projects
-and their Instructions are not automatically deleted. Pending destroy receipts
-block Project bind/unbind; read-only Project diagnostics remain available.

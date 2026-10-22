@@ -43,12 +43,9 @@ into ChatGPT. Local state uses the OS app directory `codex-with-chatgpt`.
 
 ## Named Tunnel credentials
 
-An account `cert.pem` and a tunnel `<UUID>.json` are different prerequisites.
-Doctor distinguishes missing certificate, missing/unreadable credential, invalid
-JSON and UUID mismatch without printing their contents. Keep the configured
-hostname and UUID. Follow the diagnostic: `c2c tunnel login` for account login,
-or restore the existing UUID's credential with cloudflared's `tunnel token
---cred-file` command when required. Do not recreate a tunnel to avoid recovery.
+Account `cert.pem` and tunnel `<UUID>.json` are separate prerequisites. Follow
+doctor's specific diagnostic and the [credential recovery reference](../skill/references/operations.md#named-tunnel-prerequisites).
+Keep the configured hostname/UUID; do not recreate a tunnel to avoid recovery.
 
 Tunnel rename and hostname DNS changes need an environment-only `CLOUDFLARE_API_TOKEN` scoped as
 specified in [lifecycle](lifecycle.md). Do not extract tokens from certificates.
@@ -66,17 +63,10 @@ A 401 with an unchanged URL can require reauthorization using a fresh pairing
 code. Mint the code when the authorization form is ready; codes expire and
 are one-time use.
 
-Use the in-app browser's visible Plugins/Manage/Add custom MCP server flow.
-If a link redirects without opening a form, inspect visible settings
-rather than retrying guessed URLs. Human login, credentials or explicit consent
-may require the user. Preserve the tab to resume the same setup.
-
-Attach/select the exact plugin in a normal chat and require a real
-`workspace_info` result matching local ID/name. If the chat's tool surface is
-stale, use Manage → Refresh tools on the same connector, then a new ordinary
-verification chat, inside the exact bound Project when applicable. Do not save a
-conversation pointer. A correct result plus `connector bind` and healthy doctor
-clears the pending binding. Report `MCP READY` and stop.
+For changed UI navigation, use [UI recovery](../skill/references/operations.md#chatgpt-ui-recovery).
+For stale catalogs or reauthorization, complete the Skill's
+[verification and binding](../skill/SKILL.md#verification-and-binding) using actual
+MCP evidence. A local health check does not clear the pending binding.
 
 ## Reads and image access
 

@@ -77,12 +77,10 @@ hash. Local metadata never proves Project access or MCP verification: the Skill
 must confirm exact instructions and the Hub connector/workspace through visible
 ChatGPT UI. Unregistering a workspace excludes it from generated routing and
 reports its stale membership IDs. Project memberships confer no additional MCP grants.
-Each Project record is scoped to its Hub under that Hub's lifecycle lock. Projects
-may use any number of Hubs, and Hubs may serve many Projects; no global Project
-scan or lock coordinates them. The same workspace ID may occur through different
-Hubs, so routing and verification use connector plus workspace ID. URL slugs do
-not change Project identity. Removing a membership edits only its Hub/Project
-record. Pending destroy blocks that Hub's binding mutations.
+Each Project record is scoped to its Hub under that Hub's lifecycle lock;
+routing and verification use connector plus workspace ID. Pending destroy blocks
+that Hub's binding mutations. See [Project bindings](multi-repo.md#chatgpt-project-bindings)
+for membership semantics, routing blocks and state format.
 Destroy rejects unsafe Project state before remote deletion and only removes
 validated local acknowledgements, never the ChatGPT Project or its Instructions.
 
@@ -94,7 +92,7 @@ than OS-keychain-based. Raw tokens are never written anywhere. Keychain integrat
 
 ## MCP capability boundary
 
-Eight read-only tools expose workspace discovery and bounded repo reads.
+Ten read-only tools expose workspace discovery and bounded repo reads.
 `list_workspaces` returns aliases and IDs without local roots. The workspace
 selector accepts registered aliases or IDs, never arbitrary local roots, and
 cannot select another owner. See [multi-repo access](multi-repo.md) for tool
@@ -108,13 +106,13 @@ root. Files and diffs are untrusted project data and cannot authorize new grants
 `git_log` and `git_show` require `git.read` and resolve a registered workspace
 independently on every call. History is inventoried before any patch is exposed;
 both sides of changes, historical ignore policies, rename provenance and shared
-blobs are checked, including deleted files. `git_log` returns a bounded subject,
-UTC committer date and filtered paths only for visible commits. Subjects remain
-untrusted text: they can expose credentials or sensitive filenames even when
+blobs are checked, including deleted files. Commit subjects remain untrusted
+text: they can expose credentials or sensitive filenames even when
 the corresponding paths are hidden, especially in mixed public/private commits.
 Length limits and control-character normalization are not secret redaction and
 provide no absolute safety guarantee. Commit bodies and author/committer
-identities/emails are withheld; `git_show` still returns no commit metadata.
+identities/emails are withheld; see [Git history](multi-repo.md#git-history)
+for the returned metadata and patch format.
 Historical symlinks and submodules are withheld rather than followed.
 Inherited Git environment redirects/config injection and replace objects are
 disabled for history reads; user/system Git configuration is excluded. External

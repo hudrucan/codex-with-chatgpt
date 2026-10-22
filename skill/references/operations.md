@@ -47,12 +47,10 @@ auto-remove locks by age or kill an unverified PID.
 
 ## ChatGPT UI recovery
 
-For a stale tool surface, open the exact existing connector in Manage and use
-Refresh tools. Then select that connector and verify all ten tools and the
-optional workspace selector in a new ordinary chat
-in the same IAB tab and verify there. Tool refresh does not create a Project;
-reuse an existing Project binding when applicable. Do not persist a chat pointer,
-send a task handoff or repeatedly message a stale conversation.
+For a stale catalog, follow [Verification and binding](../SKILL.md#verification-and-binding).
+Reuse the exact connector and existing Project binding when applicable, in the
+same in-app browser tab. Do not persist a chat pointer, send a task handoff or
+repeatedly message a stale conversation.
 
 Use visible settings navigation if a settings link redirects without opening
 the add form. Start at Plugins → Manage → Add → Add custom MCP server when

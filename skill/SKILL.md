@@ -9,11 +9,15 @@ description: >
 # Codex with ChatGPT
 
 Use the existing Hub whenever possible. Successful setup or verification ends
-at **MCP READY**, then STOP. Optional ChatGPT Projects hold durable multi-repo
-routing instructions and reuse the Hub connector. Workspaces may belong to
-multiple Projects; Projects and Hubs have a many-to-many relationship. Route by
-connector plus workspace ID. Do not persist chat URLs, start a
-coding/planning loop, or use INIT/PLAN/EXECUTED/REVIEW or session/checkpoint orchestration.
+at **MCP READY**, then STOP. Optional [Projects](references/projects.md) reuse
+Hub connectors for repository routing by connector plus workspace ID.
+Do not persist chat URLs or start coding/planning loops, task, session or
+checkpoint orchestration during setup.
+
+Before a task using C2C reaches its final handoff, read the local
+[handoff contract](references/workflow.md). Read only this reference, not broad
+docs or GitHub; start that handoff with `[C2C Handoff]`. Other tasks keep normal
+handoffs. Setup alone does not start a coding or audit workflow.
 
 ## Boundaries
 
