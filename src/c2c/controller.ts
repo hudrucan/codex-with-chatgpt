@@ -114,7 +114,8 @@ function bounded<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
 /** Only the factory may create a task handle and claim its one audit budget. */
 class AsyncC2C {
   private audits = 0;
-  private pending?: { request: Pick<Response, "taskId" | "attemptId" | "workspaceId" | "handoffId">; anchor: string; baseline: number; deadline: number };
+  private pending?: { request: Pick<Response, "taskId" | "attemptId" | "workspaceId" | "handoffId">; anchor: string;
+    baseline: number; baselineUser: number; anchorSeen: boolean; deadline: number };
   private result?: AuditResult;
   private busy = false;
   private submittedSource?: string;
@@ -135,7 +136,7 @@ class AsyncC2C {
       const request = { taskId: this.options.taskId, attemptId: randomUUID(), workspaceId: this.options.workspaceId,
         handoffId: createHash("sha256").update(handoff).digest("hex") };
       const anchor = `C2C_REQUEST ${JSON.stringify(request)}`;
-      this.pending = { request, anchor, baseline: 0, deadline: performance.now() + this.timeoutMs };
+      this.pending = { request, anchor, baseline: 0, baselineUser: -1, anchorSeen: false, deadline: performance.now() + this.timeoutMs };
       this.audits++;
       this.result = undefined;
       this.fixVerified = false;
@@ -144,6 +145,7 @@ class AsyncC2C {
       await this.io(() => this.assertThread());
       const baseline = await this.io(() => this.turns());
       this.pending.baseline = baseline.count;
+      this.pending.baselineUser = baseline.latestUser;
       const composer = this.tab.playwright.getByRole("textbox", { name: this.ui.composerName, exact: true });
       if ((await this.io(() => composer.innerText())).trim()) throw new Error("ASYNC_DRAFT_PRESENT");
       const message = `${handoff}\n\n${anchor}\n\nAudit this newly sent handoff through the routed C2C MCP and explicit workspace. ` +
@@ -183,8 +185,18 @@ class AsyncC2C {
       const turns = await this.io(() => this.turns(checkMs), checkMs);
       this.nextCheckAt = performance.now() + CHECK_INTERVAL_MS;
       if (this.remaining() <= 0) return this.finishLocal("ASYNC_TIMEOUT");
-      if (turns.anchorIndex < this.pending.baseline || turns.anchors !== 1 || turns.latestUser !== turns.anchorIndex)
-        return this.finishLocal("ASYNC_TURN_MISMATCH");
+      const { baseline, baselineUser, anchorSeen } = this.pending;
+      // One new user heading may precede its body/anchor. Wait for correlation;
+      // another user proves interleaving, and an observed anchor cannot disappear.
+      const mismatch = turns.anchors > 1 ? "duplicate_anchor"
+        : turns.anchors === 0 ? (anchorSeen ? "anchor_disappeared"
+          : turns.latestUser >= baseline ? (turns.previousUser !== baselineUser ? "intervening_user" : undefined)
+          : turns.count < baseline || turns.latestUser !== baselineUser ? "baseline_changed" : undefined)
+        : turns.anchorIndex < baseline ? "stale_anchor"
+        : turns.previousUser !== baselineUser || turns.latestUser !== turns.anchorIndex ? "intervening_user" : undefined;
+      if (mismatch) return this.finishLocal(`ASYNC_TURN_MISMATCH: ${mismatch} ` +
+        `(baseline=${baseline}, baselineUser=${baselineUser}, count=${turns.count}, anchors=${turns.anchors}, anchorIndex=${turns.anchorIndex}, previousUser=${turns.previousUser}, latestUser=${turns.latestUser})`);
+      if (turns.anchors === 1) this.pending.anchorSeen = true;
       await this.io(() => this.assertThread(Boolean(turns.reply)), budget());
       if (this.remaining() <= 0) return this.finishLocal("ASYNC_TIMEOUT");
       if (!turns.reply) return { status: "WAITING", remainingMs: this.remaining() };
@@ -241,11 +253,14 @@ class AsyncC2C {
       const body = (index: number) => (turns[index]?.nextElementSibling as HTMLElement | null)?.innerText ?? "";
       const anchors = userIndexes.filter(index => body(index).includes(anchor));
       const anchorIndex = anchors[0] ?? -1;
+      const latestUser = userIndexes.at(-1) ?? -1;
       const replyIndex = turns.map((heading, index) => index > anchorIndex && heading.textContent === assistantHeading ? index : -1)
         .filter(index => index >= 0).pop() ?? -1;
       const reply = anchorIndex < 0 ? "" : body(replyIndex);
       return { count: turns.length, anchors: anchors.length, anchorIndex,
-        latestUser: userIndexes.at(-1) ?? -1,
+        // Without an anchor, the latest user is only a provisional sent turn.
+        previousUser: userIndexes.filter(index => index < (anchorIndex >= 0 ? anchorIndex : latestUser)).at(-1) ?? -1,
+        latestUser,
         reply: reply.includes(attemptId) && reply.includes(endMarker) ? reply : "" };
     }, { userHeading: this.ui.userHeading, assistantHeading: this.ui.assistantHeading, anchor: this.pending!.anchor,
       attemptId: this.pending!.request.attemptId, endMarker: AUDIT_END }, { timeoutMs });

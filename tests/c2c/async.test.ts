@@ -27,9 +27,9 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); cleanup(directory); });
 
 /** Small upstream UI fixture: evaluate runs the production transcript reader. */
-function browserFixture() {
-  const turns: { user: boolean; text: string }[] = [];
-  let draft = "", url = threadUrl, hungRead = false;
+function browserFixture(delaySentTurn = false) {
+  const turns: { user: boolean; text: string; bodyMissing?: boolean }[] = [];
+  let draft = "", sentTurn = "", url = threadUrl, hungRead = false;
   let releaseRead: (() => void) | undefined;
   const response = (patch: Record<string, unknown> = {}) => {
     const message = turns.filter(turn => turn.user).at(-1)!.text;
@@ -38,7 +38,9 @@ function browserFixture() {
   };
   const emit = (text: string, user = false) => { turns.push({ user, text }); };
   const reply = (patch: Record<string, unknown> = {}) => emit(`${AUDIT_START}\n${JSON.stringify(response(patch))}\n${AUDIT_END}`);
-  const press = vi.fn(async () => { emit(draft, true); draft = ""; });
+  const showSentBody = () => { turns.at(-1)!.text = sentTurn; sentTurn = ""; };
+  const showSentTurn = (headingOnly = false) => { emit("", true); if (!headingOnly) showSentBody(); };
+  const press = vi.fn(async () => { sentTurn = draft; draft = ""; if (!delaySentTurn) showSentTurn(); });
   const waitFor = vi.fn(async () => { throw new Error("Blocking locator waits are unsupported"); });
   function locator() {
     const value = {
@@ -53,16 +55,18 @@ function browserFixture() {
   const tab: AuditTab = { id: "existing", url: vi.fn(async () => url), playwright: {
     getByRole: vi.fn(() => locator()), locator: vi.fn(() => locator()),
     evaluate: vi.fn(async (fn, arg) => {
-      vi.stubGlobal("document", { querySelectorAll: () => turns.map(turn => ({
-        textContent: turn.user ? "You said:" : "ChatGPT said:", nextElementSibling: { innerText: turn.text },
-      })) });
+      // Observed DOM: DIV > H4 followed by the body DIV; an unrelated H4 is
+      // outside the reader's turn index space, including its submission baseline.
+      vi.stubGlobal("document", { querySelectorAll: () => [...turns.map(turn => ({
+        textContent: turn.user ? "You said:" : "ChatGPT said:", nextElementSibling: turn.bodyMissing ? null : { innerText: turn.text },
+      })), { textContent: "Latest response", nextElementSibling: { innerText: "" } }] });
       if (hungRead) return new Promise<ReturnType<typeof fn>>(resolve => { releaseRead = () => resolve(fn(arg)); });
       return fn(arg);
     }),
   } };
   const browser = { tabs: { selected: vi.fn(async (): Promise<AuditTab | undefined> => tab) } };
   const ui: AuditUI = { composerName: "Ask ChatGPT", userHeading: "You said:", assistantHeading: "ChatGPT said:", openProjectThread: vi.fn(async () => tab) };
-  return { tab, browser, ui, turns, emit, reply, response, press, waitFor,
+  return { tab, browser, ui, turns, emit, reply, response, press, waitFor, showSentTurn, showSentBody,
     draft: (text: string) => { draft = text; }, navigate: (value: string) => { url = value; },
     hang: () => { hungRead = true; }, release: () => releaseRead?.() };
 }
@@ -76,7 +80,17 @@ it("defaults to manual without touching browser or local bindings", async () => 
   expect(fs.existsSync(path.join(directory, "state"))).toBe(false);
 });
 
-it("trusts the active thread and accepts only its newly sent correlated audit", async () => {
+it.each([undefined, "hub-known-owner"])("trusts an active ordinary thread without resolving Hub or Project (hubId=%s)", async hubId => {
+  const f = browserFixture(); f.navigate("https://chatgpt.com/c/6ada4b34-9a0c-83ec-a2c9-fef01eabdf42");
+  const session = (await startAsyncC2C({ ...options, hubId }, f.browser, f.ui))!;
+  await session.submit(handoff); f.reply();
+  expect(await session.wait()).toMatchObject({ status: "PASS", origin: "web" });
+  expect(resolveAuditProject).not.toHaveBeenCalled();
+  expect(f.ui.openProjectThread).not.toHaveBeenCalled();
+  expect(f.press).toHaveBeenCalledOnce();
+});
+
+it("trusts the active Project thread and accepts only its newly sent correlated audit", async () => {
   const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
   await session.submit(handoff); f.reply();
   expect(await session.wait()).toMatchObject({ status: "PASS", origin: "web", canAutoFix: false });
@@ -112,11 +126,13 @@ it("ignores stale ACKs before and after the new handoff, then returns early for 
 });
 
 it.each([
-  { workspaceId: "abcdef012345" }, { taskId: "another-task" }, { handoffId: "f".repeat(64) },
+  { workspaceId: "abcdef012345" }, { taskId: "another-task" }, { handoffId: "f".repeat(64) }, { attemptId: "another-attempt" },
   { complete: false }, { status: "ACK" }, { summary: "" }, { status: "FIX", findings: [] },
 ])("rejects a completed response with invalid correlation or payload: %j", async patch => {
   const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
-  await session.submit(handoff); f.reply(patch);
+  await session.submit(handoff);
+  // A candidate may mention this attempt while its JSON correlation is wrong.
+  f.reply({ ...patch, ...("attemptId" in patch ? { summary: `Mentions ${f.response().attemptId}` } : {}) });
   expect(await session.wait()).toMatchObject({ status: "ERROR", origin: "local", canAutoFix: false });
   await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
 });
@@ -186,20 +202,20 @@ it("fails closed if a user message intervenes or the thread navigates", async ()
   const response = f.response(); f.emit("another task", true);
   // The reply still carries the pending attempt, but belongs after another user turn.
   f.emit(`${AUDIT_START}\n${JSON.stringify(response)}\n${AUDIT_END}`);
-  expect(await session.wait()).toMatchObject({ status: "ERROR", summary: "ASYNC_TURN_MISMATCH" });
+  expect(await session.wait()).toMatchObject({ status: "ERROR", summary: expect.stringContaining("ASYNC_TURN_MISMATCH: intervening_user") });
   const g = browserFixture(), other = (await startAsyncC2C({ ...options, taskId: "navigated-task" }, g.browser, g.ui))!;
   await other.submit(handoff); g.reply(); g.navigate(threadUrl.replace("6ada4b34", "aaaaaaaa"));
   expect(await other.wait()).toMatchObject({ status: "ERROR", summary: "ASYNC_THREAD_CHANGED" });
 });
 
-it("opens one new thread from existing bindings only when no active thread exists, then retains it", async () => {
+it.each([undefined, "hub-known-owner"])("passes hubId=%s to cold resolution, opens one new thread and retains it", async hubId => {
   const f = browserFixture(); f.browser.tabs.selected.mockResolvedValue(undefined);
-  const session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  const session = (await startAsyncC2C({ ...options, hubId }, f.browser, f.ui))!;
   await session.submit(handoff); f.reply({ status: "FIX", findings: [finding] });
   expect(await session.wait()).toMatchObject({ status: "FIX", canAutoFix: false });
   expect(session.verifySourceForFix()).toMatchObject({ status: "FIX", canAutoFix: true });
   await session.submit(handoff + "\nFix validated.", true); f.reply(); await session.wait();
-  expect(resolveAuditProject).toHaveBeenCalledExactlyOnceWith(options.workspaceId, undefined);
+  expect(resolveAuditProject).toHaveBeenCalledExactlyOnceWith(options.workspaceId, hubId);
   expect(f.ui.openProjectThread).toHaveBeenCalledExactlyOnceWith(project);
   expect(f.browser.tabs.selected).toHaveBeenCalledOnce();
 });
@@ -283,6 +299,137 @@ it("uses one targeted DOM read per call and accepts a delayed terminal response 
   expect(f.tab.playwright.evaluate).toHaveBeenCalledTimes(3);
   expect(f.tab.playwright.locator).not.toHaveBeenCalled();
   expect(f.waitFor).not.toHaveBeenCalled();
+  expect(f.press).toHaveBeenCalledOnce();
+});
+
+it.each([0, 6])("waits for a delayed sent turn at filtered baseline %s, then accepts its terminal reply on the same handle", async baseline => {
+  const f = browserFixture(true);
+  for (let index = 0; index < baseline / 2; index++) {
+    f.emit("Earlier user message", true); f.emit("Earlier assistant reply");
+  }
+  const session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  await session.submit(handoff);
+  expect(await session.wait()).toEqual({ status: "WAITING", remainingMs: 180_000 });
+  await expect(vi.mocked(f.tab.playwright.evaluate).mock.results[1].value).resolves.toMatchObject({
+    count: baseline, anchors: 0, anchorIndex: -1, latestUser: baseline - 2 < 0 ? -1 : baseline - 2, reply: "",
+  });
+  f.showSentTurn(); f.reply();
+  const request = f.response(), waiting = session.wait();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(await waiting).toMatchObject({ status: "PASS", origin: "web", taskId: request.taskId,
+    attemptId: request.attemptId, workspaceId: request.workspaceId, handoffId: request.handoffId });
+  await expect(vi.mocked(f.tab.playwright.evaluate).mock.results[2].value).resolves.toMatchObject({
+    anchorIndex: baseline, anchors: 1, latestUser: baseline,
+  });
+  expect(f.press).toHaveBeenCalledOnce();
+  expect(f.waitFor).not.toHaveBeenCalled();
+});
+
+it.each([0, 6])("waits for the sent heading's body at baseline %s, then accepts its correlated reply without resending", async baseline => {
+  const f = browserFixture(true);
+  for (let index = 0; index < baseline / 2; index++) {
+    f.emit("Earlier user message", true); f.emit("Earlier assistant reply");
+  }
+  const session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  await session.submit(handoff); f.showSentTurn(true);
+  const rendering = f.turns.at(-1)!; rendering.bodyMissing = true;
+  expect(await session.wait()).toEqual({ status: "WAITING", remainingMs: 180_000 });
+  await expect(vi.mocked(f.tab.playwright.evaluate).mock.results[1].value).resolves.toMatchObject({
+    anchors: 0, anchorIndex: -1, latestUser: baseline, previousUser: Math.max(-1, baseline - 2), reply: "",
+  });
+  for (const body of ["", "[C2C Handoff]\nRepo: rendering in progress"]) {
+    rendering.bodyMissing = false; rendering.text = body;
+    const waiting = session.wait();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await waiting).toEqual({ status: "WAITING", remainingMs: 180_000 - performance.now() });
+  }
+  f.showSentBody(); f.reply();
+  const request = f.response(), waiting = session.wait();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(await waiting).toMatchObject({ status: "PASS", origin: "web", taskId: request.taskId,
+    attemptId: request.attemptId, workspaceId: request.workspaceId, handoffId: request.handoffId });
+  expect(f.press).toHaveBeenCalledOnce();
+  expect(f.waitFor).not.toHaveBeenCalled();
+});
+
+it.each([0, 6])("rejects another user while the sent body is still missing at baseline %s", async baseline => {
+  const f = browserFixture(true);
+  for (let index = 0; index < baseline / 2; index++) {
+    f.emit("Earlier user message", true); f.emit("Earlier assistant reply");
+  }
+  const session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  await session.submit(handoff); f.showSentTurn(true);
+  expect(await session.wait()).toMatchObject({ status: "WAITING" });
+  f.emit("Intervening user message", true);
+  const waiting = session.wait();
+  await vi.advanceTimersByTimeAsync(2000);
+  const result = await waiting;
+  expect(result).toMatchObject({ status: "ERROR", summary: expect.stringContaining("ASYNC_TURN_MISMATCH: intervening_user") });
+  // A later complete anchor and matching response cannot reopen the attempt.
+  f.turns.pop(); f.showSentBody(); f.reply();
+  expect(await session.wait()).toEqual(result);
+  expect(f.press).toHaveBeenCalledOnce();
+});
+
+it.each(["duplicate_anchor", "stale_anchor", "intervening_user", "baseline_changed"])(
+  "rejects %s with numeric diagnostics and keeps the rejection terminal", async reason => {
+    const delayed = reason === "intervening_user" || reason === "baseline_changed";
+    const f = browserFixture(delayed);
+    f.emit("Earlier user message", true); f.emit("Earlier assistant reply");
+    const session = (await startAsyncC2C(options, f.browser, f.ui))!;
+    await session.submit(handoff);
+    const response = delayed ? undefined : f.response();
+    if (reason === "duplicate_anchor") f.emit(f.turns.at(-1)!.text, true);
+    if (reason === "stale_anchor") f.turns.unshift(f.turns.pop()!);
+    if (reason === "intervening_user") {
+      f.showSentTurn(true); f.emit("Another user message before the anchor appears", true);
+    }
+    if (reason === "baseline_changed") f.turns.splice(0, 1);
+    const result = await session.wait();
+    expect(result).toMatchObject({ status: "ERROR", summary: expect.stringContaining(`ASYNC_TURN_MISMATCH: ${reason} (baseline=2, baselineUser=0, count=`) });
+    const reads = vi.mocked(f.tab.playwright.evaluate).mock.calls.length;
+    if (delayed) f.showSentTurn();
+    f.emit(`${AUDIT_START}\n${JSON.stringify(response ?? f.response())}\n${AUDIT_END}`);
+    expect(await session.wait()).toEqual(result);
+    expect(f.tab.playwright.evaluate).toHaveBeenCalledTimes(reads);
+    expect(f.press).toHaveBeenCalledOnce();
+  });
+
+it("rejects a previously observed anchor disappearing even when the original user baseline is restored", async () => {
+  const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  await session.submit(handoff);
+  expect(await session.wait()).toMatchObject({ status: "WAITING" });
+  f.turns.pop();
+  const waiting = session.wait();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(await waiting).toMatchObject({ status: "ERROR", summary: expect.stringContaining("ASYNC_TURN_MISMATCH: anchor_disappeared") });
+});
+
+it("rejects an intervening user rendered before the delayed anchor between DOM checks", async () => {
+  const f = browserFixture(true);
+  f.emit("Earlier user message", true); f.emit("Earlier assistant reply");
+  const session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  await session.submit(handoff);
+  expect(await session.wait()).toMatchObject({ status: "WAITING" });
+  f.emit("Another user arrived during the render delay", true);
+  f.showSentTurn(); f.reply();
+  const waiting = session.wait();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(await waiting).toMatchObject({ status: "ERROR", summary: expect.stringContaining("ASYNC_TURN_MISMATCH: intervening_user") });
+  expect(f.press).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])("keeps the submission deadline while waiting for the first anchor (heading visible=%s) and rejects its late reply", async headingVisible => {
+  const f = browserFixture(true), session = (await startAsyncC2C({ ...options, timeoutMs: 1500 }, f.browser, f.ui))!;
+  await session.submit(handoff);
+  if (headingVisible) f.showSentTurn(true);
+  expect(await session.wait()).toMatchObject({ status: "WAITING", remainingMs: 1500 });
+  const waiting = session.wait();
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(await waiting).toMatchObject({ status: "ERROR", summary: "ASYNC_TIMEOUT" });
+  if (headingVisible) f.showSentBody(); else f.showSentTurn();
+  f.reply();
+  expect(await session.wait()).toMatchObject({ status: "ERROR", summary: "ASYNC_TIMEOUT" });
   expect(f.press).toHaveBeenCalledOnce();
 });
 

@@ -18,6 +18,10 @@ the exact first line:
 - `[C2C Commit]`: commit only when the user requests it; do not push automatically.
 
 Include the repo, known connector/workspace ID, scope and relevant constraints.
+Copy a known `hubId` from the corresponding connector/workspace routing block
+into the work prompt. Preserve that owner across Plan → Task/Fix and subsequent
+handoffs; never borrow a Hub from another routing block or infer it from a chat URL.
+When async is requested, pass that known `hubId` to `startAsyncC2C`.
 Planning remains Web-first. Set `async=true` explicitly in the work prompt only
 when automatic browser delivery and bounded audit/fix rounds are wanted.
 Omitting it means `async=false`: return the handoff for manual delivery as before.
@@ -30,7 +34,7 @@ reference, follows the requested scope and returns `[C2C Handoff]`.
 Before a C2C task's final handoff, read this local reference. Start the message
 with the exact first line `[C2C Handoff]`, then briefly provide:
 
-- **Repo:** identity and known connector/workspace ID.
+- **Repo:** identity, known connector/workspace ID and known `hubId`.
 - **Revision:** full base/HEAD SHAs, or HEAD plus `uncommitted` and the included
   staged, unstaged and untracked scope.
 - **Changes:** behavior, relevant paths and necessary decisions.
@@ -85,15 +89,17 @@ smoke message is part of this flow. Do not turn async on to implement/test async
 
 Use the existing in-app browser through its documented API. Reuse its selected
 ChatGPT conversation immediately, trusting the user's selection, including an
-ordinary conversation outside a Project. Do not list Hubs, inspect Project
-bindings or verify Project membership on this hot path. Use the explicit known
+ordinary conversation outside a Project, with or without a supplied `hubId`.
+Do not resolve or list Hubs, inspect Project bindings, verify Project membership
+or switch threads on this hot path. Use the explicit known
 workspace ID from the task; it remains required on every Web MCP call. Missing
 or ambiguous connector/workspace routing is a blocker, never permission to guess.
 
 Only when there is no selected ChatGPT conversation, resolve the existing
-workspace membership with `resolveAuditProject`: one configured or explicitly
-selected Hub, a registered workspace, exactly one current Project binding under
-that owner. Missing, ambiguous, foreign or stale state fails closed. Open the
+workspace membership with `resolveAuditProject`: pass the known `hubId` to select
+its owner. Without `hubId`, use the sole configured Hub; multiple Hubs fail with
+`HUB_SELECTION_REQUIRED`. Require a registered workspace and exactly one current
+Project binding under that owner. Missing, ambiguous, foreign or stale state fails closed. Open the
 exact saved Project through visible UI and use New chat. A new conversation may
 remain at the Project URL until the first message is sent. Never create a
 Project, connector or binding to make fallback succeed. A browser error is a
@@ -140,7 +146,7 @@ var { startAsyncC2C } = await import("<checkout>/dist/c2c/repl.mjs");
 var audit = await startAsyncC2C({
   async: true, taskId: "<stable-task-id>", workspaceId: "<registered-id>",
   workspaceRoot: "<absolute-local-repo-root>",
-  // hubId: "<known-owner-id>" // optional; cold path only
+  hubId: "<known-owner-id>", // include when known from routing; used only on the cold path
 }, browser, {
   composerName: "Ask ChatGPT", userHeading: "You said:", assistantHeading: "ChatGPT said:",
   openProjectThread
@@ -173,8 +179,15 @@ a fresh UUID per attempt and SHA-256 of the exact handoff. It sends the handoff
 with a `C2C_REQUEST` correlation line and the Web response instructions. It
 accepts only an assistant response after that newly sent user message, with no
 intervening user message, matching task ID, attempt ID, workspace ID and handoff
-hash. Conversation navigation, duplicated/missing anchors and malformed frames
-fail closed. Old ACKs and responses from previous attempts cannot satisfy the
+hash. The submission baseline and anchor indexes use only the grounded user and
+assistant headings; unrelated headings do not count. Before the first anchor is
+visible, unchanged user history or one new user heading with an unfinished body
+may return `WAITING` within the original deadline. That turn remains provisional
+until its exact anchor is visible. Additional user turns, regressed baseline,
+duplicate or old anchor, or disappearance of an already observed anchor fail closed. Local
+`ASYNC_TURN_MISMATCH` summaries include a reason and numeric turn metadata only,
+never transcript text. Conversation navigation and malformed frames also fail
+closed. Old ACKs and responses from previous attempts cannot satisfy the
 wait. Every re-audit needs a refreshed handoff for the validated working tree.
 `workspaceRoot` is an explicit local root, not an MCP workspace selector. Its
 canonical root-derived ID must match `workspaceId`. At each submission the module
