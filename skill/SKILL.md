@@ -3,7 +3,7 @@ name: codex-with-chatgpt
 description: >
   Set up and operate Codex with ChatGPT, a secure read-only MCP connection from ChatGPT
   to explicitly registered local repos. Use for setup, adding a repo, Project binding, verification,
-  doctor/repair, disconnect, or an explicit update.
+  doctor/repair, disconnect, an explicit update, or opt-in async C2C handoff audits.
 ---
 
 # Codex with ChatGPT
@@ -18,6 +18,9 @@ Before a task using C2C reaches its final handoff, read the local
 [handoff contract](references/workflow.md). Read only this reference, not broad
 docs or GitHub; start that handoff with `[C2C Handoff]`. Other tasks keep normal
 handoffs. Setup alone does not start a coding or audit workflow.
+For an explicitly requested `async=true` C2C task, follow that contract's
+[async procedure](references/workflow.md#opt-in-async-v1) before any Hub or
+Project discovery below. Omitted `async` means `false` and keeps manual delivery.
 
 ## Boundaries
 

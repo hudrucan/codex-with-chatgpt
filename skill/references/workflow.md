@@ -18,6 +18,9 @@ the exact first line:
 - `[C2C Commit]`: commit only when the user requests it; do not push automatically.
 
 Include the repo, known connector/workspace ID, scope and relevant constraints.
+Planning remains Web-first. Set `async=true` explicitly in the work prompt only
+when automatic browser delivery and bounded audit/fix rounds are wanted.
+Omitting it means `async=false`: return the handoff for manual delivery as before.
 Do not mark ordinary replies or MCP-only source reads. Markers are conventions,
 not commands, automatic delivery or permission grants. Codex reads this local
 reference, follows the requested scope and returns `[C2C Handoff]`.
@@ -67,8 +70,157 @@ source/diff evidence, failure mechanism and a concrete fix. Separate questions
 from defects; if none are supported, say so with inspection limits. Codex applies
 authorized fixes and validates locally.
 
-Handoffs do not request a simplicity review or authorize another implementation
-cycle. Keep them in conversation; add no handoff files, state, agents or
-orchestration, and do not commit just to hand off. Use the existing ten read-only
+Handoffs do not request a simplicity review. Manual handoffs do not authorize
+another implementation cycle. Keep them in conversation; add no handoff files,
+persistent orchestration/checkpoints or agents, and do not commit just to hand off. Use the existing ten read-only
 MCP tools. Project Instructions keep their routing role and need no handoff
 update. Setup/reconnect still ends at **MCP READY**.
+
+## Opt-in async v1
+
+Only explicit `async=true` activates automatic delivery. It does not change
+planning ownership or authorize commits, pushes, rollout, grant changes or scope
+expansion. No connector repair, source update, dependency install, or separate
+smoke message is part of this flow. Do not turn async on to implement/test async.
+
+Use the existing in-app browser through its documented API. Reuse its selected
+ChatGPT conversation immediately, trusting the user's selection, including an
+ordinary conversation outside a Project. Do not list Hubs, inspect Project
+bindings or verify Project membership on this hot path. Use the explicit known
+workspace ID from the task; it remains required on every Web MCP call. Missing
+or ambiguous connector/workspace routing is a blocker, never permission to guess.
+
+Only when there is no selected ChatGPT conversation, resolve the existing
+workspace membership with `resolveAuditProject`: one configured or explicitly
+selected Hub, a registered workspace, exactly one current Project binding under
+that owner. Missing, ambiguous, foreign or stale state fails closed. Open the
+exact saved Project through visible UI and use New chat. A new conversation may
+remain at the Project URL until the first message is sent. Never create a
+Project, connector or binding to make fallback succeed. A browser error is a
+blocker, not permission to switch browsers or send again. Retain the same tab
+and conversation for every audit in this task; never persist the chat URL.
+
+### Codex browser procedure
+
+The built module `<checkout>/dist/c2c/async.js` runs inside the existing
+`cua_repl` runtime; it adds no MCP tool or browser runtime. Follow the upstream
+browser initialization/documentation first. Inspect the visible DOM to identify
+the composer, user and assistant heading labels. The reader supports the
+ChatGPT structure `div > h4` followed by the message body. Stop if that structure
+or the labels are unavailable; do not guess selectors or scrape private state.
+Preserve a user's existing draft. Ground New chat navigation in visible UI too.
+
+Import the module and create one task-local handle. For example, with the
+observed English labels below and an already selected in-app browser binding,
+first define `openProjectThread(projectUrl)` using observed controls to navigate
+to that exact Project, use New chat, verify the draft and return its tab handle.
+It will not run on the hot path:
+
+```javascript
+var { startAsyncC2C } = await import("<checkout>/dist/c2c/async.js");
+var audit = await startAsyncC2C({
+  async: true, taskId: "<stable-task-id>", workspaceId: "<registered-id>",
+  workspaceRoot: "<absolute-local-repo-root>",
+  // hubId: "<known-owner-id>" // optional; cold path only
+}, browser, {
+  composerName: "Ask ChatGPT", userHeading: "You said:", assistantHeading: "ChatGPT said:",
+  openProjectThread
+});
+await audit.submit(handoff); // full current [C2C Handoff], including validation
+var outcome = await audit.wait();
+```
+
+Use an existing stable task ID or create one UUID once for a genuinely new task.
+Keep that ID across interrupted turns; never generate another ID to retry the
+same task or bypass its limit. Starting async exclusively creates one zero-byte
+claim, named by SHA-256 of the task ID, in the external C2C state directory's
+`async-tasks/`. This is only a one-time budget guard: it stores no source, chat
+URL, audit result, counter or resumable orchestration. Retain the original handle
+for up to three audits. If that handle is lost, recreated, or startup fails,
+the claim rejects another handle for that task before browser discovery or
+delivery, even after runtime restart or workspace changes. Stop async and report
+the interruption; continue only through the manual workflow. Do not remove the
+claim or invent a new task ID to resume. Claims are retained, including after
+startup failure or successful completion; v1 has no automatic claim cleanup.
+Async tasks started by an older build
+without this guard must also stop rather than recreate a fresh budget.
+
+The module creates
+a fresh UUID per attempt and SHA-256 of the exact handoff. It sends the handoff
+with a `C2C_REQUEST` correlation line and the Web response instructions. It
+accepts only an assistant response after that newly sent user message, with no
+intervening user message, matching task ID, attempt ID, workspace ID and handoff
+hash. Conversation navigation, duplicated/missing anchors and malformed frames
+fail closed. Old ACKs and responses from previous attempts cannot satisfy the
+wait. Every re-audit needs a refreshed handoff for the validated working tree.
+`workspaceRoot` is an explicit local root, not an MCP workspace selector. Its
+canonical root-derived ID must match `workspaceId`. At each submission the module
+captures a local fingerprint of HEAD, staged index entries and every tracked or
+non-ignored untracked file's path, mode and readable bytes, including deletions.
+Sensitive files contribute only filesystem metadata (device/inode, size and
+nanosecond modification/change times); their content is never read. This is
+drift detection, not evidence of a sensitive-content audit or permission to edit
+such files. It does not send source content or the fingerprint to the browser.
+Ignored generated files are outside this source check. Git/source read failures,
+unsupported paths (including symlinks/submodules) or more than 64 MiB of readable
+file content fail closed; use the manual workflow when a complete snapshot is unavailable.
+
+Each `wait()` uses one upstream locator wait for at most 45 seconds and returns
+early when a complete frame appears. On `WAITING`, call `audit.wait()` again on
+the same handle; do not read/poll the whole transcript, sleep or resend. The
+optional slice must be between 1 and 45 seconds (the final deadline may be shorter).
+`WAITING` requires a settled, recognized `locator.waitFor` expiration after the
+full requested slice; a premature RPC/browser timeout or an unrecognized timeout
+ends the attempt. The independent watchdog allows up to one extra second for
+the locator to settle, without extending the audit deadline. If the watchdog
+expires with the upstream wait unresolved, waiting is unreliable: return terminal
+`ERROR` and never start another wait or resend. Concurrent waits are rejected.
+The default hard deadline is 180 seconds per audit, including submission, and cannot
+be increased (`timeoutMs` may shorten it). Wait slices do not reset it. After a
+timeout or browser/MCP error, stop; late responses cannot reopen the attempt.
+An upstream operation already in flight cannot be cancelled by this API; do not
+retry an uncertain send. Keep the browser tab available with the upstream
+handoff marking mechanism if work crosses a turn.
+
+### Web response and fix limits
+
+The request supplies all four correlation values. Return a terminal frame with
+those exact values, without a Markdown code fence:
+
+```text
+[C2C Audit v1]
+{"taskId":"<task>","attemptId":"<attempt>","workspaceId":"<id>","handoffId":"<sha256>","status":"PASS","complete":true,"summary":"Audited through MCP; state inspection limits here.","findings":[]}
+[C2C Audit End v1]
+```
+
+Use `PASS` only after the required MCP audit is complete with sufficient
+evidence. `FIX` requires at least one finding with repo-relative `file`, positive
+`line`, `evidence` and concrete `fix`. `BLOCKED` means required evidence, routing
+or authorization is missing. Other statuses use `findings:[]` and describe any
+limits in `summary`. On the first MCP failure, immediately return the complete
+`ERROR` frame with the actual error. Do not retry the failed call, wait for a
+later success or return an ACK. Partial frames and `complete:false` cannot pass.
+The closing marker declares the audit terminal; emit it only when finished.
+
+Codex stops on `PASS`, `BLOCKED` or `ERROR`. On `FIX`, inspect each finding against
+the authorized scope before editing; out-of-scope or ambiguous changes stop for
+the user. A Web `FIX` initially has `canAutoFix:false`. Before any automatic edit
+round, Codex must call `outcome = audit.verifySourceForFix()` immediately before
+editing. This re-reads the local source fingerprint and compares it with the
+submission snapshot, rather than the handoff-text hash. Source drift or missing
+evidence returns terminal `ERROR`; stop without applying fixes or sending another
+audit. Do not treat an unchanged dirty/clean status as proof: staged, unstaged and
+untracked file contents must match. If interrupted before editing, verify again.
+Only if this check returns `canAutoFix:true` may Codex apply the in-scope fixes,
+run focused local checks, refresh the full handoff and call
+`await audit.submit(updatedHandoff, true)`, then wait on the same handle. Allow
+at most three total audits and two auto-fix rounds. A third `FIX` has
+`canAutoFix:false`: stop and report remaining findings without another edit.
+Never commit, push, rollout or expand scope automatically. The handle enforces
+audit order/count and source verification; Codex remains responsible for scope,
+local validation and ensuring no intervening edits between verification and its
+edit round. Do not edit from a previously returned FIX after a source-drift error.
+
+This module has fixture-based browser regression coverage. Live ChatGPT layout,
+authentication, connector availability and audit latency still require a
+separately authorized end-to-end check; passing local tests is not Web MCP proof.

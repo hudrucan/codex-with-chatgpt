@@ -9,6 +9,7 @@ import { writeLastEndpoint, readLastEndpoint } from "../../src/config/endpoint.j
 import { bindProject, projectInstructions, projectStatus, unbindProject } from "../../src/project/bindings.js";
 import { acquireHubLock, destroyHub, lifecycleFile } from "../../src/lifecycle/hub.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "../helpers.js";
+import { resolveAuditProject } from "../../src/c2c/project.js";
 
 const a = "https://chatgpt.com/g/g-p-6ad414a9a390819194cd6a676854de21-project-a/project";
 const b = "https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-project-b/project";
@@ -35,6 +36,34 @@ function file(url = a, id = hubId) { return path.join(state, "project-bindings",
 function acknowledge(url = a, workspace?: string) {
   return bindProject(hubId, url, projectInstructions(hubId, url, workspace).instructionHash, workspace);
 }
+
+it("resolves async cold fallback only from one current membership under the selected owner", () => {
+  expect(() => resolveAuditProject(frontend, hubId)).toThrow("ASYNC_PROJECT_REQUIRED");
+  acknowledge(a, frontend);
+  const before = fs.readFileSync(file());
+  expect(resolveAuditProject(frontend, hubId)).toBe(a);
+  expect(fs.readFileSync(file())).toEqual(before);
+  acknowledge(b, frontend);
+  expect(() => resolveAuditProject(frontend, hubId)).toThrow("ASYNC_PROJECT_REQUIRED");
+  unbindProject(hubId, b, frontend);
+  const other = createHub("Other Hub").hubId;
+  expect(() => resolveAuditProject(frontend)).toThrow("Select --hub");
+  expect(() => resolveAuditProject(frontend, other)).toThrow("not registered");
+  expect(resolveAuditProject(frontend, hubId)).toBe(a);
+});
+
+it("rejects stale, foreign and unavailable async fallback bindings without mutation", () => {
+  const binding = acknowledge(a, frontend);
+  const original = fs.readFileSync(file());
+  write(state, `project-bindings/${hubId}/${projectId(a)}.json`, JSON.stringify({ ...binding, instructionVersion: 1 }));
+  expect(() => resolveAuditProject(frontend, hubId)).toThrow("ASYNC_PROJECT_STALE");
+  fs.writeFileSync(file(), JSON.stringify({ ...binding, hubId: createHub("Foreign owner").hubId }));
+  expect(() => resolveAuditProject(frontend, hubId)).toThrow("PROJECT_BINDING_INVALID");
+  fs.writeFileSync(file(), original);
+  cleanup(registry.resolve(frontend).root);
+  expect(() => resolveAuditProject(frontend, hubId)).toThrow("unavailable");
+  expect(fs.readFileSync(file())).toEqual(original);
+});
 
 it("supports a single-repo Project with explicit routing, deterministic hash and Project-keyed persistence", () => {
   expect(projectStatus(hubId, a)).toMatchObject({ status: "unbound", binding: null, projectVerification: "not_checked" });

@@ -76,7 +76,7 @@ There are no remote write or shell tools. See [security](docs/security.md) and
 
 ## Documentation
 
-- [Codex ↔ ChatGPT Web workflow](skill/references/workflow.md): handoffs, source-based audits and validation trust.
+- [Codex ↔ ChatGPT Web workflow](skill/references/workflow.md): manual handoffs, opt-in async audits and validation trust.
 - [Architecture](docs/architecture.md): components, request flow and development checks.
 - [Security](docs/security.md): authorization, file policies and credential storage.
 - [Lifecycle](docs/lifecycle.md): setup, naming, binding, reconnect and disconnect.
