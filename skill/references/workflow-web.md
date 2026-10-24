@@ -44,9 +44,12 @@ routing role and need no handoff update. Setup/reconnect still ends at **MCP REA
 When appropriate, include one ready-to-copy next prompt: `[C2C Fix]` for supported
 in-scope findings, or `[C2C Commit]` when no findings/evidence gaps remain and
 verified Git status shows audited uncommitted changes. Preserve C2C identity,
-revision, scope, constraints, relevant context and unrelated work; forbid pushing.
-With clean Git status, confirm completion without a prompt. Drafting never sends,
-implements, commits or pushes. An already-selected `async=true` stays async.
+revision, scope, constraints, relevant context, unrelated work and explicit user
+authorizations for this task. Follow the common contract's delivery rules; include
+all authorized commit/push/rollout steps in one `[C2C Commit]`. With clean Git
+status, include a delivery prompt only for explicitly authorized push/rollout
+steps still pending; otherwise confirm completion. Drafting never sends,
+implements, commits, pushes or rolls out. An already-selected `async=true` stays async.
 
 ## Async callback result
 

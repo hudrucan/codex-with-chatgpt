@@ -25,7 +25,14 @@ Choose by intent and put the marker on the exact first line:
 - `[C2C Task]`: implement, refactor, clean up or test within the requested scope.
 - `[C2C Fix]`: fix evidenced findings within scope; include location, evidence
   and the proposed fix.
-- `[C2C Commit]`: commit only when the user requests it; do not push automatically.
+- `[C2C Commit]`: execute the delivery actions explicitly authorized by the user
+  for this task: commit and, after audit PASS, any authorized push and rollout.
+
+After audit PASS, keep all explicitly authorized delivery actions in one
+`[C2C Commit]`; do not reduce it to commit-only when push or rollout is authorized.
+Default to no push or rollout without explicit user authorization for this task;
+audit PASS itself grants no permission. Codex performs and verifies the authorized
+steps without asking for the same confirmation again.
 
 Include repo, known connector/workspace ID, scope and relevant constraints.
 Copy known `hubId` from the matching connector/workspace routing block; preserve
