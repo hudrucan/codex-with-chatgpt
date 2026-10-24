@@ -35,7 +35,7 @@ export function createApp(config: Config, directory: string, approvalSecret: str
   const local = `http://127.0.0.1:${config.port}`;
   const publicHost = new URL(config.publicUrl).hostname;
   const oauth = new JevOAuth(directory, config.publicUrl, approvalSecret, config.port);
-  const evaluator = new Evaluator(directory, config, apiKey, request);
+  const evaluator = new Evaluator(apiKey, request);
   let rateWindow = 0;
   let requests = 0;
   app.use((req, res, next) => {

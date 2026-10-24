@@ -1,10 +1,8 @@
-import path from "node:path";
 import { z } from "zod";
-import { JevError, readPrivate, writePrivate, type Config } from "./state.js";
+import { JevError } from "./state.js";
 
 export const MODEL = "jev-1.14.0";
 export const MAX_INPUT_BYTES = 16_384;
-export const RESERVED_TOKENS = 65_536;
 export const TIMEOUT_MS = 15_000;
 const key = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/).refine((v) => !["constructor", "prototype", "__proto__"].includes(v));
 const text = z.string().trim().min(1).max(2048);
@@ -32,12 +30,8 @@ const answerSchema = z.discriminatedUnion("type", [
 ]);
 const responseSchema = z.object({
   model: z.literal(MODEL), answers: z.record(answerSchema),
-  usage: z.object({ input_tokens: z.number().int().nonnegative().max(RESERVED_TOKENS), output_tokens: z.number().int().nonnegative() }),
+  usage: z.object({ input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative() }),
 });
-const budgetSchema = z.object({
-  version: z.literal(1), service: z.literal("jev-mcp"), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  attempts: z.number().int().nonnegative(), reservedTokens: z.number().int().nonnegative(),
-}).strict();
 
 function sameKeys(actual: object, expected: string[]): boolean {
   return JSON.stringify(Object.keys(actual).sort()) === JSON.stringify([...expected].sort());
@@ -82,7 +76,7 @@ async function boundedJson(response: Response): Promise<unknown> {
 
 export class Evaluator {
   private active = false;
-  constructor(private readonly directory: string, private readonly config: Config, private readonly apiKey: string,
+  constructor(private readonly apiKey: string,
     private readonly request: typeof fetch = fetch, private readonly timeoutMs = TIMEOUT_MS) {}
 
   async evaluate(raw: unknown, signal?: AbortSignal) {
@@ -108,18 +102,6 @@ export class Evaluator {
     }
     if (this.active) throw new JevError("An evaluation is already in progress; no request was sent.");
     signal?.throwIfAborted();
-    const file = path.join(this.directory, "budget.json");
-    const budget = readPrivate(file, budgetSchema);
-    const today = new Date().toISOString().slice(0, 10);
-    if (budget.day > today) throw new JevError("Budget clock moved backwards; evaluation is blocked.");
-    if (budget.day !== today) Object.assign(budget, { day: today, attempts: 0, reservedTokens: 0 });
-    if (budget.attempts >= this.config.dailyAttempts || budget.reservedTokens + RESERVED_TOKENS > this.config.dailyReservedTokens) {
-      throw new JevError("Daily Jev spending limit reached; no request was sent.");
-    }
-    // Reserve the full standard API context before dispatch, including failed/ambiguous attempts.
-    budget.attempts++;
-    budget.reservedTokens += RESERVED_TOKENS;
-    writePrivate(file, budget);
     this.active = true;
     try {
       const response = await this.request("https://api.typesafe.ai/v1/systemone", {
@@ -131,13 +113,12 @@ export class Evaluator {
         await response.body?.cancel();
         throw new JevError(`TypeSafe request failed (HTTP ${response.status}); no automatic retry.`);
       }
-      return { ...validateResponse(await boundedJson(response), parsed.data.questions), advisoryOnly: true,
-        budget: { ...budget, dailyAttempts: this.config.dailyAttempts, dailyReservedTokens: this.config.dailyReservedTokens } };
+      return { ...validateResponse(await boundedJson(response), parsed.data.questions), advisoryOnly: true };
     } catch (error) {
       if (error instanceof JevError) throw error;
       const code = (error as { cause?: { code?: string } })?.cause?.code;
       const known = ["UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "SELF_SIGNED_CERT_IN_CHAIN", "CERT_HAS_EXPIRED", "ENOTFOUND", "ECONNREFUSED", "ETIMEDOUT", "ECONNRESET"];
-      throw new JevError(`TypeSafe request failed or timed out${code && known.includes(code) ? ` (${code})` : ""}; reservation retained, no automatic retry.`);
+      throw new JevError(`TypeSafe request failed or timed out${code && known.includes(code) ? ` (${code})` : ""}; no automatic retry.`);
     } finally { this.active = false; }
   }
 }

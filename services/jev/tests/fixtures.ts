@@ -7,7 +7,7 @@ import { MODEL } from "../src/evaluate.js";
 export function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "jev-test-"));
   const directory = path.join(root, "state");
-  const config: Config = { version: 1, service: "jev-mcp", mcpName: "jev-test", publicUrl: "https://jev.example.com", port: 49873, dailyAttempts: 10, dailyReservedTokens: 655360 };
+  const config: Config = { version: 1, service: "jev-mcp", mcpName: "jev-test", publicUrl: "https://jev.example.com", port: 49873 };
   initialize(directory, config);
   const credentials = readPrivate(path.join(directory, "credentials.json"), credentialsSchema);
   return { directory, config, credentials, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };

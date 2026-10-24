@@ -10,7 +10,6 @@ async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     "state-dir": { type: "string", default: defaultStateDir() }, "public-url": { type: "string" }, name: { type: "string" },
     port: { type: "string", default: "49873" }, zone: { type: "string" }, "tunnel-name": { type: "string" },
-    "daily-attempts": { type: "string", default: "10" }, "daily-tokens": { type: "string", default: "655360" },
     infer: { type: "boolean", default: false }, public: { type: "boolean", default: false },
   } });
   if (positionals.length !== 1) throw new JevError("Choose init, start, serve, status, stop, verify, or provision-tunnel.");
@@ -18,7 +17,7 @@ async function main(): Promise<void> {
   if (command === "init") {
     if (!values["public-url"] || !values.name) throw new JevError("init requires --name and --public-url with an independent HTTPS origin.");
     initialize(values["state-dir"], configSchema.parse({ version: 1, service: "jev-mcp", mcpName: values.name, publicUrl: values["public-url"],
-      port: Number(values.port), dailyAttempts: Number(values["daily-attempts"]), dailyReservedTokens: Number(values["daily-tokens"]) }));
+      port: Number(values.port) }));
     const plugin = path.join(values["state-dir"], "plugin");
     fs.mkdirSync(plugin, { mode: 0o700 });
     writePrivate(path.join(plugin, "plugin.json"), { $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", name: values.name, version: "1.0.0", description: "Optional TypeSafe Jev probabilistic advice. Invoke only when useful; never a mandatory review." });

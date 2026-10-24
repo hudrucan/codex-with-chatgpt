@@ -7,7 +7,11 @@ import { z } from "zod";
 
 export class JevError extends Error {}
 
-export const configSchema = z.object({
+export const configSchema = z.preprocess((value) => {
+  // Ignore only obsolete quota fields so existing deployments need no migration.
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !["dailyAttempts", "dailyReservedTokens"].includes(key)));
+}, z.object({
   version: z.literal(1), service: z.literal("jev-mcp"),
   mcpName: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
   publicUrl: z.string().url().refine((value) => {
@@ -15,9 +19,7 @@ export const configSchema = z.object({
     return url.protocol === "https:" && url.origin === value && !url.username && !url.password;
   }),
   port: z.number().int().min(1024).max(65535),
-  dailyAttempts: z.number().int().min(1).max(100),
-  dailyReservedTokens: z.number().int().min(65_536).max(6_553_600),
-}).strict();
+}).strict());
 export type Config = z.infer<typeof configSchema>;
 export const credentialsSchema = z.object({
   approvalSecret: z.string().regex(/^[a-f0-9]{64}$/),
@@ -48,7 +50,7 @@ export function privateFile(file: string): void {
   }
 }
 
-export function readPrivate<T>(file: string, schema: z.ZodType<T>): T {
+export function readPrivate<T>(file: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>): T {
   privateFile(file);
   if (fs.statSync(file).size > 262_144) throw new JevError("Private state exceeds its size limit.");
   const parsed = schema.safeParse(JSON.parse(fs.readFileSync(file, "utf8")));
@@ -91,7 +93,6 @@ export function initialize(directory: string, config: Config): void {
   writePrivate(path.join(directory, "config.json"), config);
   writePrivate(path.join(directory, "credentials.json"), credentials);
   writePrivate(path.join(directory, "oauth.json"), { version: 1, service: "jev-mcp", clients: [], tokens: [] });
-  writePrivate(path.join(directory, "budget.json"), { version: 1, service: "jev-mcp", day: new Date().toISOString().slice(0, 10), attempts: 0, reservedTokens: 0 });
 }
 
 export function lockState(directory: string): () => void {

@@ -54,11 +54,11 @@ environment with the key again. `serve` is available for a foreground process.
 State defaults to `~/Library/Application Support/jev-mcp`, independently of C2C.
 `--state-dir` selects an existing parent for a new private directory during `init`.
 Existing directories are never adopted. Runtime status, OAuth, consent secret,
-spending ledger, tunnel credentials, plugin manifests, and logs stay outside Git.
+tunnel credentials, plugin manifests, and logs stay outside Git.
 Directories require owner-only permissions; private files require mode 0600.
 
 `status` and `stop` authenticate a local-only admin endpoint and verify the saved
-process identity before acting. Stop retains OAuth, budgets, and reusable tunnel
+process identity before acting. Stop retains OAuth and reusable tunnel
 resources. A stale runtime lock or uncertain Cloudflare create outcome requires
 explicit ownership reconciliation; there is no automatic resource adoption,
 suffix fallback, deletion, or destructive recovery.
@@ -123,14 +123,12 @@ danger-zone headers are enabled. Responses must match the pinned model, requeste
 question IDs/types, and valid probability distributions. Uncertainty is returned
 without inventing a verdict or a universal confidence threshold.
 
-Defaults allow 10 attempts and 655,360 reserved input tokens per UTC day.
-`init --daily-attempts N --daily-tokens N` sets bounded limits. Each dispatch
-reserves 65,536 input tokens, the conservative full standard context allowance,
-before networking. Reservations survive failures, timeouts, and restarts and are
-never refunded automatically. Usage reports actual provider tokens separately.
-These are local request/token safeguards, not a guaranteed currency cap; configure
-provider-side account spending limits too. A missing/corrupt budget fails closed.
-HTTP requests and OAuth endpoints also have bounded rates and state capacities.
+The MCP imposes no daily request or token quota and makes no token reservations.
+Usage reports actual provider tokens. TypeSafe account limits and charges still
+apply. HTTP requests and OAuth endpoints retain bounded abuse rates and state
+capacities. Existing configurations can retain the ignored `dailyAttempts` and
+`dailyReservedTokens` fields; any old `budget.json` is unused and left untouched.
+Restart with the updated build; no reinitialization or credential rotation is needed.
 
 `verify` uses synthetic public text. Without `--infer` it exercises authentication,
 PKCE rejection, refresh rotation/revocation, initialize and `tools/list` without

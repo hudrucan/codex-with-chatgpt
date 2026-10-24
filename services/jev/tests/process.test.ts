@@ -14,7 +14,9 @@ it("shuts down its verified daemon even when a client leaves a request body open
   await new Promise<void>((resolve) => reservation.listen(0, "127.0.0.1", resolve));
   const port = (reservation.address() as { port: number }).port;
   await new Promise<void>((resolve) => reservation.close(() => resolve()));
-  writePrivate(path.join(f.directory, "config.json"), { ...f.config, port });
+  writePrivate(path.join(f.directory, "config.json"), { ...f.config, port, dailyAttempts: 1, dailyReservedTokens: 65536 });
+  const legacyBudget = "obsolete budget state is no longer parsed";
+  fs.writeFileSync(path.join(f.directory, "budget.json"), legacyBudget, { mode: 0o600 });
   const child = spawn(process.execPath, ["--import", "tsx/esm", "services/jev/src/index.ts", "serve", "--state-dir", f.directory], {
     cwd: process.cwd(), env: { ...process.env, TYPESAFE_API_KEY: "test-no-paid-inference" }, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -36,7 +38,7 @@ it("shuts down its verified daemon even when a client leaves a request body open
     await exited;
     expect(fs.existsSync(path.join(f.directory, "runtime.json"))).toBe(false);
     expect(fs.existsSync(path.join(f.directory, "runtime.lock"))).toBe(false);
-    expect(JSON.parse(fs.readFileSync(path.join(f.directory, "budget.json"), "utf8")).attempts).toBe(0);
+    expect(fs.readFileSync(path.join(f.directory, "budget.json"), "utf8")).toBe(legacyBudget);
   } finally {
     socket?.destroy();
     if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exited; }

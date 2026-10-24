@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Evaluator, MODEL, RESERVED_TOKENS } from "../src/evaluate.js";
+import { Evaluator, MODEL } from "../src/evaluate.js";
 import { initialize, lockState, readPrivate, validateStateDir, writePrivate, configSchema } from "../src/state.js";
 import { sampleInput } from "../src/verify.js";
 import { fixture, response } from "./fixtures.js";
@@ -13,11 +13,10 @@ const apiKey = "test-typesafe-api-key-never-return";
 
 describe("Jev evaluation boundary", () => {
   it("batches all primitives against a pinned API and returns only validated structured results", async () => {
-    const f = setup();
     const request = vi.fn<typeof fetch>(async () => Response.json({ ...response(), debug: apiKey }));
-    const evaluator = new Evaluator(f.directory, f.config, apiKey, request);
+    const evaluator = new Evaluator(apiKey, request);
     const actual = await evaluator.evaluate(sampleInput);
-    expect(actual).toMatchObject({ ...response(), advisoryOnly: true, budget: { attempts: 1, reservedTokens: RESERVED_TOKENS } });
+    expect(actual).toEqual({ ...response(), advisoryOnly: true });
     expect(JSON.stringify(actual)).not.toContain(apiKey);
     expect(request).toHaveBeenCalledTimes(1);
     const [url, init] = request.mock.calls[0];
@@ -38,23 +37,18 @@ describe("Jev evaluation boundary", () => {
     { ...sampleInput, questions: { q: { type: "choice", instructions: "Choose", criteria: { one: "one" } } } },
     { ...sampleInput, state: Array.from({ length: 14 }).reduce((a) => [a], [] as unknown[]) },
   ])("rejects invalid/oversized/secret inputs without spending", async (input) => {
-    const f = setup();
     const request = vi.fn<typeof fetch>();
-    await expect(new Evaluator(f.directory, f.config, apiKey, request).evaluate(input)).rejects.toThrow();
+    await expect(new Evaluator(apiKey, request).evaluate(input)).rejects.toThrow();
     expect(request).not.toHaveBeenCalled();
-    expect(JSON.parse(fs.readFileSync(path.join(f.directory, "budget.json"), "utf8")).attempts).toBe(0);
   });
 
   it.each([429, 500, 302])("does not retry or expose provider bodies on HTTP %i", async (status) => {
-    const f = setup();
     const request = vi.fn<typeof fetch>(async () => new Response(apiKey, { status }));
-    await expect(new Evaluator(f.directory, f.config, apiKey, request).evaluate(sampleInput)).rejects.toThrow(`HTTP ${status}`);
+    await expect(new Evaluator(apiKey, request).evaluate(sampleInput)).rejects.toThrow(`HTTP ${status}`);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(fs.readFileSync(path.join(f.directory, "budget.json"), "utf8")).reservedTokens).toBe(RESERVED_TOKENS);
   });
 
   it.each(["model", "missing", "probabilities", "choice", "score", "oversized"])("rejects invalid upstream result: %s", async (variant) => {
-    const f = setup();
     const raw = response();
     if (variant === "model") raw.model = "jev-latest";
     if (variant === "missing") delete (raw.answers as Record<string, unknown>).helps_reads;
@@ -62,36 +56,58 @@ describe("Jev evaluation boundary", () => {
     if (variant === "choice") raw.answers.tradeoff.choice = "other";
     if (variant === "score") raw.answers.evidence.score = 9;
     const request = vi.fn<typeof fetch>(async () => variant === "oversized" ? new Response("x".repeat(65537)) : Response.json(raw));
-    await expect(new Evaluator(f.directory, f.config, apiKey, request).evaluate(sampleInput)).rejects.toThrow();
+    await expect(new Evaluator(apiKey, request).evaluate(sampleInput)).rejects.toThrow();
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("retains spending reservations across timeouts and process restarts", async () => {
-    const f = setup();
-    const request = vi.fn<typeof fetch>(async (_url, init) => new Promise((_resolve, reject) => {
+  it("times out without retrying or exposing secrets and releases concurrency for the next call", async () => {
+    const request = vi.fn<typeof fetch>().mockImplementationOnce(async (_url, init) => new Promise((_resolve, reject) => {
       init!.signal!.addEventListener("abort", () => reject(new Error(apiKey)));
-    }));
-    await expect(new Evaluator(f.directory, { ...f.config, dailyAttempts: 1 }, apiKey, request, 5).evaluate(sampleInput)).rejects.toThrow("reservation retained");
-    await expect(new Evaluator(f.directory, { ...f.config, dailyAttempts: 1 }, apiKey, request).evaluate(sampleInput)).rejects.toThrow("Daily Jev spending limit");
+    })).mockImplementation(async () => Response.json(response()));
+    const evaluator = new Evaluator(apiKey, request, 5);
+    await expect(evaluator.evaluate(sampleInput)).rejects.toThrow(/^TypeSafe request failed or timed out; no automatic retry\.$/);
     expect(request).toHaveBeenCalledTimes(1);
+    await expect(evaluator.evaluate(sampleInput)).resolves.toMatchObject({ advisoryOnly: true });
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("blocks concurrent paid dispatch and fails closed on missing or corrupt budgets", async () => {
-    const f = setup();
+  it("blocks concurrent paid dispatch", async () => {
     let finish!: (response: Response) => void;
     const request = vi.fn<typeof fetch>(async () => new Promise((resolve) => { finish = resolve; }));
-    const evaluator = new Evaluator(f.directory, f.config, apiKey, request);
+    const evaluator = new Evaluator(apiKey, request);
     const first = evaluator.evaluate(sampleInput);
     await expect(evaluator.evaluate(sampleInput)).rejects.toThrow("already in progress");
     finish(Response.json(response()));
     await first;
-    fs.unlinkSync(path.join(f.directory, "budget.json"));
-    await expect(evaluator.evaluate(sampleInput)).rejects.toThrow();
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows repeated calls and reports provider usage without a daily quota or budget file", async () => {
+    const f = setup();
+    expect(fs.existsSync(path.join(f.directory, "budget.json"))).toBe(false);
+    const raw = { ...response(), usage: { input_tokens: 70_000, output_tokens: 65 } };
+    const request = vi.fn<typeof fetch>(async () => Response.json(raw));
+    const evaluator = new Evaluator(apiKey, request);
+    for (let i = 0; i < 11; i++) {
+      await expect(evaluator.evaluate(sampleInput)).resolves.toEqual({ ...raw, advisoryOnly: true });
+    }
+    expect(request).toHaveBeenCalledTimes(11);
+    expect(fs.existsSync(path.join(f.directory, "budget.json"))).toBe(false);
   });
 });
 
 describe("Jev state isolation", () => {
+  it("ignores obsolete quota fields without changing existing config or credentials, but rejects unknown fields", () => {
+    const f = setup();
+    const file = path.join(f.directory, "config.json");
+    const legacy = { ...f.config, dailyAttempts: 1, dailyReservedTokens: 65536 };
+    writePrivate(file, legacy);
+    expect(readPrivate(file, configSchema)).toEqual(f.config);
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(legacy);
+    expect(JSON.parse(fs.readFileSync(path.join(f.directory, "credentials.json"), "utf8"))).toEqual(f.credentials);
+    expect(configSchema.safeParse({ ...legacy, unknown: true }).success).toBe(false);
+  });
+
   it("rejects initialization inside any Git checkout before writing runtime data", () => {
     const f = setup();
     const root = path.dirname(f.directory);
