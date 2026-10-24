@@ -22,8 +22,8 @@ Copy a known `hubId` from the corresponding connector/workspace routing block
 into the work prompt. Preserve that owner across Plan → Task/Fix and subsequent
 handoffs; never borrow a Hub from another routing block or infer it from a chat URL.
 Planning remains Web-first. Omitted `async` or `async=false` selects manual
-delivery. `async=true` is currently unavailable; follow [async availability](#async-availability)
-and stop without sending automatically.
+delivery. Explicit `async=true` selects the [callback workflow](#async-callback-workflow)
+only when local permission and the Hub runtime support it; otherwise stop before sending.
 Do not mark ordinary replies or MCP-only source reads. Markers are conventions,
 not commands, automatic delivery or permission grants. Codex reads this local
 reference, follows the requested scope and returns `[C2C Handoff]`.
@@ -79,25 +79,77 @@ persistent orchestration/checkpoints or agents, and do not commit just to hand o
 Use the ten repository-read MCP tools for audits. Project Instructions keep their
 routing role and need no handoff update. Setup/reconnect still ends at **MCP READY**.
 
-## Async availability
+## Async callback workflow
 
-Automatic C2C delivery is disabled while the callback capability gate is blocked.
-An `async=true` request must fail with `ASYNC_CALLBACK_UNAVAILABLE` before browser
-access, sending, task claiming, attempt registration or automatic fixes. Do not
-silently switch to a manual task or another transport. Explicit `async=false`
-keeps the manual handoff workflow above.
+Explicit `async=false` or an omitted flag remains manual: no browser, Hub, claim
+or callback access. Do not silently change modes or transports after a failure.
+Async requires a known `hubId` from the matching routing block, explicit registered
+`workspaceId`, canonical `workspaceRoot` and the task's stable `taskId`. Never infer
+the callback owner from a chat URL or another connector. Missing callback ownership
+blocks sending; it does not authorize selecting another thread or Hub.
 
-The local helper provides an availability check, with JSON on stdin:
+First prove terminal loopback permission with a read-only health/status probe and
+an isolated register → authenticated MCP callback → terminal wait gate. On EPERM,
+request official command escalation limited to `127.0.0.1`; never edit sandbox
+settings or add IPC workarounds. If permission is denied, async stays disabled.
+REPL fetch permission is separate: all callback operations run in the approved
+terminal. A local gate does not verify the deployed runtime, ChatGPT OAuth
+`audit.submit` consent, tool confirmation or live E2E. Do not rollout or re-consent
+unless authorized. All ten repository-read MCP tools and manual C2C remain intact.
 
-```bash
-printf '%s\n' '{"async":true}' | node <checkout>/dist/c2c/local.mjs async
-```
+Use one task-local terminal process and one in-app browser sender:
 
-It exits nonzero with the unavailable error. `{"async":false}` or `{}` returns
-success without accessing the browser, Hub or task state. The callback MCP inbox
-and local `callback register`, `callback wait`, `callback cancel` operations remain
-transport primitives; they do not enable an automatic audit/fix loop. Do not send
-a browser handoff to test this gate or change sandbox policy automatically.
+1. Run `node <checkout>/dist/c2c/local.mjs async` with the supported terminal tool,
+   `tty=true` to keep stdin open and official loopback approval when required.
+   Keep that terminal session ID. Send JSONL through `write_stdin`, never shell
+   interpolation or credentials in argv. First line:
+   `{"async":true,"hubId":"<known-hub>","workspaceId":"<id>","workspaceRoot":"<canonical-root>","taskId":"<stable-task>","timeoutMs":180000}`.
+   `READY` validates options/source only, not transport readiness.
+2. Send `{"operation":"submit","handoff":"[C2C Handoff]\n...","fixed":false}`.
+   Only its successful response authorizes delivery: registration proves runtime
+   support and owner access before the exclusive claim is created. It returns
+   `attemptId`, `message`, `remainingMs` and `expiresAt`. Never reconstruct the
+   message or expose its capability outside the routed audit. Runtime unavailable
+   or `ASYNC_CALLBACK_TRANSPORT_UNAVAILABLE: EPERM` means stop without browser access.
+3. Import `<checkout>/dist/c2c/browser.mjs` in the existing in-app browser REPL.
+   `createBrowserSender(browser, ui, resolveProject)` uses the supported browser's
+   `tabs.selected()` and a UI-grounded `composerName`. A selected ChatGPT conversation
+   is trusted immediately: do not resolve a Hub, check Project membership or switch
+   it. This selection rule does not depend on whether a hubId was supplied.
+   Only if no selected conversation exists may the resolver call the existing local
+   `project <workspaceId> [hubId]` helper and `ui.openProjectThread(projectUrl)` use
+   observed Project navigation/New chat. Pass the exact routing hubId on the cold
+   path. To bridge tools, a resolver may first stop with `ASYNC_PROJECT_REQUIRED`;
+   obtain the URL in the terminal, then create the sender with that URL. No message
+   has been sent. Reuse the resulting sender across audit rounds.
+4. Pass the complete returned envelope to `sender.send(envelope)` exactly once.
+   It checks thread identity, existing draft and deadline, fills the composer and
+   presses Enter once. It never reads conversation history or audit responses.
+   Then send `{"operation":"sent","attemptId":"<returned-id>"}` to the same
+   terminal session. This opens one bounded HTTP event wait. Use the terminal tool's
+   normal output/completion wait; do not repeatedly call an inbox endpoint, poll by
+   model, or read transcript DOM. The terminal receives only `submit_audit_result`.
+5. On FIX with `canContinue:true`, send `{"operation":"verifySourceForFix"}`
+   immediately before editing. Proceed only on `canAutoFix:true`: this checks
+   unchanged source and invalidates the completed capability against the live Hub.
+   After one in-scope fix and focused validation, submit the new handoff with
+   `fixed:true` in this same process, then use the same sender and wait again.
+   Stop on PASS/BLOCKED/ERROR or `canContinue:false`. Maximum: three audits/two fixes.
+
+The original per-attempt deadline is at most 180 seconds, including registration,
+sending and waiting; it never restarts at acknowledgement. Each input/fix phase
+also expires after 180 seconds. Wrong correlation/capability, conflicting callback,
+revoked workspace, restart, connection/permission failure and source drift fail
+closed. Exact callback duplicates are idempotent while the ticket remains valid.
+Any error or uncertainty after browser delivery starts consumes that sender; send
+`{"operation":"abort"}` or terminate the terminal, then stop without resending.
+EOF/interrupt cancels the wait/attempt. A lost terminal cannot be resumed, and no
+legacy result path is available. Return the actual blocker in the manual handoff.
+
+The helper also supports one-shot `callback register`, `callback wait` and
+`callback cancel` using JSON stdin for isolated capability checks. Do not use
+these primitives to bypass session claims or audit limits. `{"async":false}`
+or `{}` on the `async` operation returns success without accessing task state.
 
 Local `claim`, `fingerprint` and `project` helpers remain available. A claim is an
 exclusive zero-byte file outside the repo, keyed by SHA-256 of the stable task ID.

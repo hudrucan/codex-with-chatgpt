@@ -12,4 +12,8 @@ export async function buildC2C(outdir = path.join(root, "dist", "c2c")) {
     entryPoints: [path.join(root, "src", "c2c", "local-command.ts")], outfile: path.join(outdir, "local.mjs"),
     bundle: true, platform: "node", format: "esm", target: "node20", logLevel: "silent",
   });
+  await build({
+    entryPoints: [path.join(root, "src", "c2c", "browser.ts")], outfile: path.join(outdir, "browser.mjs"),
+    bundle: true, platform: "neutral", format: "esm", target: "es2022", logLevel: "silent",
+  });
 }

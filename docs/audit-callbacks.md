@@ -20,15 +20,28 @@ deadline expiration and runtime restart reject further delivery. A single local
 HTTP wait resolves on the terminal event or fails on deadline, interruption or
 shutdown; it does not poll the inbox.
 
-## Capability gate
+## Local transport and readiness
 
 The local helper supports `callback register`, `callback wait` and `callback cancel`
-with a JSON object on stdin, never credentials on the command line. These are
-transport primitives, not an enabled automatic audit/fix flow. `async=true` fails
-with `ASYNC_CALLBACK_UNAVAILABLE` before any browser access, claim or delivery;
-the local helper's `async` operation checks that flag without touching task state.
-Manual C2C remains available through explicit `async=false` or an omitted flag.
-Do not send a browser audit to test this gate or retry an old task/claim. A passing
-isolated integration test does not prove Codex command loopback permissions,
-ChatGPT tool availability, OAuth consent or confirmation UI. Permission failures
-require the client's official approval mechanism; do not introduce another IPC path.
+with a JSON object on stdin, never credentials on the command line. The `async`
+operation holds one bounded task session over terminal JSONL stdin/stdout. It
+validates source and transport/ownership, claims the task once, prepares one browser
+message, then receives each result through one local HTTP event wait. The browser
+sender has no result reader or network transport. See the authoritative
+[workflow](../skill/references/workflow.md#async-callback-workflow) for operations.
+
+Only opt in after an isolated terminal register → authenticated MCP callback →
+terminal wait succeeds under the actual client's permissions. If sandboxed
+loopback fails with EPERM, request the client's official narrow approval for
+`127.0.0.1`; do not change security settings or introduce another IPC path. Use
+the terminal for callback operations even if the browser REPL cannot fetch.
+If approval is denied, keep async disabled. A missing/old runtime or transport
+failure produces no browser message or new claim. Do not send an audit to test
+permissions or retry an old task/claim.
+
+Local verification does not deploy code or prove ChatGPT tool availability,
+OAuth `audit.submit` consent or confirmation behavior. Those require a separately
+authorized runtime rollout, connector tool refresh/consent and live E2E validation.
+Existing repository-read tokens remain valid for all ten read tools and are
+insufficient for callbacks. Manual C2C remains available with `async=false` or
+an omitted flag.

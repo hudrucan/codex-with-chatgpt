@@ -78,7 +78,7 @@ repo files or run commands. See [security](docs/security.md) and
 
 ## Documentation
 
-- [Codex ↔ ChatGPT Web workflow](skill/references/workflow.md): manual handoffs, async availability and validation trust.
+- [Codex ↔ ChatGPT Web workflow](skill/references/workflow.md): manual handoffs, opt-in async callbacks and validation trust.
 - [Architecture](docs/architecture.md): components, request flow and development checks.
 - [Security](docs/security.md): authorization, file policies and credential storage.
 - [Lifecycle](docs/lifecycle.md): setup, naming, binding, reconnect and disconnect.

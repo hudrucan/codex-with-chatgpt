@@ -2,7 +2,7 @@ import { readRuntimeState } from "../bridge/runtime.js";
 import { auditPayloadSchema, callbackTicketSchema, registerAttemptSchema, MAX_AUDIT_MS } from "./protocol.js";
 
 /** One loopback request per operation; wait is an event, never an inbox poll. */
-export async function callbackLocal(operation: "register" | "wait" | "cancel", input: unknown): Promise<unknown> {
+export async function callbackLocal(operation: "register" | "wait" | "cancel", input: unknown, signal?: AbortSignal): Promise<unknown> {
   const parsed = (operation === "register" ? registerAttemptSchema : callbackTicketSchema).parse(input);
   const runtime = readRuntimeState(parsed.hubId);
   if (!runtime) throw new Error("ASYNC_CALLBACK_RUNTIME_UNAVAILABLE");
@@ -10,7 +10,9 @@ export async function callbackLocal(operation: "register" | "wait" | "cancel", i
   try {
     response = await fetch(`http://127.0.0.1:${runtime.port}/admin/c2c/${operation}`, {
       method: "POST", redirect: "error", headers: { authorization: `Bearer ${runtime.adminToken}`, "content-type": "application/json" },
-      body: JSON.stringify(parsed), signal: AbortSignal.timeout(operation === "wait" ? MAX_AUDIT_MS + 2000 : 5000),
+      body: JSON.stringify(parsed), signal: AbortSignal.any([
+        AbortSignal.timeout(operation === "wait" ? MAX_AUDIT_MS + 2000 : 5000), ...(signal ? [signal] : []),
+      ]),
     });
   } catch (error) {
     const code = (error as { cause?: { code?: unknown } }).cause?.code;

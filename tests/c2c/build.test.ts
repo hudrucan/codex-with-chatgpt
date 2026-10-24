@@ -8,13 +8,13 @@ import { localAccess } from "../../src/c2c/local.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, makeGitRepo, makeTmpDir } from "../helpers.js";
 
-it("builds only the self-contained local helper and rejects async before creating task state", async () => {
+it("builds self-contained terminal/send-only modules and leaves manual delivery free of task state", async () => {
   const temp = makeTmpDir("c2c-local-build");
   try {
     const out = path.join(temp, "bundle"), root = path.join(temp, "repo"), state = path.join(temp, "state");
     fs.mkdirSync(root); makeGitRepo(root);
     await buildC2C(out);
-    expect(fs.readdirSync(out)).toEqual(["local.mjs"]);
+    expect(fs.readdirSync(out).sort()).toEqual(["browser.mjs", "local.mjs"]);
     const helper = path.join(out, "local.mjs");
     const file = ts.createSourceFile("local.mjs", fs.readFileSync(helper, "utf8"), ts.ScriptTarget.Latest, true);
     const imports: string[] = [];
@@ -35,7 +35,7 @@ it("builds only the self-contained local helper and rejects async before creatin
       const parsed = JSON.parse(response.stdout);
       if ("async" in options && options.async) {
         expect(parsed.ok).toBe(false);
-        expect(parsed.error).toContain("ASYNC_CALLBACK_UNAVAILABLE");
+        expect(parsed.error).toBeTruthy(); // Missing explicit correlation/root cannot start a session.
       } else expect(parsed).toEqual({ ok: true, value: null });
       expect(fs.existsSync(state)).toBe(false);
     }
