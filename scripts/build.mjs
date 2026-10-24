@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { buildC2C } from "./build-c2c.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Remove outputs for deleted modules so upgrades cannot ship stale features.
@@ -11,3 +12,4 @@ const result = spawnSync(process.execPath, [path.join(root, "node_modules/typesc
 });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;
+if (process.exitCode === 0) await buildC2C();

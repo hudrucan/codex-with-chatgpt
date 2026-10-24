@@ -26,7 +26,7 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); cleanup(directory); });
 
 /** Small upstream UI fixture: evaluate runs the production transcript reader. */
-function browserFixture() {
+function browserFixture(selectorDeadlineMs?: number) {
   const turns: { user: boolean; text: string }[] = [];
   let draft = "", url = threadUrl, hungWait = false;
   let wake: (() => void) | undefined;
@@ -51,7 +51,13 @@ function browserFixture() {
         const ready = () => turns.some(turn => !turn.user && filters.every(filter => turn.text.includes(filter)));
         if (ready()) return Promise.resolve();
         return new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => { wake = undefined; reject(Object.assign(new Error(`locator.waitFor: Timeout ${wait.timeoutMs}ms exceeded.`), { name: "TimeoutError" })); }, wait.timeoutMs);
+          const timer = setTimeout(() => {
+            wake = undefined;
+            // Match the actual REPL selector error, including its foreign realm.
+            reject(selectorDeadlineMs === undefined
+              ? Object.assign(new Error(`locator.waitFor: Timeout ${wait.timeoutMs}ms exceeded.`), { name: "TimeoutError" })
+              : { name: "Error", message: 'Playwright selector deadline exceeded\nlocator.waitFor(visible) timed out for selector div:has(> h4)\nLocator diagnostics: {"kind":"no_matches"}' });
+          }, Math.min(wait.timeoutMs, selectorDeadlineMs ?? wait.timeoutMs));
           wake = () => { if (ready()) { clearTimeout(timer); wake = undefined; resolve(); } };
         });
       },
@@ -264,17 +270,26 @@ it("treats BLOCKED as terminal and disallows overlapping submissions", async () 
   await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
 });
 
-it("returns WAITING only after a settled locator has actually spent its full slice", async () => {
-  const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
+it.each([undefined, 5_000])("waits sequentially below the browser deadline (%s) before WAITING, then accepts a completed response", async deadline => {
+  const f = browserFixture(deadline), session = (await startAsyncC2C(options, f.browser, f.ui))!;
   await session.submit(handoff);
   const waiting = session.wait();
-  await vi.advanceTimersByTimeAsync(45_000);
-  expect(await waiting).toEqual({ status: "WAITING", remainingMs: 135_000 });
-  f.reply(); expect(await session.wait()).toMatchObject({ status: "PASS" });
+  await vi.advanceTimersByTimeAsync(2_000);
+  await expect(session.wait()).rejects.toThrow("ASYNC_BUSY");
   expect(f.waitFor).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(43_000);
+  expect(await waiting).toEqual({ status: "WAITING", remainingMs: 135_000 });
+  expect(f.waitFor).toHaveBeenCalledTimes(23);
+  expect(f.waitFor.mock.calls.every(([wait]) => wait.timeoutMs > 0 && wait.timeoutMs <= 2_000)).toBe(true);
+  const completed = session.wait();
+  await vi.advanceTimersByTimeAsync(100); f.reply();
+  expect(await completed).toMatchObject({ status: "PASS", origin: "web" });
+  expect(performance.now()).toBe(45_100);
+  expect(f.waitFor).toHaveBeenCalledTimes(24);
+  expect(f.press).toHaveBeenCalledOnce();
 });
 
-it.each([0, 44_999, 45_000])("fails closed on an RPC TimeoutError after %i ms", async elapsed => {
+it.each([0, 1_999, 2_000])("fails closed on an RPC TimeoutError after %i ms", async elapsed => {
   const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
   await session.submit(handoff);
   const candidate = f.tab.playwright.locator("div:has(> h4)");
@@ -289,17 +304,30 @@ it.each([0, 44_999, 45_000])("fails closed on an RPC TimeoutError after %i ms", 
   candidate.last = () => candidate;
   vi.mocked(f.tab.playwright.locator).mockReturnValue(candidate);
   const waiting = session.wait(); await ready; await vi.advanceTimersByTimeAsync(elapsed);
-  expect(await waiting).toMatchObject({ status: "ERROR", summary: elapsed < 45_000 ? "ASYNC_PREMATURE_BROWSER_TIMEOUT" : expect.stringContaining("ASYNC_WAIT_UNAVAILABLE") });
+  expect(await waiting).toMatchObject({ status: "ERROR", summary: elapsed < 2_000 ? "ASYNC_PREMATURE_BROWSER_TIMEOUT" : expect.stringContaining("ASYNC_WAIT_UNAVAILABLE") });
   f.reply(); expect(await session.wait()).toMatchObject({ status: "ERROR" });
   await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
   expect(premature).toHaveBeenCalledOnce();
+});
+
+it.each([0, 1_000, 1_999])("makes a premature selector deadline terminal after %i ms without retrying", async elapsed => {
+  const f = browserFixture(elapsed), session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  await session.submit(handoff);
+  const waiting = session.wait();
+  await vi.advanceTimersByTimeAsync(elapsed);
+  expect(await waiting).toMatchObject({ status: "ERROR", summary: "ASYNC_PREMATURE_BROWSER_TIMEOUT" });
+  f.reply();
+  expect(await session.wait()).toMatchObject({ status: "ERROR", summary: "ASYNC_PREMATURE_BROWSER_TIMEOUT" });
+  await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
+  expect(f.waitFor).toHaveBeenCalledOnce();
+  expect(f.press).toHaveBeenCalledOnce();
 });
 
 it("keeps an unresolved wait exclusive, then makes watchdog expiration terminal", async () => {
   const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
   await session.submit(handoff); f.hang();
   const waiting = session.wait();
-  await vi.advanceTimersByTimeAsync(45_000);
+  await vi.advanceTimersByTimeAsync(2_000);
   await expect(session.wait()).rejects.toThrow("ASYNC_BUSY");
   await vi.advanceTimersByTimeAsync(1000);
   expect(await waiting).toMatchObject({ status: "ERROR", summary: expect.stringContaining("ASYNC_WAIT_UNAVAILABLE") });

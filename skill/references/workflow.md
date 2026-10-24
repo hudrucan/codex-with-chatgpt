@@ -102,8 +102,27 @@ and conversation for every audit in this task; never persist the chat URL.
 
 ### Codex browser procedure
 
-The built module `<checkout>/dist/c2c/async.js` runs inside the existing
-`cua_repl` runtime; it adds no MCP tool or browser runtime. Follow the upstream
+Use `<checkout>/dist/c2c/repl.mjs` inside the existing `cua_repl` runtime, not the
+ordinary Node entrypoint `dist/c2c/async.js`. The build bundles all third-party
+and relative imports; REPL resolution must not depend on its working directory,
+package registration or the checkout's `node_modules`. Supported Node built-ins
+are explicit lexical imports, including timers, clock, URL and Buffer. Do not
+import/emulate the forbidden `node:process`, inject globals, alter allowlists or
+use a module-resolution workaround.
+
+Source fingerprints, task claims and cold Project resolution reuse the existing
+local implementation in the companion `dist/c2c/local.mjs`, run as one-shot Node
+commands through the supported `node:child_process.execFileSync` API. This is not
+a daemon, MCP tool or orchestration service. It does not expose a process object
+to the REPL or skip local checks. Obtain the absolute Node >=20 executable using
+`node -p process.execPath` in the local terminal, and pass the exact built helper
+path. The helper inherits the local execution environment, including the normal
+C2C state directory settings; do not override permissions or reset task claims.
+If the executable, helper, Git, filesystem or subprocess capability is missing,
+initialization fails closed before browser delivery. Initialization checks source
+access and then claims the task; retain that handle for the audit.
+
+Follow the upstream
 browser initialization/documentation first. Inspect the visible DOM to identify
 the composer, user and assistant heading labels. The reader supports the
 ChatGPT structure `div > h4` followed by the message body. Stop if that structure
@@ -117,7 +136,7 @@ to that exact Project, use New chat, verify the draft and return its tab handle.
 It will not run on the hot path:
 
 ```javascript
-var { startAsyncC2C } = await import("<checkout>/dist/c2c/async.js");
+var { startAsyncC2C } = await import("<checkout>/dist/c2c/repl.mjs");
 var audit = await startAsyncC2C({
   async: true, taskId: "<stable-task-id>", workspaceId: "<registered-id>",
   workspaceRoot: "<absolute-local-repo-root>",
@@ -125,7 +144,11 @@ var audit = await startAsyncC2C({
 }, browser, {
   composerName: "Ask ChatGPT", userHeading: "You said:", assistantHeading: "ChatGPT said:",
   openProjectThread
+}, {
+  nodeExecutable: "<verified-absolute-node-executable>",
+  helperPath: "<checkout>/dist/c2c/local.mjs"
 });
+// Successful import and initialization are required before any delivery.
 await audit.submit(handoff); // full current [C2C Handoff], including validation
 var outcome = await audit.wait();
 ```
@@ -165,12 +188,15 @@ Ignored generated files are outside this source check. Git/source read failures,
 unsupported paths (including symlinks/submodules) or more than 64 MiB of readable
 file content fail closed; use the manual workflow when a complete snapshot is unavailable.
 
-Each `wait()` uses one upstream locator wait for at most 45 seconds and returns
+Each `wait()` spends at most 45 seconds in sequential upstream locator waits of
+at most two seconds, below the observed browser selector deadline. It returns
 early when a complete frame appears. On `WAITING`, call `audit.wait()` again on
 the same handle; do not read/poll the whole transcript, sleep or resend. The
-optional slice must be between 1 and 45 seconds (the final deadline may be shorter).
+optional call budget must be between 1 and 45 seconds (the final deadline may be shorter).
 `WAITING` requires a settled, recognized `locator.waitFor` expiration after the
-full requested slice; a premature RPC/browser timeout or an unrecognized timeout
+full browser slice, repeated internally until the call budget expires. Both the
+native Playwright timeout and the REPL selector-deadline error are recognized;
+a premature RPC/browser timeout or an unrecognized timeout
 ends the attempt. The independent watchdog allows up to one extra second for
 the locator to settle, without extending the audit deadline. If the watchdog
 expires with the upstream wait unresolved, waiting is unreliable: return terminal
