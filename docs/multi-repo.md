@@ -90,10 +90,8 @@ see [security](security.md).
 | `git_show` | Bounded commit patch by full SHA | `git.read` |
 | `submit_audit_result` | Complete an existing in-memory audit attempt; no repo writes | `audit.submit` |
 
-The callback requires `hubId` and the exact registered `workspaceId`, plus
-`taskId`, `attemptId`, `handoffId`, `capability` and a terminal `result`.
-It does not use the optional alias-based `workspace` selector or establish a
-current workspace. See the [callback boundary](security.md#audit-callbacks).
+The callback uses an exact registered `workspaceId`, not the alias-based
+`workspace` selector. See its [authorization and correlation contract](security.md#audit-callbacks).
 
 `read_file` rejects files larger than **16 MiB (16,777,216 bytes)** with
 `FILE_TOO_LARGE` before scanning lines; no partial content is returned. Files
@@ -221,30 +219,12 @@ path scope. An expired or invalid snapshot never silently reruns Git.
 
 ## ChatGPT Project bindings
 
-Each Hub connector serves its registered workspaces. Projects and Hubs have a
-**many-to-many** relationship; Project/repository membership
-is **many-to-many**: Project A can reference frontend + backend, Project B can
-reference backend + infra, and Project C can reference frontend. Membership is
-routing/context metadata, not workspace ownership or an additional read grant.
-A Project can combine any number of Hubs, and each Hub may appear in many Projects.
-Its stable `g-p-...` ID identifies the Project independently within each Hub; URL
-slugs and titles are labels. The same repo/root may be registered through several
-Hubs with the same workspace ID. Routing is **connector + workspace ID**.
-
-Select the exact Project URL on every Project command. Normal Hub selection
-still uses single-Hub discovery or `--hub <id>` when needed:
-
-```bash
-c2c project status --project-url "<project-url>" --json
-# Preview this Project with one additional registered workspace, without writing:
-c2c project instructions --project-url "<project-url>" --workspace backend --json
-# After applying the aggregate block and verifying MCP inside that Project:
-c2c project bind --project-url "<project-url>" --workspace backend --instruction-hash <verified-hash> --json
-# Remove only this membership, then preview and sync the remaining block:
-c2c project unbind --project-url "<project-url>" --workspace backend --json
-c2c project instructions --project-url "<project-url>" --json
-c2c project bind --project-url "<project-url>" --instruction-hash <verified-hash> --json
-```
+Projects may combine Hubs, and each Hub/workspace may serve multiple Projects.
+Membership is routing metadata, not ownership or an additional read grant.
+The stable `g-p-...` ID identifies a Project within each Hub; slugs and titles
+are labels. The same root has the same workspace ID across Hubs, so routing is
+**connector + workspace ID**. Use the [Project procedure](../skill/references/projects.md)
+for selection, membership commands, visible instruction updates and MCP verification.
 
 Adding/removing a membership writes only the selected Hub/Project record. Other
 Hubs' and Projects' records are untouched, even when they use the same Project
@@ -256,13 +236,8 @@ Its final removal retains an empty record for syncing an empty routing block.
 Each generated block starts with `[codex-with-chatgpt hub="<hubId>"]` and ends with
 `[/codex-with-chatgpt hub="<hubId>"]`. Both markers name the owning Hub; the block maps
 human repo display names to workspace IDs through that Hub's verified connector.
-It always requires explicit selectors, prohibits
-using `list_workspaces()` to choose a repo, selects from the user's request/context,
-and asks before reading ambiguous targets. Cross-repo work inspects each relevant
-workspace through its own block's connector. Verify `workspace_info(workspace="<id>")`
-through that connector before first use of each connector/workspace pair in a
-conversation; reuse that verification unless a tool/connector error suggests a
-binding change. A verification through one connector does not verify another.
+Each block requires explicit selectors and per-connector/workspace verification;
+see [conversation routing](../skill/references/projects.md#repository-routing-in-project-conversations).
 
 Ordering and SHA-256 hashing are deterministic. The block names the verified
 connector and directs ChatGPT to use it for the listed repositories. Membership,

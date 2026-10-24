@@ -68,10 +68,10 @@ With one healthy Hub:
 3. Select the same connector in ChatGPT. Verify the known registration ID with
    `workspace_info(workspace="<workspaceId>")`; require that exact ID. Never use
    `list_workspaces()` to decide which repository a task should read.
-4. Follow [Project membership](references/projects.md) to select the intended
-   Project, inspect `c2c project status --project-url <url> --json`, and
-   verify within it. Report **MCP READY** and stop. No tunnel setup, OAuth setup
-   or connector creation is needed for an already connected healthy Hub.
+4. Complete [permission verification](#verification-and-binding), then follow
+   [Project membership](references/projects.md) when requested. Report
+   **MCP READY** and stop. Reuse the healthy Hub's tunnel, OAuth grant and connector;
+   incomplete grants require explicit reauthorization.
 
 A stopped/disconnected Hub is an existing connection, not a fresh setup. An
 explicit request to reconnect authorizes `c2c start --tunnel`; preserve its saved
@@ -95,8 +95,13 @@ names and binding. Unknown runtime state is a blocker, not permission to spawn.
 5. Reuse a matching ChatGPT connector. Create only for a genuinely new connection,
    using returned name/URL, OAuth, and description `Read-only access to the
    registered local repositories.` Reuse the task's single in-app browser tab.
-6. When the pairing form is ready, use `c2c pair --json` and type that one-time
-   code. Never unpair/revoke to solve a discovery or process-handoff issue.
+6. Request the complete advertised scope bundle for every new connection or
+   reauthorization: `workspace.read workspace.search git.read audit.submit offline_access`.
+   The server also presents this bundle for omitted/subset requests. Before
+   approval, verify all five permissions are visible, including audit submission
+   and staying connected. Missing permissions block setup; never edit the OAuth
+   URL or token state to add them. When the form is ready, use `c2c pair --json`
+   and type the one-time code. Never unpair/revoke as a discovery workaround.
 7. Verify actual MCP results and bind the connector below. Then follow
    [Project binding](references/projects.md) for the registered workspace.
    End at **MCP READY**.
@@ -104,9 +109,21 @@ names and binding. Unknown runtime state is a blocker, not permission to spawn.
 ## Verification and binding
 
 Inspect the exact connector ID, name and Server URL. A title or local health
-check is not binding evidence. Select the connector in a normal ChatGPT chat,
-call `workspace_info` with the explicit registered workspace ID; if needed,
-read a small existing file through `read_file` without supplying its contents.
+check is not binding evidence. Select the connector in a normal ChatGPT chat.
+Verify `workspace_info`, a small `read_file`, `search_workspace` and `git_status`
+with the explicit registered workspace ID, without supplying repository contents.
+Verify `audit.submit` with an isolated local register → authenticated MCP
+`submit_audit_result` → terminal wait probe using the
+[callback preflight](references/workflow.md#permission-probe). This is a permission
+check, not a coding/audit handoff. Require `accepted:true` and the matching
+terminal receipt; never submit a fabricated or unrelated attempt.
+
+Setup, reconnect and reauthorization require this complete verification before
+**MCP READY**. Refresh preserves old grants; restricted connections need one
+explicit reauthorization with the five visible permissions. Do not silently
+upgrade, start callback-only consent, or claim readiness from repository reads
+alone. If ChatGPT rejects a full grant after requesting fewer scopes, report the
+observed incompatibility and stop without a workaround.
 
 For a stale catalog, use the existing connector's **Manage → Refresh tools**,
 then verify in a new ordinary chat. Do not recreate a working connector just to

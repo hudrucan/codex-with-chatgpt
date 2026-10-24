@@ -62,17 +62,10 @@ Endpoint state separates desired settings from the verified ChatGPT binding:
 | `connectorName`, `boundMcpUrl`, `connectorId` | Verified plugin binding |
 | `bindingVersion: 1` | Explicit desired/bound state format |
 
-Inspect the exact plugin ID, name and Server URL. Verify
-`workspace_info(workspace="<id>")` through the plugin using a currently registered
-workspace ID, then acknowledge the observed binding:
-
-```bash
-c2c connector bind --name "<desired-name>" --mcp-url "<desired-url>" --connector-id "<observed-plugin-id>" --verified-workspace "<observed-workspace-id>" --json
-```
-
-The acknowledgement rejects stale name/URL/workspace values. It is a trusted
-local receipt of observed MCP results. Setup and doctor do not advance binding
-fields on their own; a local health check does not prove a ChatGPT binding.
+Follow the Skill's [verification and binding](../skill/SKILL.md#verification-and-binding)
+for exact plugin identity, complete permission checks and `connector bind`.
+The acknowledgement rejects stale name/URL/workspace values. Setup and doctor
+do not advance binding fields; local health does not prove a ChatGPT binding.
 
 ## Reconnect and disconnect
 

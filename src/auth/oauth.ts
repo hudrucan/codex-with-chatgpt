@@ -122,7 +122,7 @@ function pairingPage(opts: {
 <body>
 <div class="card">
   <h1>${escapedProductName}</h1>
-  <p class="sub">ChatGPT is requesting access to workspace <strong>${escapedWorkspaceName}</strong> ${opts.scopes.includes("audit.submit") ? "(repository access stays read-only; audit submissions change the in-memory inbox)" : "(read-only)"}:</p>
+  <p class="sub">Connect ChatGPT to workspace <strong>${escapedWorkspaceName}</strong> with all permissions below (repository access stays read-only; audit submissions change the in-memory inbox):</p>
   <ul>${scopeList}</ul>
   <form method="POST" action="authorize">
     <input type="hidden" name="request_id" value="${escapedRequestId}">
@@ -238,6 +238,10 @@ export function createOAuthRouter(deps: OAuthDeps): Router {
       return;
     }
     const scopes = filterScopes(query.scope);
+    if (scopes.length === 0) {
+      fail("invalid_scope", "Only the advertised scopes are supported");
+      return;
+    }
     const request: PendingAuthRequest = {
       id: randomBytes(16).toString("hex"),
       clientId: client.clientId,

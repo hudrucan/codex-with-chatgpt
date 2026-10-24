@@ -501,9 +501,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   }, async (args, extra) => {
     if (!extra.authInfo) return fail("AUTHENTICATION_REQUIRED", "OAuth authentication is required for audit callbacks.");
     const denied = requireScope(extra.authInfo, "audit.submit");
-    if (denied) return { ...denied, _meta: { "mcp/www_authenticate": [
-      'Bearer error="insufficient_scope", error_description="Reconnect and explicitly grant audit.submit to submit C2C audit results.", scope="audit.submit"',
-    ] } };
+    if (denied) return denied;
     try {
       if (args.hubId !== ctx.hubId) throw new AuditInboxError("ASYNC_CALLBACK_OWNER_MISMATCH");
       registry.resolve(args.workspaceId);

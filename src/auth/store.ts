@@ -333,10 +333,9 @@ export class AuthStore {
 }
 
 export function filterScopes(requested: string | undefined): string[] {
-  // Audit submission is an explicit state-changing grant, never a default read grant.
-  if (!requested || requested.trim() === "") return SUPPORTED_SCOPES.filter(scope => scope !== "audit.submit");
-  const asked = requested.split(/[\s+]+/).filter(Boolean);
-  const granted = asked.filter((scope) => (SUPPORTED_SCOPES as readonly string[]).includes(scope));
-  // An explicit unknown scope must not expand into all core permissions.
-  return granted;
+  const asked = requested?.split(/[\s+]+/).filter(Boolean) ?? [];
+  if (asked.some(scope => !(SUPPORTED_SCOPES as readonly string[]).includes(scope))) return [];
+  // New authorizations use one bundle, displayed in full before pairing approval.
+  // Refresh uses the stored grant instead of this authorization policy.
+  return [...SUPPORTED_SCOPES];
 }

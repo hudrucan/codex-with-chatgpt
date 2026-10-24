@@ -71,18 +71,11 @@ MCP evidence. A local health check does not clear the pending binding.
 ### Audit callback reports `INSUFFICIENT_SCOPE`
 
 Existing tokens keep their consented scopes; refreshing tokens or the tool catalog
-does not add `audit.submit`. HTTP callbacks return 403 with a `WWW-Authenticate`
-scope challenge so the client can request additional consent.
-
-Use the existing connection's reauthorization flow. Before approving, verify its
-consent page lists **Submit terminal C2C audit results to pending in-memory inboxes**.
-If absent, stop: that request cannot grant callbacks. Do not edit the OAuth URL or
-token state. Generate `c2c pair --hub <hubId> --json` only when the form is ready
-and stop for the user to consent. Preserve the Hub, connector and tunnel.
-
-After consent, verify the routed workspace through MCP and follow the
-[async workflow](../skill/references/workflow.md#async-callback-workflow).
-Until then, repository reads and manual handoffs remain available.
+does not add permissions. Reauthorize the existing connection once with the
+[complete consent bundle](security.md#token--scope-design), then repeat the
+Skill's [permission verification](../skill/SKILL.md#verification-and-binding).
+Missing consent permissions block readiness. Preserve the Hub, connector and
+tunnel; never edit OAuth URLs or token state to bypass consent.
 
 ## Reads and image access
 

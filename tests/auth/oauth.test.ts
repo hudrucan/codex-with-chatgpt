@@ -2,7 +2,7 @@ import { fixtureHub, fixtureAuthFile } from "../helpers.js";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
-import { AuthStore, MAX_OAUTH_CLIENTS, filterScopes } from "../../src/auth/store.js";
+import { AuthStore, MAX_OAUTH_CLIENTS, SUPPORTED_SCOPES, filterScopes } from "../../src/auth/store.js";
 import { MAX_PENDING_AUTH_REQUESTS, PENDING_AUTH_TTL_MS } from "../../src/auth/oauth.js";
 import { renameHub } from "../../src/hub/store.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
@@ -62,7 +62,7 @@ async function authorizeWithPairing(
   const pageResponse = await fetch(authorizeUrl, { redirect: "manual" });
   const html = await pageResponse.text();
   const requestId = html.match(/name="request_id" value="([a-f0-9]+)"/)?.[1];
-  if (!requestId) return { code: null, location: null, page: html, status: pageResponse.status };
+  if (!requestId) return { code: null, location: pageResponse.headers.get("location"), page: html, status: pageResponse.status };
 
   const postResponse = await fetch(`${base}/oauth/authorize`, {
     method: "POST",
@@ -434,39 +434,21 @@ describe("refresh token rotation", () => {
 
 
 describe("bridge-only OAuth scopes", () => {
-  it("shows the state-changing audit permission in the local OAuth consent page", async () => {
+  it.each([undefined, "", "  ", "audit.submit", "workspace.read workspace.read", SUPPORTED_SCOPES.join("+")])("uses the complete consent bundle for supported request %j", scope => {
+    expect(filterScopes(scope)).toEqual(SUPPORTED_SCOPES);
+  });
+
+  it.each(["unsupported.read", "unsupported.read workspace.read"])("rejects unsupported OAuth scope %s before consent", async scope => {
     const clientId = await registerClient();
     const { challenge } = pkceVerifierAndChallenge();
-    const authorize = new URL(`${base}/oauth/authorize`);
-    authorize.search = new URLSearchParams({ client_id: clientId, redirect_uri: REDIRECT_URI, response_type: "code",
-      code_challenge: challenge, code_challenge_method: "S256", scope: "audit.submit" }).toString();
-    const response = await fetch(authorize, { redirect: "manual" });
-    expect(response.status).toBe(200);
-    const page = await response.text();
-    expect(page).toContain("Submit terminal C2C audit results to pending in-memory inboxes");
-    expect(page).toContain("audit submissions change the in-memory inbox");
-  });
-
-  it("does not broaden unsupported scope requests", () => {
-    expect(filterScopes("unsupported.read")).toEqual([]);
-    expect(filterScopes("unknown.scope")).toEqual([]);
-    expect(filterScopes("unsupported.read workspace.read")).toEqual(["workspace.read"]);
-    expect(filterScopes("audit.submit")).toEqual(["audit.submit"]);
-    expect(filterScopes(undefined)).toEqual(["workspace.read", "workspace.search", "git.read", "offline_access"]);
-  });
-
-  it("does not grant core access to an unsupported-only OAuth authorization", async () => {
-    const clientId = await registerClient();
-    const { verifier, challenge } = pkceVerifierAndChallenge();
     const pairing = bridge.pairing.create();
-    const authorization = await authorizeWithPairing(clientId, challenge, pairing.code, "unsupported-scope", "unsupported.read");
+    const authorization = await authorizeWithPairing(clientId, challenge, pairing.code, "unsupported-scope", scope);
     expect(authorization.status).toBe(302);
-    const token = await exchangeToken(clientId, authorization.code!, verifier);
-    expect(token.status).toBe(200);
-    expect(token.body.scope).toBe("");
-    const verified = bridge.authStore.verifyAccessToken(token.body.access_token);
-    expect(verified.ok).toBe(true);
-    if (verified.ok) expect(verified.record.scopes).toEqual([]);
+    expect(authorization.code).toBeNull();
+    const redirect = new URL(authorization.location!);
+    expect(redirect.searchParams.get("error")).toBe("invalid_scope");
+    expect(redirect.searchParams.get("state")).toBe("unsupported-scope");
+    expect(bridge.pairing.verify(pairing.code).ok).toBe(true);
   });
 
   it("advertises only supported bridge scopes", async () => {

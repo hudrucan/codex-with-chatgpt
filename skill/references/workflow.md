@@ -86,9 +86,9 @@ state access. Async requires the routed `hubId`, explicit registered `workspaceI
 canonical `workspaceRoot` and one stable `taskId`. Missing ownership blocks sending;
 do not infer it from a chat URL or substitute another Hub/thread.
 
-Before sending, verify runtime ownership, ChatGPT `audit.submit` consent and terminal
-loopback access with health/status and an isolated register → authenticated MCP
-callback → terminal wait gate. Local tests do not prove live readiness. On EPERM,
+Before sending, complete the [permission probe](#permission-probe) to verify runtime
+ownership, ChatGPT `audit.submit` consent and terminal loopback access.
+Local tests do not prove live readiness. On EPERM,
 request official escalation for `127.0.0.1`; denial keeps async disabled. Callback
 operations use that terminal, independently of REPL fetch permissions. Do not change
 sandbox settings, add another transport, rollout or re-consent without authorization.
@@ -144,3 +144,25 @@ callbacks fail closed; exact duplicates are idempotent until expiration.
 The helper also supports one-shot `callback register`, `callback wait` and
 `callback cancel` with JSON stdin for isolated checks, plus local `claim`,
 `fingerprint` and `project` helpers. These do not bypass session claims or audit limits.
+
+### Permission probe
+
+Use this isolated check during connection verification and before async delivery.
+It creates no task claim or coding loop. Verify the selected Hub with `c2c status
+--hub <hubId> --json` and the exact registered root/ID with `c2c workspace list`.
+Then run `node <checkout>/dist/c2c/local.mjs callback register` with JSON stdin:
+
+```json
+{"hubId":"<hubId>","workspaceId":"<workspaceId>","taskId":"<probe-id>","attemptId":"<fresh-uuid>","handoffId":"<sha256-of-probe-message>","timeoutMs":180000}
+```
+
+Only after registration succeeds, ask the selected ChatGPT conversation to verify
+`workspace_info` through the routed connector, then call `submit_audit_result`
+with the complete returned ticket and `result` containing `status:"PASS"`,
+`complete:true`, `summary:"Permission probe"`, `findings:[]`. Do not paste source,
+use a task handoff marker, or infer consent from the local admin endpoint.
+Pass that same ticket as JSON stdin to `callback wait` in the terminal. Require
+both the MCP `accepted:true` and matching terminal result. Cancel an unused ticket
+with `callback cancel`; a rejected/expired probe blocks readiness and async sending.
+Existing limited tokens require explicit reauthorization, never a callback-only
+scope challenge. Without authorization to re-consent, report the blocker and stop.

@@ -67,14 +67,10 @@ can combine many Hubs with separate routing blocks; repos may appear in multiple
 
 ## MCP capabilities
 
-Ten read-only tools provide workspace discovery, project information,
-directory listing, text/image reads, search, git status, paginated git diffs,
-bounded commit history and commit patches.
-OAuth scopes, canonical containment and sensitive-file rules protect access.
-An additional `submit_audit_result` tool can complete a locally registered,
-short-lived audit inbox with explicit `audit.submit` permission. It cannot write
-repo files or run commands. See [security](docs/security.md) and
-[the tool reference](docs/multi-repo.md#mcp-tools).
+Ten read-only tools expose registered repositories; one capability-protected
+callback completes pending audit attempts. Connections request all five
+[OAuth permissions](docs/security.md#token--scope-design) in one visible consent.
+See [the tool reference](docs/multi-repo.md#mcp-tools) for operations and limits.
 
 ## Documentation
 

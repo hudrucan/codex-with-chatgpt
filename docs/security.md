@@ -50,12 +50,16 @@ be overridden by it.
 ## Token & scope design
 
 Scopes: `workspace.read`, `workspace.search`, `git.read`, `audit.submit`, `offline_access`.
-Tools enforce scopes individually. `audit.submit` is only
-granted when explicitly requested; omitted scopes retain the repository-read defaults.
-Access tokens: 1 hour. Refresh tokens: 30 days, rotated. All tokens bound to
-`hubId` and `client_id`. Explicit scope requests are intersected with
-supported scopes; an unsupported-only request grants none instead of falling
-back to every core permission.
+Every new authorization uses this complete bundle, including setup, reconnect
+and reauthorization. Omitted or supported subset requests display all five
+permissions before pairing approval. Unsupported scopes reject the request with
+`invalid_scope`; the token response reports the actual granted scopes.
+
+Tools enforce scopes individually. Existing restricted tokens remain restricted:
+refresh preserves stored grants and cannot add permissions. They require explicit
+reauthorization with the complete consent page, without callback-only step-up.
+Access tokens last 1 hour; refresh tokens last 30 days and rotate on use. Tokens
+are bound to `hubId` and `client_id`.
 
 ## Storage
 

@@ -1,7 +1,6 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import type { Server } from "node:http";
 import { randomBytes } from "node:crypto";
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { resolveHub, type Hub } from "../hub/store.js";
 import { WorkspaceRegistry } from "../workspace/registry.js";
 import { AuthStore } from "../auth/store.js";
@@ -142,21 +141,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
     traceMcpHttp(logger),
     bearerAuth({ store: authStore, hubId, getBaseUrl, logger }),
     express.json({ limit: "8mb" }),
-    (req: Request, res: Response) => {
-      const auth = (req as Request & { auth?: AuthInfo }).auth;
-      // Transport-level scope challenges let OAuth clients request explicit step-up consent.
-      if (req.method === "POST" && req.body?.method === "tools/call" &&
-          req.body.params?.name === "submit_audit_result" && auth && !auth.scopes.includes("audit.submit")) {
-        const scopes = [...new Set([...auth.scopes, "audit.submit"])].join(" ");
-        res.status(403).set("WWW-Authenticate",
-          `Bearer error="insufficient_scope", scope="${scopes}", ` +
-          `resource_metadata="${getBaseUrl(req)}/.well-known/oauth-protected-resource/mcp", ` +
-          'error_description="Explicit consent for audit.submit is required"'
-        ).json({ error: "insufficient_scope", error_description: "Explicit consent for audit.submit is required" });
-        return;
-      }
-      void mcpHandler(req, res);
-    }
+    (req: Request, res: Response) => { void mcpHandler(req, res); }
   );
 
   // ---- Admin API (loopback + admin token only; used by the CLI/Skill) --------
