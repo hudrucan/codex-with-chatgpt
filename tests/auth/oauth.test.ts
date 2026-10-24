@@ -434,10 +434,24 @@ describe("refresh token rotation", () => {
 
 
 describe("bridge-only OAuth scopes", () => {
+  it("shows the state-changing audit permission in the local OAuth consent page", async () => {
+    const clientId = await registerClient();
+    const { challenge } = pkceVerifierAndChallenge();
+    const authorize = new URL(`${base}/oauth/authorize`);
+    authorize.search = new URLSearchParams({ client_id: clientId, redirect_uri: REDIRECT_URI, response_type: "code",
+      code_challenge: challenge, code_challenge_method: "S256", scope: "audit.submit" }).toString();
+    const response = await fetch(authorize, { redirect: "manual" });
+    expect(response.status).toBe(200);
+    const page = await response.text();
+    expect(page).toContain("Submit terminal C2C audit results to pending in-memory inboxes");
+    expect(page).toContain("audit submissions change the in-memory inbox");
+  });
+
   it("does not broaden unsupported scope requests", () => {
     expect(filterScopes("unsupported.read")).toEqual([]);
     expect(filterScopes("unknown.scope")).toEqual([]);
     expect(filterScopes("unsupported.read workspace.read")).toEqual(["workspace.read"]);
+    expect(filterScopes("audit.submit")).toEqual(["audit.submit"]);
     expect(filterScopes(undefined)).toEqual(["workspace.read", "workspace.search", "git.read", "offline_access"]);
   });
 
@@ -457,7 +471,7 @@ describe("bridge-only OAuth scopes", () => {
 
   it("advertises only supported bridge scopes", async () => {
     const metadata = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
-    expect(metadata.scopes_supported).toEqual(["workspace.read", "workspace.search", "git.read", "offline_access"]);
+    expect(metadata.scopes_supported).toEqual(["workspace.read", "workspace.search", "git.read", "audit.submit", "offline_access"]);
     const resource = await (await fetch(`${base}/.well-known/oauth-protected-resource/mcp`)).json();
     expect(resource.resource_name).toBe("Codex with ChatGPT");
     expect(resource.scopes_supported).toEqual(metadata.scopes_supported);

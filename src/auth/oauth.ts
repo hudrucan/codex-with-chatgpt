@@ -78,6 +78,7 @@ function pairingPage(opts: {
     "workspace.read": "Read files in this workspace",
     "workspace.search": "Search this workspace",
     "git.read": "Read git status and diffs",
+    "audit.submit": "Submit terminal C2C audit results to pending in-memory inboxes",
     offline_access: "Stay connected between sessions",
   };
   const scopeList = opts.scopes
@@ -121,7 +122,7 @@ function pairingPage(opts: {
 <body>
 <div class="card">
   <h1>${escapedProductName}</h1>
-  <p class="sub">ChatGPT is requesting access to workspace <strong>${escapedWorkspaceName}</strong> (read-only):</p>
+  <p class="sub">ChatGPT is requesting access to workspace <strong>${escapedWorkspaceName}</strong> ${opts.scopes.includes("audit.submit") ? "(repository access stays read-only; audit submissions change the in-memory inbox)" : "(read-only)"}:</p>
   <ul>${scopeList}</ul>
   <form method="POST" action="authorize">
     <input type="hidden" name="request_id" value="${escapedRequestId}">

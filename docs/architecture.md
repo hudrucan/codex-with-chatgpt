@@ -9,14 +9,16 @@ Codex Skill → local c2c CLI → authenticated local admin API
 ```
 
 The Skill manages setup, naming, connection verification and lifecycle. MCP is
-the read-only data plane. Successful setup or reconnect ends at `MCP READY`.
+the repository-read data plane, with one narrowly scoped in-memory audit callback.
+Successful setup or reconnect ends at `MCP READY`.
 
 ## Components
 
 | Module | Responsibility |
 | --- | --- |
 | `bridge/` | Express assembly, loopback listener, port fallback, runtime discovery and local admin API |
-| `mcp/` | Read-only tools and stateless Streamable HTTP transport |
+| `mcp/` | Repository-read tools, terminal audit callback and stateless Streamable HTTP transport |
+| `c2c/` | Local helper, source checks, task claims, owner-scoped Project resolution and runtime audit inbox |
 | `auth/` | OAuth discovery, client registration, PKCE, token rotation/revocation and token hashes |
 | `pairing/` | Expiring one-time pairing codes, attempt limits and rate limiting |
 | `hub/` | Independent identity, deterministic discovery and explicit selection |

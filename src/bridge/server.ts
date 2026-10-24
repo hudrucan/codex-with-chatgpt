@@ -18,6 +18,8 @@ import { Logger, nullLogger } from "../logger/index.js";
 import { DEFAULT_HOST, DEFAULT_PORT } from "../config/paths.js";
 import { SERVICE_NAME, VERSION } from "../version.js";
 import { writeRuntimeState, clearRuntimeState, type HubRuntimeState } from "./runtime.js";
+import { AuditInbox, AuditInboxError } from "../c2c/inbox.js";
+import { registerAttemptSchema, callbackTicketSchema } from "../c2c/protocol.js";
 
 function tunnelForHub(hubId: string, logger: Logger): TunnelProvider {
   const binding = namedTunnelBinding(readTunnelState(hubId));
@@ -132,7 +134,8 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
   // ---- MCP endpoint (bearer-protected) --------------------------------------
 
   const diffSnapshots = new DiffSnapshots(hubId);
-  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ hubId, logger, registry, diffSnapshots }), logger);
+  const auditInbox = new AuditInbox(hubId);
+  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ hubId, logger, registry, diffSnapshots, auditInbox }), logger);
   app.all(
     "/mcp",
     traceMcpHttp(logger),
@@ -164,6 +167,26 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
     logger.info("Created pairing session");
     res.json({ code: session.code, expiresAt: session.expiresAt });
   });
+
+  // Never exposed through MCP or a proxy; tokens/capabilities stay out of logs.
+  for (const operation of ["register", "wait", "cancel"] as const) {
+    app.post(`/admin/c2c/${operation}`, adminGuard, express.json({ limit: "4kb" }), async (req, res) => {
+      const abort = new AbortController();
+      const onClose = () => { if (!res.writableFinished) abort.abort(); };
+      res.once("close", onClose);
+      try {
+        const input = (operation === "register" ? registerAttemptSchema : callbackTicketSchema).parse(req.body);
+        if (input.hubId !== hubId) throw new AuditInboxError("ASYNC_CALLBACK_OWNER_MISMATCH");
+        registry.resolve(input.workspaceId);
+        const value = operation === "register" ? auditInbox.register(input)
+          : operation === "wait" ? await auditInbox.wait(input, abort.signal) : auditInbox.cancel(input);
+        registry.resolve(input.workspaceId);
+        res.json({ ok: true, value: value ?? null });
+      } catch (error) {
+        res.status(400).json({ ok: false, error: error instanceof AuditInboxError ? error.code : "ASYNC_LOCAL_REQUEST_INVALID" });
+      } finally { res.removeListener("close", onClose); }
+    });
+  }
 
   app.get("/admin/info", adminGuard, (_req, res) => {
     res.json({
@@ -241,6 +264,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
   const shutdown = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    auditInbox.close();
     await tunnel.stop().catch(() => undefined);
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await diffSnapshots.close();

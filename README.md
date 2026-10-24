@@ -71,12 +71,14 @@ Ten read-only tools provide workspace discovery, project information,
 directory listing, text/image reads, search, git status, paginated git diffs,
 bounded commit history and commit patches.
 OAuth scopes, canonical containment and sensitive-file rules protect access.
-There are no remote write or shell tools. See [security](docs/security.md) and
+An additional `submit_audit_result` tool can complete a locally registered,
+short-lived audit inbox with explicit `audit.submit` permission. It cannot write
+repo files or run commands. See [security](docs/security.md) and
 [the tool reference](docs/multi-repo.md#mcp-tools).
 
 ## Documentation
 
-- [Codex ↔ ChatGPT Web workflow](skill/references/workflow.md): manual handoffs, opt-in async audits and validation trust.
+- [Codex ↔ ChatGPT Web workflow](skill/references/workflow.md): manual handoffs, async availability and validation trust.
 - [Architecture](docs/architecture.md): components, request flow and development checks.
 - [Security](docs/security.md): authorization, file policies and credential storage.
 - [Lifecycle](docs/lifecycle.md): setup, naming, binding, reconnect and disconnect.

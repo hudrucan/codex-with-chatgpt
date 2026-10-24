@@ -1,0 +1,37 @@
+import { randomUUID } from "node:crypto";
+import { afterEach, expect, it, vi } from "vitest";
+import { AuditInbox } from "../../src/c2c/inbox.js";
+
+const hubId = `hub-${randomUUID()}`;
+const registration = () => ({ hubId, workspaceId: "0123456789ab", taskId: "budget-task",
+  attemptId: randomUUID(), handoffId: "a".repeat(64), timeoutMs: 50 });
+const result = { status: "PASS", complete: true, summary: "Test complete", findings: [] };
+afterEach(() => vi.useRealTimers());
+
+it("bounds the runtime inbox, rejects duplicate registration, and reclaims expired entries", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const inbox = new AuditInbox(hubId), first = registration(), ticket = inbox.register(first);
+  expect(() => inbox.register(first)).toThrow("ASYNC_ATTEMPT_EXISTS");
+  for (let index = 1; index < 64; index++) inbox.register(registration());
+  expect(() => inbox.register(registration())).toThrow("ASYNC_INBOX_FULL");
+  inbox.submit({ ...ticket, result });
+  await vi.advanceTimersByTimeAsync(50);
+  expect(() => inbox.submit({ ...ticket, result })).toThrow("ASYNC_ATTEMPT_UNAVAILABLE");
+  expect(inbox.register(registration())).toHaveProperty("capability");
+  inbox.close();
+});
+
+it.each([false, true])("makes interruption terminal without a later callback (already aborted=%s)", async alreadyAborted => {
+  const inbox = new AuditInbox(hubId), ticket = inbox.register({ ...registration(), timeoutMs: 1000 });
+  const abort = new AbortController();
+  if (alreadyAborted) abort.abort();
+  const waiting = inbox.wait(ticket, abort.signal);
+  const rejected = expect(waiting).rejects.toThrow("ASYNC_WAIT_INTERRUPTED");
+  if (!alreadyAborted) {
+    await expect(inbox.wait(ticket)).rejects.toThrow("ASYNC_BUSY");
+    abort.abort();
+  }
+  await rejected;
+  expect(() => inbox.submit({ ...ticket, result })).toThrow("ASYNC_ATTEMPT_TERMINAL");
+  inbox.close();
+});

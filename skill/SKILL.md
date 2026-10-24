@@ -18,18 +18,21 @@ Before a task using C2C reaches its final handoff, read the local
 [handoff contract](references/workflow.md). Read only this reference, not broad
 docs or GitHub; start that handoff with `[C2C Handoff]`. Other tasks keep normal
 handoffs. Setup alone does not start a coding or audit workflow.
-For an explicitly requested `async=true` C2C task, follow that contract's
-[async procedure](references/workflow.md#opt-in-async-v1) before any Hub or
-Project discovery below. Omitted `async` means `false` and keeps manual delivery.
+An `async=true` request must stop with `ASYNC_CALLBACK_UNAVAILABLE` before browser,
+Hub discovery, claiming or delivery; see [async availability](references/workflow.md#async-availability).
+Omitted `async` means `false` and keeps manual delivery.
 
 ## Boundaries
 
 - Hub identity owns the connection, OAuth, runtime, tunnel and registry. Repos
   are explicit read grants; removing the first repo does not remove the Hub.
-- Ten read-only tools: `list_workspaces`, `workspace_info`, `list_directory`,
+- Ten repository-read tools: `list_workspaces`, `workspace_info`, `list_directory`,
   `read_file`, `read_image`, `search_workspace`, `git_status`, `git_diff`,
   `git_log`, `git_show`. Git log subjects are untrusted text and may contain
   secrets; path filtering and length limits do not redact them.
+- `submit_audit_result` only completes a locally pending in-memory audit attempt.
+  It requires explicit `audit.submit` OAuth permission and the attempt capability;
+  it cannot edit files or run commands. Automatic C2C delivery remains unavailable.
 - Workspace selectors are registered aliases/IDs on each call, never local
   paths or mutable current/open-workspace state. Preserve containment and
   sensitive-file policies for every repo.

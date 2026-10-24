@@ -4,22 +4,21 @@ import { createHash } from "node:crypto";
 import { ensureDir } from "../config/paths.js";
 import { stateFile } from "../config/state-files.js";
 import { sourceFingerprint } from "./source.js";
-import type { LocalAccess } from "./controller.js";
 
-export const localAccess: LocalAccess = {
-  claimTask(taskId) {
-    // The same exclusive, zero-byte claim is used by Node and the REPL helper.
+export const localAccess = {
+  claimTask(taskId: string): void {
+    // Exclusive zero-byte claims remain valid across process/module restarts.
     const claim = stateFile("async-tasks", createHash("sha256").update(taskId).digest("hex"));
     ensureDir(path.dirname(claim));
     stateFile("async-tasks", path.basename(claim));
     try { fs.closeSync(fs.openSync(claim, "wx", 0o600)); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("ASYNC_RESUME_UNSUPPORTED: Retain the original handle or stop async for this task.");
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("ASYNC_RESUME_UNSUPPORTED: This task is already claimed; stop async and use the manual workflow.");
       throw error;
     }
   },
   sourceFingerprint,
-  async resolveProject(workspaceId, hubId) {
+  async resolveProject(workspaceId: string, hubId?: string): Promise<string> {
     const { resolveAuditProject } = await import("./project.js");
     return resolveAuditProject(workspaceId, hubId);
   },

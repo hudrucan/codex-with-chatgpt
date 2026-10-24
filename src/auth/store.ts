@@ -10,6 +10,7 @@ export const SUPPORTED_SCOPES = [
   "workspace.read",
   "workspace.search",
   "git.read",
+  "audit.submit",
   "offline_access",
 ] as const;
 
@@ -332,7 +333,8 @@ export class AuthStore {
 }
 
 export function filterScopes(requested: string | undefined): string[] {
-  if (!requested || requested.trim() === "") return [...SUPPORTED_SCOPES];
+  // Audit submission is an explicit state-changing grant, never a default read grant.
+  if (!requested || requested.trim() === "") return SUPPORTED_SCOPES.filter(scope => scope !== "audit.submit");
   const asked = requested.split(/[\s+]+/).filter(Boolean);
   const granted = asked.filter((scope) => (SUPPORTED_SCOPES as readonly string[]).includes(scope));
   // An explicit unknown scope must not expand into all core permissions.

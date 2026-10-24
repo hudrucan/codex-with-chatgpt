@@ -9,6 +9,7 @@ import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { createMcpServer } from "../../src/mcp/server.js";
 import { DiffSnapshots } from "../../src/workspace/diff-snapshots.js";
 import { nullLogger } from "../../src/logger/index.js";
+import { AuditInbox } from "../../src/c2c/inbox.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { callGitDiffReady, cleanup, git, isolateStateDir, makeGitRepo, makeTmpDir, write } from "../helpers.js";
 
@@ -72,7 +73,7 @@ async function call(name: string, args: Record<string, unknown> = {}) {
 }
 
 async function expectWorkspaceReads(): Promise<void> {
-  expect((await client!.listTools()).tools).toHaveLength(10);
+  expect((await client!.listTools()).tools).toHaveLength(11);
   expect((await call("list_workspaces")).data.workspaces).toHaveLength(1);
   for (const [name, args] of workspaceCalls) {
     const { result, data } = await call(name, args);
@@ -87,9 +88,9 @@ describe("MCP uses the Hub resolved at startup", () => {
     const hubId = `hub-${randomUUID()}`;
     const registry = new WorkspaceRegistry(hubId);
     const before = ownershipSnapshot();
-    expect(() => createMcpServer({ hubId: `hub-${randomUUID()}`, registry, logger: nullLogger, diffSnapshots: new DiffSnapshots(hubId) }))
+    expect(() => createMcpServer({ hubId: `hub-${randomUUID()}`, registry, logger: nullLogger, diffSnapshots: new DiffSnapshots(hubId), auditInbox: new AuditInbox(hubId) }))
       .toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE_OWNER" }));
-    const server = createMcpServer({ hubId, registry, logger: nullLogger, diffSnapshots: new DiffSnapshots(hubId) });
+    const server = createMcpServer({ hubId, registry, logger: nullLogger, diffSnapshots: new DiffSnapshots(hubId), auditInbox: new AuditInbox(hubId) });
     await server.close();
     expect(ownershipSnapshot()).toEqual(before);
     expect(fs.readdirSync(state)).toEqual([]);

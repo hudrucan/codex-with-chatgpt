@@ -76,7 +76,7 @@ see [security](security.md).
 
 ## MCP tools
 
-| Tool | Read-only responsibility | Scope |
+| Tool | Responsibility | Scope |
 | --- | --- | --- |
 | `list_workspaces` | Registered aliases and workspace IDs | `workspace.read` |
 | `workspace_info` | Identity, display name, project detection and git overview | `workspace.read` |
@@ -88,6 +88,12 @@ see [security](security.md).
 | `git_diff` | Scoped immutable diff snapshots with byte-offset pagination | `git.read` |
 | `git_log` | Bounded HEAD commit history, optionally filtered by path | `git.read` |
 | `git_show` | Bounded commit patch by full SHA | `git.read` |
+| `submit_audit_result` | Complete an existing in-memory audit attempt; no repo writes | `audit.submit` |
+
+The callback requires `hubId` and the exact registered `workspaceId`, plus
+`taskId`, `attemptId`, `handoffId`, `capability` and a terminal `result`.
+It does not use the optional alias-based `workspace` selector or establish a
+current workspace. See [audit callbacks](audit-callbacks.md).
 
 `read_file` rejects files larger than **16 MiB (16,777,216 bytes)** with
 `FILE_TOO_LARGE` before scanning lines; no partial content is returned. Files

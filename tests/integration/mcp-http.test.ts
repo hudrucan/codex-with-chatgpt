@@ -92,7 +92,7 @@ afterAll(async () => {
 });
 
 describe("MCP tools over Streamable HTTP", () => {
-  it("lists ten read-only bridge tools", async () => {
+  it("lists ten repository read tools and one state-changing audit callback", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
@@ -105,6 +105,7 @@ describe("MCP tools over Streamable HTTP", () => {
       "read_file",
       "read_image",
       "search_workspace",
+      "submit_audit_result",
       "workspace_info",
     ]);
     // Remote access is read-only.
