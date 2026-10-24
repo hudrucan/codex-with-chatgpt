@@ -188,19 +188,30 @@ Ignored generated files are outside this source check. Git/source read failures,
 unsupported paths (including symlinks/submodules) or more than 64 MiB of readable
 file content fail closed; use the manual workflow when a complete snapshot is unavailable.
 
-Each `wait()` spends at most 45 seconds in sequential upstream locator waits of
-at most two seconds, below the observed browser selector deadline. It returns
-early when a complete frame appears. On `WAITING`, call `audit.wait()` again on
-the same handle; do not read/poll the whole transcript, sleep or resend. The
-optional call budget must be between 1 and 45 seconds (the final deadline may be shorter).
-`WAITING` requires a settled, recognized `locator.waitFor` expiration after the
-full browser slice, repeated internally until the call budget expires. Both the
-native Playwright timeout and the REPL selector-deadline error are recognized;
-a premature RPC/browser timeout or an unrecognized timeout
-ends the attempt. The independent watchdog allows up to one extra second for
-the locator to settle, without extending the audit deadline. If the watchdog
-expires with the upstream wait unresolved, waiting is unreliable: return terminal
-`ERROR` and never start another wait or resend. Concurrent waits are rejected.
+Each `wait()` performs at most one short, read-only DOM check using the supported
+`playwright.evaluate` API. It reads the grounded turn headings, user anchor
+metadata and latest reply body, returning only metadata and a terminal candidate
+containing this attempt ID and end marker. It never chains blocking locator waits
+or returns the full transcript. If no terminal candidate exists, return `WAITING`.
+Call `audit.wait()` again on the same handle; do not resend or add manual browser
+polling. The handle spaces settled DOM checks by at least two seconds using a
+local timer with no browser operation in flight. A completed candidate returns
+as soon as it is checked and validated; a response arriving between checks is
+read on the next check.
+
+The default call budget is five seconds, including local pacing and URL checks;
+the optional budget is between one and five seconds. Each browser operation has
+an independent watchdog of at most two seconds, clipped to the call budget and
+audit deadline; DOM evaluation also receives that explicit `timeoutMs`. An
+exhausted pacing budget returns `WAITING` without starting another browser call.
+CDP transport errors, selector errors and other browser failures are terminal
+`ERROR`, preserving their actual messages even across realms. A missing candidate
+is not a transport failure. The watchdog cannot cancel a CDP operation: if it
+expires, return terminal `ERROR` and never start another operation on the handle,
+even if the outstanding operation settles later. Concurrent waits are rejected.
+Keep the enclosing REPL invocation deadline above this short call budget. If
+that invocation itself is interrupted, stop async rather than recreating the
+handle or assuming its browser operation was cancelled.
 The default hard deadline is 180 seconds per audit, including submission, and cannot
 be increased (`timeoutMs` may shorten it). Wait slices do not reset it. After a
 timeout or browser/MCP error, stop; late responses cannot reopen the attempt.

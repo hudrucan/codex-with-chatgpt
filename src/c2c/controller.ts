@@ -3,9 +3,8 @@ import { z } from "zod";
 
 export const AUDIT_START = "[C2C Audit v1]";
 export const AUDIT_END = "[C2C Audit End v1]";
-const MAX_AUDITS = 3, MAX_WAIT_MS = 45_000, MIN_WAIT_MS = 1_000, HARD_TIMEOUT_MS = 180_000;
-// Stay below the observed browser selector deadline (about five seconds).
-const BROWSER_WAIT_SLICE_MS = 2_000;
+const MAX_AUDITS = 3, MAX_WAIT_MS = 5_000, MIN_WAIT_MS = 1_000, HARD_TIMEOUT_MS = 180_000;
+const CHECK_INTERVAL_MS = 2_000, BROWSER_CHECK_MS = 2_000;
 const findingSchema = z.object({
   file: z.string().min(1), line: z.number().int().positive(),
   evidence: z.string().min(1), fix: z.string().min(1),
@@ -33,7 +32,7 @@ export interface AuditTab {
   playwright: {
     getByRole(role: string, options: { name: string; exact: boolean }): Locator;
     locator(selector: string): Locator;
-    evaluate<T, A>(fn: (arg: A) => T, arg: A): Promise<T>;
+    evaluate<T, A>(fn: (arg: A) => T, arg: A, options?: { timeoutMs?: number }): Promise<T>;
   };
 }
 export interface AuditBrowser { tabs: { selected(): Promise<AuditTab | undefined> } }
@@ -98,6 +97,13 @@ class WatchdogExpired extends Error {
   constructor() { super("ASYNC_WATCHDOG_EXPIRED"); }
 }
 
+function errorMessage(error: unknown): string {
+  try {
+    if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return error.message;
+    return String(error);
+  } catch { return "ASYNC_UNKNOWN_ERROR: Error details are unavailable."; }
+}
+
 function bounded<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([operation, new Promise<never>((_, reject) => {
@@ -113,6 +119,7 @@ class AsyncC2C {
   private busy = false;
   private submittedSource?: string;
   private fixVerified = false;
+  private nextCheckAt = 0;
 
   constructor(private options: Readonly<Pick<Options, "taskId" | "workspaceId" | "workspaceRoot">>, private timeoutMs: number, private tab: AuditTab, private identity: string | undefined,
     private ui: AuditUI, private local: LocalAccess, private projectUrl?: string) {}
@@ -132,6 +139,7 @@ class AsyncC2C {
       this.audits++;
       this.result = undefined;
       this.fixVerified = false;
+      this.nextCheckAt = 0;
       this.submittedSource = this.local.sourceFingerprint(this.options.workspaceRoot, this.options.workspaceId);
       await this.io(() => this.assertThread());
       const baseline = await this.io(() => this.turns());
@@ -146,12 +154,12 @@ class AsyncC2C {
       await this.io(() => composer.fill(message));
       await this.io(() => composer.press("Enter"));
     } catch (error) {
-      this.finishLocal(error instanceof Error ? error.message : String(error));
+      this.finishLocal(errorMessage(error));
       throw error;
     } finally { this.busy = false; }
   }
 
-  /** Sequential short browser waits within one bounded call; no model polling. */
+  /** One targeted DOM check per call. Local pacing never holds a CDP operation. */
   async wait(maxWaitMs = MAX_WAIT_MS): Promise<AuditResult | { status: "WAITING"; remainingMs: number }> {
     if (this.busy) throw new Error("ASYNC_BUSY");
     if (this.result) return this.result;
@@ -161,40 +169,25 @@ class AsyncC2C {
     this.busy = true;
     try {
       const waitDeadline = performance.now() + Math.min(maxWaitMs, this.remaining());
-      await this.io(() => this.assertThread());
-      const candidate = this.tab.playwright.locator("div:has(> h4)")
-        .filter({ has: this.tab.playwright.getByRole("heading", { name: this.ui.assistantHeading, exact: true }) })
-        .filter({ hasText: this.pending.request.attemptId }).filter({ hasText: AUDIT_END }).last();
-      for (;;) {
-        if (this.remaining() <= 0) return this.finishLocal("ASYNC_TIMEOUT");
-        if (performance.now() >= waitDeadline) return { status: "WAITING", remainingMs: this.remaining() };
-        const slice = Math.min(BROWSER_WAIT_SLICE_MS, Math.ceil(waitDeadline - performance.now()), Math.ceil(this.remaining()));
-        if (slice <= 0) continue;
-        const started = performance.now();
-        // Only a settled expiration may start the next slice. A watchdog can
-        // leave an unresolved upstream wait, so it must end the attempt.
-        try { await bounded(candidate.waitFor({ state: "visible", timeoutMs: slice }), Math.min(slice + 1_000, this.remaining())); break; }
-        catch (error) {
-          if (error instanceof WatchdogExpired) return this.finishLocal("ASYNC_WAIT_UNAVAILABLE: Watchdog expired with an unresolved browser wait.");
-          // REPL browser errors can cross realms; do not rely on instanceof.
-          const name = error && typeof error === "object" && "name" in error ? error.name : undefined;
-          const message = error && typeof error === "object" && "message" in error && typeof error.message === "string" ? error.message : String(error);
-          const selectorTimeout = /^(?:Error: )?Playwright selector deadline exceeded\nlocator\.waitFor\(visible\) timed out for selector /.test(message);
-          if (name === "TimeoutError" || selectorTimeout) {
-            if (performance.now() - started < slice) return this.finishLocal("ASYNC_PREMATURE_BROWSER_TIMEOUT");
-            if (!selectorTimeout && !message.startsWith(`locator.waitFor: Timeout ${slice}ms exceeded.`))
-              return this.finishLocal("ASYNC_WAIT_UNAVAILABLE: Unrecognized browser timeout.");
-            continue;
-          }
-          throw error;
-        }
-      }
+      const pause = Math.min(Math.max(0, this.nextCheckAt - performance.now()), waitDeadline - performance.now());
+      if (pause > 0) await new Promise<void>(resolve => setTimeout(resolve, pause));
       if (this.remaining() <= 0) return this.finishLocal("ASYNC_TIMEOUT");
-      await this.io(() => this.assertThread(true));
-      const turns = await this.io(() => this.turns());
+      if (performance.now() >= waitDeadline) return { status: "WAITING", remainingMs: this.remaining() };
+      const budget = () => {
+        const value = Math.min(BROWSER_CHECK_MS, waitDeadline - performance.now());
+        if (value <= 0) throw new WatchdogExpired();
+        return value;
+      };
+      await this.io(() => this.assertThread(), budget());
+      const checkMs = budget();
+      const turns = await this.io(() => this.turns(checkMs), checkMs);
+      this.nextCheckAt = performance.now() + CHECK_INTERVAL_MS;
       if (this.remaining() <= 0) return this.finishLocal("ASYNC_TIMEOUT");
-      if (turns.anchorIndex < this.pending.baseline || turns.anchors !== 1 || turns.latestUser !== turns.anchorIndex || !turns.reply)
+      if (turns.anchorIndex < this.pending.baseline || turns.anchors !== 1 || turns.latestUser !== turns.anchorIndex)
         return this.finishLocal("ASYNC_TURN_MISMATCH");
+      await this.io(() => this.assertThread(Boolean(turns.reply)), budget());
+      if (this.remaining() <= 0) return this.finishLocal("ASYNC_TIMEOUT");
+      if (!turns.reply) return { status: "WAITING", remainingMs: this.remaining() };
       const text = turns.reply;
       const start = text.indexOf(AUDIT_START), end = text.indexOf(AUDIT_END);
       if (start < 0 || end < start || text.indexOf(AUDIT_START, start + AUDIT_START.length) !== -1 ||
@@ -206,7 +199,9 @@ class AsyncC2C {
       this.pending = undefined;
       return this.result;
     } catch (error) {
-      return this.finishLocal(error instanceof Error ? error.message : String(error));
+      return this.finishLocal(error instanceof WatchdogExpired
+        ? "ASYNC_WAIT_UNAVAILABLE: Browser check watchdog expired; an upstream operation may still be unresolved."
+        : errorMessage(error));
     } finally { this.busy = false; }
   }
 
@@ -219,14 +214,14 @@ class AsyncC2C {
         return this.finishLocal("ASYNC_SOURCE_DRIFT: Local source changed since the submitted handoff; stop before editing.");
       this.fixVerified = true;
       return this.result = { ...this.result, canAutoFix: true };
-    } catch (error) { return this.finishLocal(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { return this.finishLocal(errorMessage(error)); }
   }
 
   private remaining(): number { return Math.max(0, this.pending!.deadline - performance.now()); }
-  private io<T>(operation: () => Promise<T>): Promise<T> {
+  private io<T>(operation: () => Promise<T>, timeoutMs = 30_000): Promise<T> {
     const remaining = this.remaining();
     if (remaining <= 0) return Promise.reject(new Error("ASYNC_TIMEOUT"));
-    return bounded(operation(), Math.min(30_000, remaining));
+    return bounded(operation(), Math.min(timeoutMs, remaining));
   }
   private async assertThread(requireIdentity = false): Promise<void> {
     const url = await this.tab.url(), identity = threadIdentity(url);
@@ -238,17 +233,22 @@ class AsyncC2C {
     }
     if (!this.identity || identity !== this.identity) throw new Error("ASYNC_THREAD_CHANGED");
   }
-  private turns() {
-    return this.tab.playwright.evaluate(({ userHeading, assistantHeading, anchor }) => {
+  private turns(timeoutMs = BROWSER_CHECK_MS) {
+    return this.tab.playwright.evaluate(({ userHeading, assistantHeading, anchor, attemptId, endMarker }) => {
       const turns = [...document.querySelectorAll("h4")].filter(heading =>
-        heading.textContent === userHeading || heading.textContent === assistantHeading)
-        .map(heading => ({ user: heading.textContent === userHeading, text: (heading.nextElementSibling as HTMLElement | null)?.innerText ?? "" }));
-      const anchors = turns.map((turn, index) => turn.user && turn.text.includes(anchor) ? index : -1).filter(index => index >= 0);
+        heading.textContent === userHeading || heading.textContent === assistantHeading);
+      const userIndexes = turns.map((heading, index) => heading.textContent === userHeading ? index : -1).filter(index => index >= 0);
+      const body = (index: number) => (turns[index]?.nextElementSibling as HTMLElement | null)?.innerText ?? "";
+      const anchors = userIndexes.filter(index => body(index).includes(anchor));
       const anchorIndex = anchors[0] ?? -1;
+      const replyIndex = turns.map((heading, index) => index > anchorIndex && heading.textContent === assistantHeading ? index : -1)
+        .filter(index => index >= 0).pop() ?? -1;
+      const reply = anchorIndex < 0 ? "" : body(replyIndex);
       return { count: turns.length, anchors: anchors.length, anchorIndex,
-        latestUser: turns.map((turn, index) => turn.user ? index : -1).filter(index => index >= 0).pop() ?? -1,
-        reply: anchorIndex < 0 ? "" : turns.slice(anchorIndex + 1).filter(turn => !turn.user).at(-1)?.text ?? "" };
-    }, { userHeading: this.ui.userHeading, assistantHeading: this.ui.assistantHeading, anchor: this.pending!.anchor });
+        latestUser: userIndexes.at(-1) ?? -1,
+        reply: reply.includes(attemptId) && reply.includes(endMarker) ? reply : "" };
+    }, { userHeading: this.ui.userHeading, assistantHeading: this.ui.assistantHeading, anchor: this.pending!.anchor,
+      attemptId: this.pending!.request.attemptId, endMarker: AUDIT_END }, { timeoutMs });
   }
   private finishLocal(summary: string): AuditResult {
     this.result = { ...(this.pending?.request ?? this.result!), status: "ERROR", complete: true, summary, findings: [], canAutoFix: false, origin: "local" };

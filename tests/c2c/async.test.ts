@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import vm from "node:vm";
 import { AUDIT_END, AUDIT_START, startAsyncC2C, type AuditTab, type AuditUI } from "../../src/c2c/async.js";
 import { resolveAuditProject } from "../../src/c2c/project.js";
 import { Workspace } from "../../src/workspace/manager.js";
@@ -26,41 +27,26 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); cleanup(directory); });
 
 /** Small upstream UI fixture: evaluate runs the production transcript reader. */
-function browserFixture(selectorDeadlineMs?: number) {
+function browserFixture() {
   const turns: { user: boolean; text: string }[] = [];
-  let draft = "", url = threadUrl, hungWait = false;
-  let wake: (() => void) | undefined;
+  let draft = "", url = threadUrl, hungRead = false;
+  let releaseRead: (() => void) | undefined;
   const response = (patch: Record<string, unknown> = {}) => {
     const message = turns.filter(turn => turn.user).at(-1)!.text;
     const request = JSON.parse(message.split("\n").find(line => line.startsWith("C2C_REQUEST "))!.slice("C2C_REQUEST ".length));
     return { ...request, status: "PASS", complete: true, summary: "MCP audit complete", findings: [], ...patch };
   };
-  const emit = (text: string, user = false) => { turns.push({ user, text }); wake?.(); };
+  const emit = (text: string, user = false) => { turns.push({ user, text }); };
   const reply = (patch: Record<string, unknown> = {}) => emit(`${AUDIT_START}\n${JSON.stringify(response(patch))}\n${AUDIT_END}`);
   const press = vi.fn(async () => { emit(draft, true); draft = ""; });
-  const waitFor = vi.fn();
-  function locator(filters: string[] = []) {
+  const waitFor = vi.fn(async () => { throw new Error("Blocking locator waits are unsupported"); });
+  function locator() {
     const value = {
       fill: vi.fn(async (text: string) => { draft = text; }), press,
       innerText: vi.fn(async () => draft),
-      filter: (filter: { hasText?: string }) => locator(filter.hasText ? [...filters, filter.hasText] : filters),
+      filter: () => value,
       last: () => value,
-      waitFor: (wait: { timeoutMs: number }) => {
-        waitFor(wait);
-        if (hungWait) return new Promise<void>(() => {});
-        const ready = () => turns.some(turn => !turn.user && filters.every(filter => turn.text.includes(filter)));
-        if (ready()) return Promise.resolve();
-        return new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => {
-            wake = undefined;
-            // Match the actual REPL selector error, including its foreign realm.
-            reject(selectorDeadlineMs === undefined
-              ? Object.assign(new Error(`locator.waitFor: Timeout ${wait.timeoutMs}ms exceeded.`), { name: "TimeoutError" })
-              : { name: "Error", message: 'Playwright selector deadline exceeded\nlocator.waitFor(visible) timed out for selector div:has(> h4)\nLocator diagnostics: {"kind":"no_matches"}' });
-          }, Math.min(wait.timeoutMs, selectorDeadlineMs ?? wait.timeoutMs));
-          wake = () => { if (ready()) { clearTimeout(timer); wake = undefined; resolve(); } };
-        });
-      },
+      waitFor,
     };
     return value;
   }
@@ -70,13 +56,15 @@ function browserFixture(selectorDeadlineMs?: number) {
       vi.stubGlobal("document", { querySelectorAll: () => turns.map(turn => ({
         textContent: turn.user ? "You said:" : "ChatGPT said:", nextElementSibling: { innerText: turn.text },
       })) });
+      if (hungRead) return new Promise<ReturnType<typeof fn>>(resolve => { releaseRead = () => resolve(fn(arg)); });
       return fn(arg);
     }),
   } };
   const browser = { tabs: { selected: vi.fn(async (): Promise<AuditTab | undefined> => tab) } };
   const ui: AuditUI = { composerName: "Ask ChatGPT", userHeading: "You said:", assistantHeading: "ChatGPT said:", openProjectThread: vi.fn(async () => tab) };
   return { tab, browser, ui, turns, emit, reply, response, press, waitFor,
-    draft: (text: string) => { draft = text; }, navigate: (value: string) => { url = value; }, hang: () => { hungWait = true; } };
+    draft: (text: string) => { draft = text; }, navigate: (value: string) => { url = value; },
+    hang: () => { hungRead = true; }, release: () => releaseRead?.() };
 }
 
 it("defaults to manual without touching browser or local bindings", async () => {
@@ -113,12 +101,14 @@ it("ignores stale ACKs before and after the new handoff, then returns early for 
   await session.submit(handoff);
   f.emit(`${AUDIT_START}\n${JSON.stringify(f.response({ attemptId: "old-attempt" }))}\n${AUDIT_END}`);
   f.emit("ACK PASS");
-  const waiting = session.wait();
+  expect(await session.wait()).toMatchObject({ status: "WAITING" });
   await vi.advanceTimersByTimeAsync(10);
   f.reply();
+  const waiting = session.wait();
+  await vi.advanceTimersByTimeAsync(1990);
   expect(await waiting).toMatchObject({ status: "PASS", origin: "web" });
-  expect(performance.now()).toBe(10);
-  expect(f.waitFor).toHaveBeenCalledOnce();
+  expect(performance.now()).toBe(2000);
+  expect(f.waitFor).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -134,37 +124,41 @@ it.each([
 it("stops immediately on a correlated MCP error without retrying or sending again", async () => {
   const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
   await session.submit(handoff);
-  const waiting = session.wait();
-  await vi.advanceTimersByTimeAsync(1);
   f.reply({ status: "ERROR", summary: "workspace_info: TimeoutError" });
+  const waiting = session.wait();
   expect(await waiting).toMatchObject({ status: "ERROR", origin: "web", summary: "workspace_info: TimeoutError" });
   await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
   expect(f.press).toHaveBeenCalledOnce();
-  expect(f.waitFor).toHaveBeenCalledOnce();
-  expect(performance.now()).toBe(1);
+  expect(f.waitFor).not.toHaveBeenCalled();
+  expect(performance.now()).toBe(0);
 });
 
 it("does not treat a partial frame as complete and keeps the original hard deadline across wait slices", async () => {
   const f = browserFixture(), session = (await startAsyncC2C({ ...options, timeoutMs: 2500 }, f.browser, f.ui))!;
   await session.submit(handoff);
   f.emit(`${AUDIT_START}\n${JSON.stringify(f.response())}`);
-  const first = session.wait(1000);
+  expect(await session.wait(1000)).toMatchObject({ status: "WAITING", remainingMs: 2500 });
+  const paced = session.wait(1000);
   await vi.advanceTimersByTimeAsync(1000);
-  expect(await first).toMatchObject({ status: "WAITING", remainingMs: 1500 });
+  expect(await paced).toMatchObject({ status: "WAITING", remainingMs: 1500 });
   const last = session.wait(2000);
-  await vi.advanceTimersByTimeAsync(1500);
-  expect(await last).toMatchObject({ status: "ERROR", summary: "ASYNC_TIMEOUT" });
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(await last).toMatchObject({ status: "WAITING", remainingMs: 500 });
+  const expired = session.wait();
+  await vi.advanceTimersByTimeAsync(500);
+  expect(await expired).toMatchObject({ status: "ERROR", summary: "ASYNC_TIMEOUT" });
   f.reply();
   expect(await session.wait()).toMatchObject({ status: "ERROR", summary: "ASYNC_TIMEOUT" });
 });
 
-it("bounds a hung upstream locator independently of its own timeout implementation", async () => {
+it("bounds a hung DOM read independently of its own timeout implementation", async () => {
   const f = browserFixture(), session = (await startAsyncC2C({ ...options, timeoutMs: 50 }, f.browser, f.ui))!;
   await session.submit(handoff); f.hang();
   const waiting = session.wait();
   await vi.advanceTimersByTimeAsync(50);
   expect(await waiting).toMatchObject({ status: "ERROR", summary: expect.stringContaining("ASYNC_WAIT_UNAVAILABLE") });
-  expect(f.waitFor).toHaveBeenCalledOnce();
+  expect(f.tab.playwright.evaluate).toHaveBeenCalledTimes(2);
+  expect(f.waitFor).not.toHaveBeenCalled();
 });
 
 it("rejects replies arriving after the hard deadline even when the browser has not been polled", async () => {
@@ -239,7 +233,7 @@ it("stops on browser errors without blind retry and preserves a user's draft", a
   expect(f.press).not.toHaveBeenCalled();
   const g = browserFixture(), other = (await startAsyncC2C({ ...options, taskId: "disconnected-task" }, g.browser, g.ui))!;
   await other.submit(handoff);
-  vi.mocked(g.tab.playwright.locator).mockImplementation(() => { throw new Error("Browser disconnected"); });
+  vi.mocked(g.tab.playwright.evaluate).mockRejectedValue(new Error("Browser disconnected"));
   expect(await other.wait()).toMatchObject({ status: "ERROR", summary: "Browser disconnected" });
   expect(g.ui.openProjectThread).not.toHaveBeenCalled();
 });
@@ -270,70 +264,87 @@ it("treats BLOCKED as terminal and disallows overlapping submissions", async () 
   await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
 });
 
-it.each([undefined, 5_000])("waits sequentially below the browser deadline (%s) before WAITING, then accepts a completed response", async deadline => {
-  const f = browserFixture(deadline), session = (await startAsyncC2C(options, f.browser, f.ui))!;
-  await session.submit(handoff);
-  const waiting = session.wait();
-  await vi.advanceTimersByTimeAsync(2_000);
-  await expect(session.wait()).rejects.toThrow("ASYNC_BUSY");
-  expect(f.waitFor).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(43_000);
-  expect(await waiting).toEqual({ status: "WAITING", remainingMs: 135_000 });
-  expect(f.waitFor).toHaveBeenCalledTimes(23);
-  expect(f.waitFor.mock.calls.every(([wait]) => wait.timeoutMs > 0 && wait.timeoutMs <= 2_000)).toBe(true);
-  const completed = session.wait();
-  await vi.advanceTimersByTimeAsync(100); f.reply();
-  expect(await completed).toMatchObject({ status: "PASS", origin: "web" });
-  expect(performance.now()).toBe(45_100);
-  expect(f.waitFor).toHaveBeenCalledTimes(24);
-  expect(f.press).toHaveBeenCalledOnce();
-});
-
-it.each([0, 1_999, 2_000])("fails closed on an RPC TimeoutError after %i ms", async elapsed => {
+it("uses one targeted DOM read per call and accepts a delayed terminal response after WAITING on the same handle", async () => {
   const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
   await session.submit(handoff);
-  const candidate = f.tab.playwright.locator("div:has(> h4)");
-  let started!: () => void;
-  const ready = new Promise<void>(resolve => { started = resolve; });
-  const premature = vi.fn(() => new Promise<void>((_, reject) => {
-    setTimeout(() => reject(Object.assign(new Error("RPC deadline exceeded"), { name: "TimeoutError" })), elapsed);
-    started();
-  }));
-  candidate.waitFor = premature;
-  candidate.filter = () => candidate;
-  candidate.last = () => candidate;
-  vi.mocked(f.tab.playwright.locator).mockReturnValue(candidate);
-  const waiting = session.wait(); await ready; await vi.advanceTimersByTimeAsync(elapsed);
-  expect(await waiting).toMatchObject({ status: "ERROR", summary: elapsed < 2_000 ? "ASYNC_PREMATURE_BROWSER_TIMEOUT" : expect.stringContaining("ASYNC_WAIT_UNAVAILABLE") });
-  f.reply(); expect(await session.wait()).toMatchObject({ status: "ERROR" });
-  await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
-  expect(premature).toHaveBeenCalledOnce();
-});
-
-it.each([0, 1_000, 1_999])("makes a premature selector deadline terminal after %i ms without retrying", async elapsed => {
-  const f = browserFixture(elapsed), session = (await startAsyncC2C(options, f.browser, f.ui))!;
-  await session.submit(handoff);
-  const waiting = session.wait();
-  await vi.advanceTimersByTimeAsync(elapsed);
-  expect(await waiting).toMatchObject({ status: "ERROR", summary: "ASYNC_PREMATURE_BROWSER_TIMEOUT" });
+  const request = f.response();
+  f.emit(`${AUDIT_START}\n${JSON.stringify(request)}`);
+  expect(await session.wait()).toEqual({ status: "WAITING", remainingMs: 180_000 });
+  expect(f.tab.playwright.evaluate).toHaveBeenCalledTimes(2); // Submission baseline plus one check.
+  expect(vi.mocked(f.tab.playwright.evaluate).mock.calls[1][2]).toEqual({ timeoutMs: 2000 });
+  const completed = session.wait();
+  await vi.advanceTimersByTimeAsync(1500);
+  await expect(session.wait()).rejects.toThrow("ASYNC_BUSY");
+  expect(f.tab.playwright.evaluate).toHaveBeenCalledTimes(2); // Pacing holds no browser operation.
   f.reply();
-  expect(await session.wait()).toMatchObject({ status: "ERROR", summary: "ASYNC_PREMATURE_BROWSER_TIMEOUT" });
-  await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
-  expect(f.waitFor).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(500);
+  expect(await completed).toMatchObject({ status: "PASS", origin: "web", taskId: request.taskId, attemptId: request.attemptId, handoffId: request.handoffId });
+  expect(performance.now()).toBe(2000);
+  expect(f.tab.playwright.evaluate).toHaveBeenCalledTimes(3);
+  expect(f.tab.playwright.locator).not.toHaveBeenCalled();
+  expect(f.waitFor).not.toHaveBeenCalled();
   expect(f.press).toHaveBeenCalledOnce();
 });
 
-it("keeps an unresolved wait exclusive, then makes watchdog expiration terminal", async () => {
+it.each(["foreign Error", "record", "string"])("preserves the observed CDP transport failure across realms (%s) and stops without retry", async kind => {
+  const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  await session.submit(handoff);
+  const message = 'Timed out after 2000ms waiting for selector div:has(> h4): Timed out running CDP command "Runtime.evaluate" for tab 1\nlocator.waitFor(visible) timed out for selector div:has(> h4)\nLocator diagnostics: {"kind":"no_matches"}';
+  const error = kind === "foreign Error" ? vm.runInNewContext("new Error(message)", { message }) : kind === "record" ? { name: "Error", message } : message;
+  vi.mocked(f.tab.playwright.evaluate).mockRejectedValue(error);
+  expect(await session.wait()).toMatchObject({ status: "ERROR", origin: "local", summary: message });
+  const calls = vi.mocked(f.tab.playwright.evaluate).mock.calls.length;
+  f.reply(); expect(await session.wait()).toMatchObject({ status: "ERROR", summary: message });
+  await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
+  expect(f.tab.playwright.evaluate).toHaveBeenCalledTimes(calls);
+  expect(f.waitFor).not.toHaveBeenCalled();
+  expect(f.press).toHaveBeenCalledOnce();
+});
+
+it("preserves cross-realm errors from URL checks", async () => {
+  const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  await session.submit(handoff);
+  const error = vm.runInNewContext('new Error("CDP transport disconnected")');
+  vi.mocked(f.tab.url).mockRejectedValue(error);
+  expect(await session.wait()).toMatchObject({ status: "ERROR", summary: "CDP transport disconnected" });
+  expect(f.press).toHaveBeenCalledOnce();
+});
+
+it("keeps an unresolved DOM read exclusive, then makes watchdog expiration terminal even if it later settles", async () => {
   const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
   await session.submit(handoff); f.hang();
   const waiting = session.wait();
-  await vi.advanceTimersByTimeAsync(2_000);
+  await vi.advanceTimersByTimeAsync(1_999);
   await expect(session.wait()).rejects.toThrow("ASYNC_BUSY");
-  await vi.advanceTimersByTimeAsync(1000);
+  await vi.advanceTimersByTimeAsync(1);
   expect(await waiting).toMatchObject({ status: "ERROR", summary: expect.stringContaining("ASYNC_WAIT_UNAVAILABLE") });
-  f.reply(); expect(await session.wait()).toMatchObject({ status: "ERROR" });
+  f.reply(); f.release();
+  expect(await session.wait()).toMatchObject({ status: "ERROR" });
   await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
-  expect(f.waitFor).toHaveBeenCalledOnce();
+  expect(f.tab.playwright.evaluate).toHaveBeenCalledTimes(2);
+  expect(f.waitFor).not.toHaveBeenCalled();
+});
+
+it("clips all browser operations to one short call budget without accepting a late result", async () => {
+  const f = browserFixture(), session = (await startAsyncC2C(options, f.browser, f.ui))!;
+  await session.submit(handoff); f.reply();
+  const evaluate = vi.mocked(f.tab.playwright.evaluate).getMockImplementation()!;
+  vi.mocked(f.tab.url).mockImplementation(async () => {
+    await new Promise(resolve => setTimeout(resolve, 1500)); return threadUrl;
+  });
+  vi.mocked(f.tab.playwright.evaluate).mockImplementation(async (...args) => {
+    await new Promise(resolve => setTimeout(resolve, 1500)); return evaluate(...args);
+  });
+  const waiting = session.wait(4000);
+  await vi.advanceTimersByTimeAsync(3999);
+  await expect(session.wait()).rejects.toThrow("ASYNC_BUSY");
+  await vi.advanceTimersByTimeAsync(1);
+  expect(await waiting).toMatchObject({ status: "ERROR", summary: expect.stringContaining("ASYNC_WAIT_UNAVAILABLE") });
+  const calls = vi.mocked(f.tab.url).mock.calls.length;
+  await vi.advanceTimersByTimeAsync(500);
+  expect(await session.wait()).toMatchObject({ status: "ERROR" });
+  expect(f.tab.url).toHaveBeenCalledTimes(calls);
+  expect(f.press).toHaveBeenCalledOnce();
 });
 
 it("rejects tiny caller-controlled slices instead of enabling rapid WAITING loops", async () => {
