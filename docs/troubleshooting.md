@@ -65,7 +65,7 @@ are one-time use.
 
 For changed UI navigation, use [UI recovery](../skill/references/operations.md#chatgpt-ui-recovery).
 For stale catalogs or reauthorization, complete the Skill's
-[verification and binding](../skill/SKILL.md#verification-and-binding) using actual
+[verification and binding](../skill/references/setup.md#verification-and-binding) using actual
 MCP evidence. A local health check does not clear the pending binding.
 
 ### Audit callback reports `INSUFFICIENT_SCOPE`
@@ -73,7 +73,7 @@ MCP evidence. A local health check does not clear the pending binding.
 Existing tokens keep their consented scopes; refreshing tokens or the tool catalog
 does not add permissions. Reauthorize the existing connection once with the
 [complete consent bundle](security.md#token--scope-design), then repeat the
-Skill's [permission verification](../skill/SKILL.md#verification-and-binding).
+Skill's [permission verification](../skill/references/setup.md#verification-and-binding).
 Missing consent permissions block readiness. Preserve the Hub, connector and
 tunnel; never edit OAuth URLs or token state to bypass consent.
 

@@ -62,7 +62,7 @@ Endpoint state separates desired settings from the verified ChatGPT binding:
 | `connectorName`, `boundMcpUrl`, `connectorId` | Verified plugin binding |
 | `bindingVersion: 1` | Explicit desired/bound state format |
 
-Follow the Skill's [verification and binding](../skill/SKILL.md#verification-and-binding)
+Follow the Skill's [verification and binding](../skill/references/setup.md#verification-and-binding)
 for exact plugin identity, complete permission checks and `connector bind`.
 The acknowledgement rejects stale name/URL/workspace values. Setup and doctor
 do not advance binding fields; local health does not prove a ChatGPT binding.

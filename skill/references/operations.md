@@ -47,7 +47,7 @@ auto-remove locks by age or kill an unverified PID.
 
 ## ChatGPT UI recovery
 
-For a stale catalog, follow [Verification and binding](../SKILL.md#verification-and-binding).
+For a stale catalog, follow [Verification and binding](setup.md#verification-and-binding).
 Reuse the exact connector and existing Project binding when applicable, in the
 same in-app browser tab. Do not persist a chat pointer, send a task handoff or
 repeatedly message a stale conversation.

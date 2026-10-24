@@ -16,11 +16,19 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm build
 ```
 
-Copy the whole `skill/` directory, including `references/`, into
-`<codex-home>/skills/codex-with-chatgpt/`. Codex home is a non-empty `CODEX_HOME`,
-otherwise `~/.codex` on Unix or `%USERPROFILE%\.codex` on Windows. Replace
-`<ACTUAL_CHECKOUT_PATH>` in the installed `SKILL.md` with this checkout's path.
-Run `node <checkout>/bin/c2c.js <command>`, or `c2c` when linked.
+Copy the whole `skill/` directory, including `references/`, to one
+[host-supported discovery location](https://learn.chatgpt.com/docs/build-skills),
+for example `~/.agents/skills/codex-with-chatgpt/` for user scope. Replace
+`<ACTUAL_CHECKOUT_PATH>` in the installed `SKILL.md` with this checkout's absolute
+path. Run `node "<checkout>/bin/c2c.js" <command>`, or `c2c` when linked.
+
+For an explicit Skill update, inspect existing discovery roots and replace the
+complete directory at the selected installation, then reapply its checkout
+binding. Existing supported legacy/custom installations (including a host's
+`<codex-home>/skills/`) should be updated in place; do not spread the same Skill
+across discovery roots or automatically delete/migrate old copies. Start a new
+session to verify the updated Skill. Runtime updates remain a separate explicit
+[lifecycle operation](skill/references/setup.md#lifecycle-and-explicit-updates).
 
 ## Quick setup
 

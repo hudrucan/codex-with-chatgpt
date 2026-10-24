@@ -3,7 +3,8 @@
 Read this reference only when the user explicitly requests destruction or
 cleanup of the Hub's connection/resources. The procedure is experimental;
 report partial results and concrete blockers rather than claiming completion.
-Disconnect retains resources and stays in SKILL.md. Setup, doctor and repair
+Disconnect retains resources; see
+[lifecycle](setup.md#lifecycle-and-explicit-updates). Setup, doctor and repair
 do not authorize deprovisioning. An authorized rename/rebind may replace its
 owned connector under the normal transaction without destroying the Hub.
 

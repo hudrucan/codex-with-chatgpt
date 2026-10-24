@@ -12,6 +12,13 @@ it("keeps host/mode guidance reachable inside a standalone installed Skill", () 
   try {
     const installed = path.join(temp, "codex-with-chatgpt");
     fs.cpSync(path.join(root, "skill"), installed, { recursive: true });
+    const manifest = path.join(installed, "SKILL.md");
+    const checkout = path.join(temp, "checkout with spaces");
+    fs.mkdirSync(checkout);
+    const original = fs.readFileSync(manifest, "utf8");
+    expect(original.match(/<ACTUAL_CHECKOUT_PATH>/g)).toHaveLength(1);
+    fs.writeFileSync(manifest, original.replace("<ACTUAL_CHECKOUT_PATH>", checkout));
+    expect(fs.readFileSync(manifest, "utf8")).toContain(`Checkout: \`${checkout}\``);
     const visit = (directory: string) => {
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         const source = path.join(directory, entry.name);
@@ -32,6 +39,17 @@ it("keeps host/mode guidance reachable inside a standalone installed Skill", () 
       }
     };
     visit(installed);
+    // Procedures remain reachable after installation without eagerly loading setup for handoffs.
+    const entry = fs.readFileSync(manifest, "utf8");
+    const localTargets = [...entry.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)].map(([, target]) => target);
+    expect(localTargets).toEqual(expect.arrayContaining([
+      "references/setup.md", "references/workflow.md", "references/workflow-web.md", "references/workflow-async.md",
+    ]));
+    expect(entry).not.toContain("c2c setup -w");
+    expect(entry).not.toContain("c2c connector bind --name");
+    const setup = fs.readFileSync(path.join(installed, "references/setup.md"), "utf8");
+    expect(setup).toContain("c2c setup -w");
+    expect(setup).toContain("c2c connector bind --name");
     const common = guidance("references/workflow.md");
     expect(common).toContain("works without Lazier");
     expect(common).toContain("workflow-web.md");
@@ -40,6 +58,23 @@ it("keeps host/mode guidance reachable inside a standalone installed Skill", () 
     expect(common).not.toContain("callback register");
     expect(guidance("references/workflow-web.md")).not.toContain("createBrowserSender");
   } finally { cleanup(temp); }
+});
+
+it("keeps repository backlinks valid after moving connection procedures", () => {
+  for (const name of ["docs/lifecycle.md", "docs/troubleshooting.md", "README.md"]) {
+    const source = path.join(root, name);
+    for (const [, target] of fs.readFileSync(source, "utf8").matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+      if (target.includes("://") || target.startsWith("#")) continue;
+      const [file, fragment] = target.split("#");
+      const resolved = path.resolve(path.dirname(source), file);
+      expect(fs.statSync(resolved).isFile(), target).toBe(true);
+      if (fragment) {
+        const headings = [...fs.readFileSync(resolved, "utf8").matchAll(/^#+ (.+)$/gm)]
+          .map(([, heading]) => heading.toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, "").replace(/ /g, "-"));
+        expect(headings, target).toContain(fragment);
+      }
+    }
+  }
 });
 
 it("preserves marker, routing, context and concise handoff boundaries", () => {
