@@ -9,7 +9,7 @@ import { callbackLocal } from "../../src/c2c/callback-client.js";
 import type { CallbackTicket } from "../../src/c2c/protocol.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { Logger } from "../../src/logger/index.js";
-import { fixtureHub, cleanup, isolateStateDir, makeTmpDir } from "../helpers.js";
+import { fixtureHub, cleanup, isolateStateDir, makeTmpDir, pkceVerifierAndChallenge } from "../helpers.js";
 
 let state: string, root: string, bridge: Bridge, client: Client, workspaceId: string;
 const result = { status: "PASS", complete: true, summary: "Local MCP callback verified", findings: [] };
@@ -40,12 +40,27 @@ function submit(ticket: CallbackTicket, payload: unknown = result, caller = clie
 }
 
 it("registers an attempt, receives its OAuth MCP callback through one local event wait, and deduplicates exact results", async () => {
-  const ticket = await register();
-  const tools = (await client.listTools()).tools;
+  const token = bridge.authStore.issueTokens({ clientId: "metadata-test", scopes: ["workspace.read"] }).accessToken;
+  // Inspect the wire descriptor; SDK response parsing can strip extension fields.
+  const listed = await fetch(`${bridge.localBaseUrl()}/mcp`, { method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json",
+      accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) });
+  expect(listed.status).toBe(200);
+  const { result: { tools } } = await listed.json() as { result: { tools: Array<{
+    name: string; annotations?: unknown; securitySchemes?: unknown; _meta?: { securitySchemes?: unknown };
+  }> } };
   expect(tools).toHaveLength(11);
   expect(tools.find(t => t.name === "submit_audit_result")?.annotations).toMatchObject({
     readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false,
   });
+  expect(tools.find(t => t.name === "submit_audit_result")?._meta?.securitySchemes).toEqual([
+    { type: "oauth2", scopes: ["audit.submit"] },
+  ]);
+  expect(tools.find(t => t.name === "submit_audit_result")?.securitySchemes).toEqual([
+    { type: "oauth2", scopes: ["audit.submit"] },
+  ]);
+  const ticket = await register();
   let received = false;
   const waiting = callbackLocal("wait", ticket).then(value => { received = true; return value; });
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -81,6 +96,72 @@ it("requires OAuth and audit.submit without broadening a repository-read token",
     expect(unauthenticated.status).toBe(401);
     expect((await submit(ticket)).isError).not.toBe(true);
   } finally { await reader.close(); }
+});
+
+it.each([false, true])("preserves explicit audit consent (%s) through OAuth issuance, refresh and MCP callbacks", async consent => {
+  const base = bridge.localBaseUrl(), redirectUri = "http://127.0.0.1:19999/callback";
+  const metadata = await (await fetch(`${base}/.well-known/oauth-protected-resource/mcp`)).json();
+  expect(metadata.scopes_supported).toContain("audit.submit");
+  const registration = await fetch(`${base}/oauth/register`, { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "oauth-callback-test", redirect_uris: [redirectUri] }) });
+  expect(registration.status).toBe(201);
+  const { client_id: clientId } = await registration.json() as { client_id: string };
+  const { verifier, challenge } = pkceVerifierAndChallenge();
+  const scopes = ["workspace.read", "workspace.search", "git.read", "offline_access", ...(consent ? ["audit.submit"] : [])];
+  const authorize = new URL(`${base}/oauth/authorize`);
+  authorize.search = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri,
+    response_type: "code", code_challenge: challenge, code_challenge_method: "S256",
+    ...(consent ? { scope: scopes.join(" ") } : {}) }).toString();
+  const page = await fetch(authorize, { redirect: "manual" });
+  expect(page.status).toBe(200);
+  const html = await page.text();
+  expect(html.includes("Submit terminal C2C audit results to pending in-memory inboxes")).toBe(consent);
+  const requestId = html.match(/name="request_id" value="([a-f0-9]+)"/)?.[1];
+  expect(requestId).toBeDefined();
+  const approved = await fetch(`${base}/oauth/authorize`, { method: "POST", redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ request_id: requestId!, pairing_code: bridge.pairing.create().code }) });
+  expect(approved.status).toBe(302);
+  const code = new URL(approved.headers.get("location")!).searchParams.get("code")!;
+  const issued = await fetch(`${base}/oauth/token`, { method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", client_id: clientId,
+      redirect_uri: redirectUri, code, code_verifier: verifier }) });
+  expect(issued.status).toBe(200);
+  const initial = await issued.json() as { access_token: string; refresh_token: string; scope: string };
+  // Requesting an additional scope during refresh cannot substitute for new consent.
+  const refresh = await fetch(`${base}/oauth/token`, { method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", client_id: clientId,
+      refresh_token: initial.refresh_token, scope: [...scopes, "audit.submit"].join(" ") }) });
+  expect(refresh.status).toBe(200);
+  const rotated = await refresh.json() as typeof initial;
+  for (const token of [initial, rotated]) {
+    expect(token.scope.split(" ")).toEqual(scopes);
+    const caller = new Client({ name: "oauth-callback-test", version: "1" });
+    await caller.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${token.access_token}` } },
+    }));
+    try {
+      expect((await caller.callTool({ name: "workspace_info", arguments: { workspace: workspaceId } })).isError).not.toBe(true);
+      const ticket = await register();
+      const callback = await submit(ticket, result, caller);
+      if (consent) {
+        expect(callback.structuredContent).toEqual({ accepted: true });
+        expect(await callbackLocal("wait", ticket)).toEqual(result);
+      } else {
+        expect(callback.isError).toBe(true);
+        expect(JSON.stringify(callback.content)).toContain("INSUFFICIENT_SCOPE");
+        expect(callback._meta?.["mcp/www_authenticate"]).toEqual([
+          'Bearer error="insufficient_scope", error_description="Reconnect and explicitly grant audit.submit to submit C2C audit results.", scope="audit.submit"',
+        ]);
+        // A denied submission must leave the attempt pending for an authorized caller.
+        expect((await submit(ticket)).structuredContent).toEqual({ accepted: true });
+        expect(await callbackLocal("wait", ticket)).toEqual(result);
+      }
+    } finally { await caller.close(); }
+  }
 });
 
 it("rejects callbacks after workspace grant removal and protects local endpoints from remote callers", async () => {

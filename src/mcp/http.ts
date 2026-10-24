@@ -58,6 +58,18 @@ export function createMcpHttpHandler(makeServer: () => McpServer, logger: Logger
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
+    // SDK 1.30.0 emits only _meta; ChatGPT also needs the tool-level auth declaration.
+    if (req.body?.method === "tools/list") {
+      const send = transport.send.bind(transport);
+      transport.send = async (message, options) => {
+        if ("result" in message && Array.isArray(message.result.tools)) {
+          message = { ...message, result: { ...message.result, tools: message.result.tools.map(tool =>
+            Array.isArray(tool._meta?.securitySchemes)
+              ? { ...tool, securitySchemes: tool._meta.securitySchemes } : tool) } };
+        }
+        return send(message, options);
+      };
+    }
     res.on("close", () => {
       void transport.close();
       void server.close();

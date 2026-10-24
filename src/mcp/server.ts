@@ -496,11 +496,14 @@ export function createMcpServer(ctx: McpContext): McpServer {
     description: "Submit one terminal audit result for an explicitly pending C2C attempt. Requires audit.submit OAuth scope and its short-lived capability. Changes only the Hub's in-memory inbox; never executes commands or writes repository files.",
     inputSchema: { ...callbackTicketSchema.shape, result: auditPayloadSchema },
     outputSchema: { accepted: z.literal(true) },
+    _meta: { securitySchemes: [{ type: "oauth2", scopes: ["audit.submit"] }] },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args, extra) => {
     if (!extra.authInfo) return fail("AUTHENTICATION_REQUIRED", "OAuth authentication is required for audit callbacks.");
     const denied = requireScope(extra.authInfo, "audit.submit");
-    if (denied) return denied;
+    if (denied) return { ...denied, _meta: { "mcp/www_authenticate": [
+      'Bearer error="insufficient_scope", error_description="Reconnect and explicitly grant audit.submit to submit C2C audit results.", scope="audit.submit"',
+    ] } };
     try {
       if (args.hubId !== ctx.hubId) throw new AuditInboxError("ASYNC_CALLBACK_OWNER_MISMATCH");
       registry.resolve(args.workspaceId);
