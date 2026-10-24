@@ -34,15 +34,20 @@ export async function createBrowserSender(browser: Browser, ui: SendUI, resolveP
   const selected = tab!;
   const used = new Set<string>();
   let stopped = false;
-  const assertThread = async () => {
+  const assertThread = async (allowPending = false) => {
     const value = await selected.url(), current = thread(value);
     if (identity) {
       if (current !== identity) throw new Error("ASYNC_THREAD_CHANGED");
     } else if (projectUrl) {
-      const path = value && new URL(value).pathname;
+      const url = value && new URL(value), path = url && url.pathname;
       if (current && (path?.startsWith(`/g/${projectPath}-`) || path?.startsWith(`/g/${projectPath}/`))) identity = current;
-      else if (value !== projectUrl) throw new Error("ASYNC_PROJECT_MISMATCH");
+      else if (value !== projectUrl) {
+        const pending = path && path.match(/^\/(?:g\/(g-p-[a-f0-9]{32})(?:-[a-z0-9-]+)?\/)?c\/local-chatgpt%3A[a-f0-9-]+\/?$/);
+        if (!allowPending || !url || url.origin !== "https://chatgpt.com" || url.search || url.hash || url.username || url.password ||
+            !pending || (pending[1] && pending[1] !== projectPath)) throw new Error("ASYNC_PROJECT_MISMATCH");
+      }
     }
+    return !!identity;
   };
   await assertThread();
   return {
@@ -52,17 +57,22 @@ export async function createBrowserSender(browser: Browser, ui: SendUI, resolveP
       used.add(request.attemptId); stopped = true;
       if (!Number.isFinite(request.expiresAt) || !Number.isFinite(request.remainingMs)) throw new Error("ASYNC_TIMEOUT");
       const deadline = performance.now() + Math.min(request.remainingMs, request.expiresAt - Date.now());
-      const check = async () => {
-        if (performance.now() >= deadline) throw new Error("ASYNC_TIMEOUT");
-        await assertThread();
-        if (performance.now() >= deadline) throw new Error("ASYNC_TIMEOUT");
+      const check = async (allowPending = false, limit = deadline) => {
+        if (performance.now() >= limit) throw new Error("ASYNC_TIMEOUT");
+        const ready = await assertThread(allowPending);
+        if (performance.now() >= limit) throw new Error("ASYNC_TIMEOUT");
+        return ready;
       };
       await check();
       const composer = selected.playwright.getByRole("textbox", { name: ui.composerName, exact: true });
       if ((await composer.innerText()).trim()) throw new Error("ASYNC_DRAFT_PRESENT");
       await check(); await composer.fill(request.message);
       await check(); await composer.press("Enter");
-      await check();
+      // ChatGPT may publish a local URL before assigning the Project conversation ID.
+      const navigationDeadline = Math.min(deadline, performance.now() + 10_000);
+      while (!await check(true, navigationDeadline)) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(100, navigationDeadline - performance.now())));
+      }
       stopped = false;
       return { attemptId: request.attemptId, sent: true };
     },

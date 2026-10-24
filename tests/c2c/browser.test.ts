@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createBrowserSender, type SendTab } from "../../src/c2c/browser.js";
 
 const projectBase = `https://chatgpt.com/g/g-p-${"a".repeat(32)}-test`;
@@ -6,7 +6,11 @@ const project = `${projectBase}/project`;
 const conversation = `${projectBase}/c/12345678-abcd`;
 function fixture(initial = conversation) {
   let url = initial, draft = "", failPress = false;
-  const press = vi.fn(async () => { if (failPress) throw new Error("connection lost after keypress"); draft = ""; });
+  const press = vi.fn(async () => {
+    if (failPress) throw new Error("connection lost after keypress");
+    draft = "";
+    url = url.replace(/\/project\/?$/, "/c/12345678-abcd");
+  });
   const fill = vi.fn(async (value: string) => { draft = value; });
   const tab: SendTab = { id: "selected", url: async () => url,
     playwright: { getByRole: () => ({ innerText: async () => draft, fill, press }) } };
@@ -14,6 +18,7 @@ function fixture(initial = conversation) {
     draft: (value: string) => { draft = value; }, fail: () => { failPress = true; } };
 }
 const request = { attemptId: "one", message: "handoff with callback ticket", remainingMs: 1000, expiresAt: Date.now() + 60_000 };
+afterEach(() => { vi.useRealTimers(); });
 
 it.each([conversation, "https://chatgpt.com/c/12345678-abcd"])("trusts the selected thread %s without Hub/Project resolution", async url => {
   const f = fixture(url), resolve = vi.fn(async () => { throw new Error("must not resolve"); });
@@ -75,4 +80,70 @@ it.each(["uncertain", "draft", "thread", "timeout", "expired envelope"])("stops 
     expiresAt: kind === "expired envelope" ? Date.now() - 1 : request.expiresAt })).rejects.toThrow();
   await expect(sender.send({ ...request, attemptId: "new" })).rejects.toThrow("ASYNC_SEND_TERMINAL");
   expect(f.press).toHaveBeenCalledTimes(kind === "uncertain" ? 1 : 0);
+});
+
+const localConversation = `${projectBase}/c/local-chatgpt%3Ae8af3401-76ec-4f63-b875-af2295a87db8`;
+
+it.each([localConversation, localConversation.replace(projectBase, "https://chatgpt.com"), project])(
+  "waits for the same Project conversation after transient navigation to %s without double-send", async transient => {
+    vi.useFakeTimers();
+    const f = fixture(project);
+    f.press.mockImplementation(async () => {
+      f.navigate(transient);
+      setTimeout(() => f.navigate(conversation), 250);
+    });
+    const sender = await createBrowserSender({ tabs: { selected: async () => f.tab } },
+      { composerName: "Observed composer", openProjectThread: async () => f.tab }, async () => project);
+    const sending = sender.send({ ...request, expiresAt: Date.now() + 1000 });
+    await expect(sender.send({ ...request, attemptId: "concurrent" })).rejects.toThrow("ASYNC_SEND_TERMINAL");
+    let sent = false;
+    void sending.then(() => { sent = true; });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(sent).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(sending).resolves.toEqual({ attemptId: "one", sent: true });
+    await expect(sender.send(request)).rejects.toThrow("ASYNC_SEND_TERMINAL");
+    expect(f.press).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each([
+  { remainingMs: 50, expiresIn: 60_000, timeout: 50, destination: localConversation },
+  { remainingMs: 60_000, expiresIn: 50, timeout: 50, destination: localConversation },
+  { remainingMs: 60_000, expiresIn: 60_000, timeout: 10_000, destination: localConversation },
+  { remainingMs: 60_000, expiresIn: 60_000, timeout: 10_000, destination: project },
+])("times out unresolved cold-path navigation within $timeout ms", async ({ remainingMs, expiresIn, timeout, destination }) => {
+  vi.useFakeTimers();
+  const f = fixture(project);
+  f.press.mockImplementation(async () => { f.navigate(destination); });
+  const sender = await createBrowserSender({ tabs: { selected: async () => f.tab } },
+    { composerName: "Observed composer", openProjectThread: async () => f.tab }, async () => project);
+  const sending = expect(sender.send({ ...request, remainingMs, expiresAt: Date.now() + expiresIn })).rejects.toThrow("ASYNC_TIMEOUT");
+  await vi.advanceTimersByTimeAsync(timeout);
+  await sending;
+  await expect(sender.send({ ...request, attemptId: "new" })).rejects.toThrow("ASYNC_SEND_TERMINAL");
+  expect(f.press).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  conversation.replace("a".repeat(32), "b".repeat(32)),
+  localConversation.replace("a".repeat(32), "b".repeat(32)),
+  localConversation.replace("chatgpt.com", "example.com"),
+  `${localConversation}?query=1`, `${localConversation}#fragment`,
+  localConversation.replace("chatgpt.com", "user:password@chatgpt.com"),
+  "https://chatgpt.com/c/12345678-abcd",
+])("rejects foreign or invalid navigation after a transient URL to %s", async destination => {
+  vi.useFakeTimers();
+  const f = fixture(project);
+  f.press.mockImplementation(async () => {
+    f.navigate(localConversation);
+    setTimeout(() => f.navigate(destination), 100);
+  });
+  const sender = await createBrowserSender({ tabs: { selected: async () => f.tab } },
+    { composerName: "Observed composer", openProjectThread: async () => f.tab }, async () => project);
+  const sending = expect(sender.send({ ...request, expiresAt: Date.now() + 1000 })).rejects.toThrow("ASYNC_PROJECT_MISMATCH");
+  await vi.advanceTimersByTimeAsync(100);
+  await sending;
+  await expect(sender.send({ ...request, attemptId: "new" })).rejects.toThrow("ASYNC_SEND_TERMINAL");
+  expect(f.press).toHaveBeenCalledTimes(1);
 });
