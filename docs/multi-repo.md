@@ -93,7 +93,7 @@ see [security](security.md).
 The callback requires `hubId` and the exact registered `workspaceId`, plus
 `taskId`, `attemptId`, `handoffId`, `capability` and a terminal `result`.
 It does not use the optional alias-based `workspace` selector or establish a
-current workspace. See [audit callbacks](audit-callbacks.md).
+current workspace. See the [callback boundary](security.md#audit-callbacks).
 
 `read_file` rejects files larger than **16 MiB (16,777,216 bytes)** with
 `FILE_TOO_LARGE` before scanning lines; no partial content is returned. Files

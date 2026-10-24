@@ -50,7 +50,7 @@ be overridden by it.
 ## Token & scope design
 
 Scopes: `workspace.read`, `workspace.search`, `git.read`, `audit.submit`, `offline_access`.
-Tools enforce scopes individually (`INSUFFICIENT_SCOPE`). `audit.submit` is only
+Tools enforce scopes individually. `audit.submit` is only
 granted when explicitly requested; omitted scopes retain the repository-read defaults.
 Access tokens: 1 hour. Refresh tokens: 30 days, rotated. All tokens bound to
 `hubId` and `client_id`. Explicit scope requests are intersected with
@@ -95,12 +95,6 @@ than OS-keychain-based. Raw tokens are never written anywhere. Keychain integrat
 ## MCP capability boundary
 
 Ten read-only tools expose workspace discovery and bounded repo reads.
-The additional state-changing `submit_audit_result` tool only completes an
-in-memory audit inbox. It requires OAuth with `audit.submit`, an exact registered
-workspace ID owned by this Hub, all correlation IDs and a 256-bit short-lived
-capability. Identical callbacks are idempotent until the deadline; conflicting,
-expired, cancelled or foreign callbacks fail. No callback executes commands or
-writes repository files. See [audit callbacks](audit-callbacks.md) for the local gate.
 `list_workspaces` returns aliases and IDs without local roots. The workspace
 selector accepts registered aliases or IDs, never arbitrary local roots, and
 cannot select another owner. See [multi-repo access](multi-repo.md) for tool
@@ -148,3 +142,24 @@ HTTP status, elapsed time, completion flags and known RPC/tool names. Request
 headers, arguments, tokens and repository contents are not recorded by this
 trace. Matching received/completed entries distinguish a request that reached
 the Hub from one that failed upstream.
+
+### Audit callbacks
+
+`submit_audit_result` changes only a pending in-memory inbox, never repository
+files or shell state. Its MCP annotations are non-read-only, non-destructive,
+idempotent and closed to external resources; they do not guarantee client approval.
+It requires explicit OAuth `audit.submit`, a workspace still registered to this
+Hub, matching `hubId`, `workspaceId`, `taskId`, `attemptId`, `handoffId` and a
+256-bit capability. Capabilities are hashed in memory and never logged or persisted.
+
+The Hub holds at most 64 attempts for up to 180 seconds each; callback payloads
+are limited to 16 KiB. Identical results are idempotent until expiration;
+conflicting, cancelled, expired or foreign callbacks fail. Restart loses all
+attempts. Registration, event waiting and cancellation use the loopback admin
+API, require its runtime token and reject proxy headers.
+
+Local source fingerprints cover HEAD, index and tracked/non-ignored file paths,
+modes and bytes, including deletions. Sensitive files contribute metadata only.
+Canonical workspace mismatches, unsupported paths and more than 64 MiB of readable
+content fail closed. See the [workflow](../skill/references/workflow.md#async-callback-workflow)
+for operation and retry rules.

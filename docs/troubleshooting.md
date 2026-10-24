@@ -70,36 +70,19 @@ MCP evidence. A local health check does not clear the pending binding.
 
 ### Audit callback reports `INSUFFICIENT_SCOPE`
 
-Discovery advertising `audit.submit` and a visible `submit_audit_result` tool do
-not grant that scope. Existing access/refresh tokens keep their consented scopes;
-refreshing a token or the tool catalog does not upgrade a repository-read grant.
-The callback tool declares its OAuth requirement in `securitySchemes`, mirrored
-in `_meta.securitySchemes` for compatibility, and
-returns an `insufficient_scope` challenge in `_meta["mcp/www_authenticate"]` when
-the grant is missing, so ChatGPT can request new consent. Scope checks still deny
-the call until an explicitly authorized token is presented.
+Existing tokens keep their consented scopes; refreshing tokens or the tool catalog
+does not add `audit.submit`. HTTP callbacks return 403 with a `WWW-Authenticate`
+scope challenge so the client can request additional consent.
 
-1. In ChatGPT's plugin/connector management, open the existing connection with
-   the exact saved name and MCP URL. Use its Reconnect/reauthorize action when
-   available; do not delete/recreate the connector or change its URL.
-2. The new OAuth request must explicitly include `audit.submit` alongside the
-   repository scopes still needed. On the local pairing/consent page, verify
-   **Submit terminal C2C audit results to pending in-memory inboxes** is listed.
-   If absent, stop: that request cannot authorize callbacks. Do not edit the
-   authorization URL, tokens or saved auth state to add the scope.
-3. Stop for the user to approve the additional permission. Generate a fresh
-   `c2c pair --hub <hubId> --json` code only when the form is ready. Keep the same
-   Hub, connector, tunnel and workspace registrations.
-4. After consent, verify the routed workspace through MCP. Only then start a new
-   authorized async task with a new stable task ID. E2E success requires both
-   `submit_audit_result` returning `accepted:true` and the controller terminal
-   receiving the matching callback. Never resume a lost attempt or send another
-   handoff merely to reproduce a known scope denial.
+Use the existing connection's reauthorization flow. Before approving, verify its
+consent page lists **Submit terminal C2C audit results to pending in-memory inboxes**.
+If absent, stop: that request cannot grant callbacks. Do not edit the OAuth URL or
+token state. Generate `c2c pair --hub <hubId> --json` only when the form is ready
+and stop for the user to consent. Preserve the Hub, connector and tunnel.
 
-If reconnect is unavailable or the client still requests only repository-read
-scopes, report that client-side authorization blocker and keep async disabled.
-Manual repository reads remain available. A local patch does not change the
-running Hub; deployment and any catalog refresh require separate authorization.
+After consent, verify the routed workspace through MCP and follow the
+[async workflow](../skill/references/workflow.md#async-callback-workflow).
+Until then, repository reads and manual handoffs remain available.
 
 ## Reads and image access
 

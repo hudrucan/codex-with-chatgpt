@@ -18,10 +18,8 @@ Before a task using C2C reaches its final handoff, read the local
 [handoff contract](references/workflow.md). Read only this reference, not broad
 docs or GitHub; start that handoff with `[C2C Handoff]`. Other tasks keep normal
 handoffs. Setup alone does not start a coding or audit workflow.
-An `async=true` request uses the [callback workflow](references/workflow.md#async-callback-workflow):
-one browser send per attempt, then a bounded terminal event wait. Prove loopback
-permission and runtime callback support before sending; stop if unavailable.
-Omitted `async` means `false` and keeps manual delivery.
+Explicit `async=true` uses the [callback workflow](references/workflow.md#async-callback-workflow).
+Otherwise delivery stays manual.
 
 ## Boundaries
 
@@ -33,8 +31,7 @@ Omitted `async` means `false` and keeps manual delivery.
   secrets; path filtering and length limits do not redact them.
 - `submit_audit_result` only completes a locally pending in-memory audit attempt.
   It requires explicit `audit.submit` OAuth permission and the attempt capability;
-  it cannot edit files or run commands. Callback use requires a supporting Hub
-  runtime and explicit ChatGPT OAuth consent; local tests do not prove live readiness.
+  it cannot edit files or run commands.
 - Workspace selectors are registered aliases/IDs on each call, never local
   paths or mutable current/open-workspace state. Preserve containment and
   sensitive-file policies for every repo.

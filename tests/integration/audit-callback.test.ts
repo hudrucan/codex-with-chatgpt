@@ -89,13 +89,67 @@ it.each(["hubId", "workspaceId", "taskId", "attemptId", "handoffId", "capability
 it("requires OAuth and audit.submit without broadening a repository-read token", async () => {
   const ticket = await register(), reader = await connect(["workspace.read"]);
   try {
-    expect((await submit(ticket, result, reader)).isError).toBe(true);
+    await expect(submit(ticket, result, reader)).rejects.toMatchObject({ code: 403 });
     const unauthenticated = await fetch(`${bridge.localBaseUrl()}/mcp`, { method: "POST",
       headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1,
         method: "tools/call", params: { name: "submit_audit_result", arguments: { ...ticket, result } } }) });
     expect(unauthenticated.status).toBe(401);
     expect((await submit(ticket)).isError).not.toBe(true);
   } finally { await reader.close(); }
+});
+
+it.each([{ scopes: [] }, { scopes: ["workspace.read", "offline_access"] }])("challenges insufficient callback scopes over HTTP without consuming the attempt ($scopes)", async ({ scopes }) => {
+  const ticket = await register();
+  const token = bridge.authStore.issueTokens({ clientId: "step-up-test", scopes }).accessToken;
+  const response = await fetch(`${bridge.localBaseUrl()}/mcp`, { method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json",
+      accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name: "submit_audit_result", arguments: { ...ticket, result } } }) });
+  expect(response.status).toBe(403);
+  const challenge = response.headers.get("www-authenticate");
+  expect(challenge).toContain('error="insufficient_scope"');
+  expect(challenge).toContain(`scope="${[...scopes, "audit.submit"].join(" ")}"`);
+  expect(challenge).toContain(`resource_metadata="${bridge.localBaseUrl()}/.well-known/oauth-protected-resource/mcp"`);
+  expect((await response.json()).error).toBe("insufficient_scope");
+  expect(bridge.authStore.verifyAccessToken(token)).toMatchObject({ ok: true, record: { scopes } });
+  expect((await submit(ticket)).structuredContent).toEqual({ accepted: true });
+  expect(await callbackLocal("wait", ticket)).toEqual(result);
+});
+
+it("opens explicit audit consent through the SDK step-up flow and leaves the callback pending", async () => {
+  const base = bridge.localBaseUrl(), redirectUri = "http://127.0.0.1:19999/callback";
+  const registration = await fetch(`${base}/oauth/register`, { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "step-up-test", redirect_uris: [redirectUri] }) });
+  const { client_id: clientId } = await registration.json() as { client_id: string };
+  const scopes = ["workspace.read", "offline_access"];
+  const token = bridge.authStore.issueTokens({ clientId, scopes }).accessToken;
+  const redirects: URL[] = [];
+  let verifier = "";
+  const caller = new Client({ name: "step-up-test", version: "1" });
+  await caller.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { authProvider: {
+    redirectUrl: redirectUri,
+    clientMetadata: { redirect_uris: [redirectUri], token_endpoint_auth_method: "none" },
+    clientInformation: () => ({ client_id: clientId }),
+    tokens: () => ({ access_token: token, token_type: "Bearer", scope: scopes.join(" ") }),
+    saveTokens: () => { throw new Error("Step-up must require new consent"); },
+    redirectToAuthorization: url => { redirects.push(url); },
+    saveCodeVerifier: value => { verifier = value; },
+    codeVerifier: () => verifier,
+  } }));
+  try {
+    const ticket = await register();
+    await expect(submit(ticket, result, caller)).rejects.toThrow();
+    expect(redirects).toHaveLength(1);
+    expect(redirects[0].searchParams.get("scope")).toBe([...scopes, "audit.submit"].join(" "));
+    expect(redirects[0].searchParams.get("resource")).toBe(`${base}/mcp`);
+    const consentPage = await (await fetch(redirects[0])).text();
+    expect(consentPage).toContain("Submit terminal C2C audit results to pending in-memory inboxes");
+    expect(bridge.authStore.verifyAccessToken(token)).toMatchObject({ ok: true, record: { scopes } });
+    expect((await submit(ticket)).structuredContent).toEqual({ accepted: true });
+    expect(await callbackLocal("wait", ticket)).toEqual(result);
+  } finally { await caller.close(); }
 });
 
 it.each([false, true])("preserves explicit audit consent (%s) through OAuth issuance, refresh and MCP callbacks", async consent => {
@@ -146,16 +200,12 @@ it.each([false, true])("preserves explicit audit consent (%s) through OAuth issu
     try {
       expect((await caller.callTool({ name: "workspace_info", arguments: { workspace: workspaceId } })).isError).not.toBe(true);
       const ticket = await register();
-      const callback = await submit(ticket, result, caller);
       if (consent) {
+        const callback = await submit(ticket, result, caller);
         expect(callback.structuredContent).toEqual({ accepted: true });
         expect(await callbackLocal("wait", ticket)).toEqual(result);
       } else {
-        expect(callback.isError).toBe(true);
-        expect(JSON.stringify(callback.content)).toContain("INSUFFICIENT_SCOPE");
-        expect(callback._meta?.["mcp/www_authenticate"]).toEqual([
-          'Bearer error="insufficient_scope", error_description="Reconnect and explicitly grant audit.submit to submit C2C audit results.", scope="audit.submit"',
-        ]);
+        await expect(submit(ticket, result, caller)).rejects.toMatchObject({ code: 403 });
         // A denied submission must leave the attempt pending for an authorized caller.
         expect((await submit(ticket)).structuredContent).toEqual({ accepted: true });
         expect(await callbackLocal("wait", ticket)).toEqual(result);

@@ -14,8 +14,8 @@ function fixture(initial = conversation) {
 }
 const request = { attemptId: "one", message: "handoff with callback ticket", remainingMs: 1000, expiresAt: Date.now() + 60_000 };
 
-it.each([undefined, "known-hub"])("trusts the selected thread without Hub/Project resolution (%s)", async hubId => {
-  const f = fixture(), resolve = vi.fn(async () => { throw new Error(`must not resolve ${hubId}`); });
+it("trusts the selected thread without Hub/Project resolution", async () => {
+  const f = fixture(), resolve = vi.fn(async () => { throw new Error("must not resolve"); });
   const sender = await createBrowserSender({ tabs: { selected: async () => f.tab } },
     { composerName: "Observed composer", openProjectThread: async () => { throw new Error("must not open"); } }, resolve);
   await sender.send(request);
