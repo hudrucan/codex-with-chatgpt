@@ -165,5 +165,5 @@ API, require its runtime token and reject proxy headers.
 Local source fingerprints cover HEAD, index and tracked/non-ignored file paths,
 modes and bytes, including deletions. Sensitive files contribute metadata only.
 Canonical workspace mismatches, unsupported paths and more than 64 MiB of readable
-content fail closed. See the [workflow](../skill/references/workflow.md#async-callback-workflow)
+content fail closed. See the [workflow](../skill/references/workflow-async.md)
 for operation and retry rules.

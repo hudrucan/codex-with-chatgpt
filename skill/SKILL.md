@@ -14,12 +14,12 @@ Hub connectors for repository routing by connector plus workspace ID.
 Do not persist chat URLs or start coding/planning loops, task, session or
 checkpoint orchestration during setup.
 
-Before a task using C2C reaches its final handoff, read the local
-[handoff contract](references/workflow.md). Read only this reference, not broad
-docs or GitHub; start that handoff with `[C2C Handoff]`. Other tasks keep normal
-handoffs. Setup alone does not start a coding or audit workflow.
-Explicit `async=true` uses the [callback workflow](references/workflow.md#async-callback-workflow).
-Otherwise delivery stays manual.
+For C2C tasks, read the local [common contract](references/workflow.md) and only
+its active host/mode reference. Reuse guidance already read and still valid in
+this session; no broad docs/GitHub lookup. Start the final handoff with
+`[C2C Handoff]`. Other tasks keep normal handoffs; setup alone starts no coding or
+audit workflow. Explicit `async=true` uses the [sender](references/workflow-async.md);
+otherwise delivery stays manual.
 
 ## Boundaries
 
@@ -114,7 +114,7 @@ Verify `workspace_info`, a small `read_file`, `search_workspace` and `git_status
 with the explicit registered workspace ID, without supplying repository contents.
 Verify `audit.submit` with an isolated local register → authenticated MCP
 `submit_audit_result` → terminal wait probe using the
-[callback preflight](references/workflow.md#permission-probe). This is a permission
+[callback preflight](references/workflow-async.md#permission-probe). This is a permission
 check, not a coding/audit handoff. Require `accepted:true` and the matching
 terminal receipt; never submit a fabricated or unrelated attempt.
 
