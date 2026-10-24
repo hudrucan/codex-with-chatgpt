@@ -26,8 +26,8 @@ export async function createBrowserSender(browser: Browser, ui: SendUI, resolveP
   if (!identity) {
     projectUrl = await resolveProject();
     const url = new URL(projectUrl);
-    projectPath = url.pathname.match(/^\/g\/(g-p-[a-f0-9]{32})(?:-[a-z0-9-]+)?\/?$/)?.[1];
-    if (url.origin !== "https://chatgpt.com" || !projectPath || url.search || url.hash || url.username || url.password)
+    projectPath = url.pathname.match(/^\/g\/(g-p-[a-f0-9]{32})(?:-[a-z0-9-]+)?\/project\/?$/)?.[1];
+    if (url.origin !== "https://chatgpt.com" || !projectPath || url.search || url.hash || url.username || url.password || projectUrl !== url.href)
       throw new Error("ASYNC_PROJECT_MISMATCH");
     tab = await ui.openProjectThread(projectUrl);
   }

@@ -150,6 +150,12 @@ The helper also supports one-shot `callback register`, `callback wait` and
 Use this isolated check during connection verification and before async delivery.
 It creates no task claim or coding loop. Verify the selected Hub with `c2c status
 --hub <hubId> --json` and the exact registered root/ID with `c2c workspace list`.
+One-shot `callback register`, `callback wait` and `callback cancel` read one JSON
+document through EOF, up to 4096 bytes. Prefer a pipe whose writer closes stdin
+after the document; an interactive PTY must also send EOF. A newline alone does
+not complete these commands. Keep tickets out of shell interpolation and argv.
+Only the long-lived `async` command uses JSONL with stdin kept open.
+
 Then run `node <checkout>/dist/c2c/local.mjs callback register` with JSON stdin:
 
 ```json
