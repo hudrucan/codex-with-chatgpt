@@ -34,7 +34,7 @@ Use one task-local terminal process and one in-app browser sender per workspace:
    `tty=true` to keep stdin open and official loopback approval when required.
    Keep its session ID and send JSONL through `write_stdin`, not shell interpolation
    or credentials in argv. First line:
-   `{"async":true,"hubId":"<known-hub>","workspaceId":"<id>","workspaceRoot":"<canonical-root>","taskId":"<stable-task>","timeoutMs":180000}`.
+   `{"async":true,"hubId":"<known-hub>","workspaceId":"<id>","workspaceRoot":"<canonical-root>","taskId":"<stable-task>"}`.
    `READY` validates options/source only.
 2. Send `{"operation":"submit","handoff":"[C2C Handoff]\n...","fixed":false}`.
    Success registers the attempt before claiming the task and returns `attemptId`,
@@ -64,8 +64,9 @@ Use one task-local terminal process and one in-app browser sender per workspace:
    `fixed:true` in this same process, then use the same sender and wait again.
    Stop on PASS/BLOCKED/ERROR or `canContinue:false`. Maximum: three audits/two fixes.
 
-The 180-second maximum deadline includes registration, sending and waiting; send
-acknowledgement never restarts it. Input/fix phases also expire after 180 seconds.
+The default 600-second maximum deadline includes registration, sending and waiting;
+send acknowledgement never restarts it. Optional `timeoutMs` may shorten this deadline.
+Input/fix phases expire independently after 180 seconds of idle input.
 Source drift or ownership, permission and transport failures stop the session.
 Any error or uncertainty after delivery starts consumes the sender: send
 `{"operation":"abort"}` or terminate the terminal without resending. EOF/interrupt
@@ -95,7 +96,7 @@ Only the long-lived `async` command uses JSONL with stdin kept open.
 Then run `node <checkout>/dist/c2c/local.mjs callback register` with JSON stdin:
 
 ```json
-{"hubId":"<hubId>","workspaceId":"<workspaceId>","taskId":"<probe-id>","attemptId":"<fresh-uuid>","handoffId":"<sha256-of-probe-message>","timeoutMs":180000}
+{"hubId":"<hubId>","workspaceId":"<workspaceId>","taskId":"<probe-id>","attemptId":"<fresh-uuid>","handoffId":"<sha256-of-probe-message>","timeoutMs":600000}
 ```
 
 Only after registration succeeds, ask the selected ChatGPT conversation to verify

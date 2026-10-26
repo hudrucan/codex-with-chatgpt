@@ -71,7 +71,7 @@ only `status`, `complete:true`, `summary` and `findings`:
 
 Respect schema limits: summary/evidence/fix at most 2048 characters each, file
 at most 512, at most 20 findings, complete callback at most 16,384 UTF-8 bytes.
-The attempt's maximum 180-second deadline includes registration, sending and
+The attempt's default/maximum 600-second deadline includes registration, sending and
 waiting; acknowledgement does not restart it. Missing evidence is neither a
 defect nor PASS. If the callback tool is unavailable, denied or fails, report the
 blocker and stop without retrying or substituting a chat result. Emit no legacy

@@ -156,7 +156,7 @@ It requires explicit OAuth `audit.submit`, a workspace still registered to this
 Hub, matching `hubId`, `workspaceId`, `taskId`, `attemptId`, `handoffId` and a
 256-bit capability. Capabilities are hashed in memory and never logged or persisted.
 
-The Hub holds at most 64 attempts for up to 180 seconds each; callback payloads
+The Hub holds at most 64 attempts for up to 600 seconds each; callback payloads
 are limited to 16 KiB. Identical results are idempotent until expiration;
 conflicting, cancelled, expired or foreign callbacks fail. Restart loses all
 attempts. Registration, event waiting and cancellation use the loopback admin

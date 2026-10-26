@@ -85,11 +85,34 @@ it.each(["restart", "grant removal"])("rejects automatic fixes after %s", async 
 });
 
 it("retains the original deadline across sending and rejects a late callback", async () => {
-  await session.close(); session = new AuditSession({ ...options(), timeoutMs: 100 });
-  const request = await session.submit(handoff);
-  await new Promise(resolve => setTimeout(resolve, 120));
-  await expect(session.sent(request.attemptId)).rejects.toThrow("ASYNC_TIMEOUT");
-  expect((await submit(request)).isError).toBe(true);
+  await session.close();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    session = new AuditSession({ ...options(), timeoutMs: 100 });
+    const request = await session.submit(handoff);
+    await vi.advanceTimersByTimeAsync(120);
+    await expect(session.sent(request.attemptId)).rejects.toThrow("ASYNC_TIMEOUT");
+    expect((await submit(request)).isError).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
+
+it("accepts an OAuth callback after 180 seconds with the default 600-second sender, Hub and client budget", async () => {
+  await session.close();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const transportTimeout = vi.spyOn(AbortSignal, "timeout");
+  try {
+    const { timeoutMs: _timeoutMs, ...defaults } = options();
+    session = new AuditSession(defaults);
+    expect(session.options.timeoutMs).toBe(600_000);
+    const request = await session.submit(handoff);
+    expect(request.remainingMs).toBe(600_000);
+    const waiting = session.sent(request.attemptId);
+    expect(transportTimeout).toHaveBeenCalledWith(602_000);
+    await vi.advanceTimersByTimeAsync(181_000);
+    expect((await submit(request)).structuredContent).toEqual({ accepted: true });
+    expect(await waiting).toMatchObject({ status: "PASS", canContinue: false });
+    expect((await submit(request)).structuredContent).toEqual({ accepted: true });
+  } finally { transportTimeout.mockRestore(); vi.useRealTimers(); }
 });
 
 it("does not claim or offer a message when transport capability is unavailable", async () => {

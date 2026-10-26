@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MAX_AUDIT_MS = 180_000;
+export const MAX_AUDIT_MS = 600_000;
 export const correlationSchema = z.object({
   hubId: z.string().regex(/^hub-[a-f0-9-]{36}$/),
   workspaceId: z.string().regex(/^[a-f0-9]{12}$/),

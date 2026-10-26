@@ -114,7 +114,7 @@ it("reuses only permission evidence while retaining every async attempt gate", (
     "do not extend the controller for batch work", "tty=true", "write_stdin", "READY",
     "Only then may delivery start", "complete envelope", "C2C_CALLBACK", "exactly once",
     "verifySourceForFix", "canAutoFix:true", "same process", "three audits/two fixes",
-    "180-second maximum deadline", "acknowledgement never restarts it", "Lost sessions cannot resume",
+    "600-second maximum deadline", "acknowledgement never restarts it", "180 seconds of idle input", "Lost sessions cannot resume",
     "without resending", "accepted:true", "matching result", "EPERM", "denial keeps async disabled",
     "Do not change sandbox settings", "newline alone does not complete", "explicit reauthorization",
   ]) expect(sender, requirement).toContain(requirement);

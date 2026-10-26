@@ -1,7 +1,6 @@
 import { createInterface } from "node:readline";
 import { z } from "zod";
 import { AuditSession } from "./session.js";
-import { MAX_AUDIT_MS } from "./protocol.js";
 
 const commandSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("submit"), handoff: z.string(), fixed: z.boolean().default(false) }).strict(),
@@ -11,6 +10,7 @@ const commandSchema = z.discriminatedUnion("operation", [
 ]);
 // A handoff byte can expand to six JSON characters (\u0000), plus the command envelope.
 const MAX_INPUT_BYTES = 6 * 48 * 1024 + 1024;
+const SESSION_IDLE_MS = 180_000;
 
 /** JSONL over the terminal's existing stdin/stdout; no daemon, IPC listener or persisted session. */
 export async function runSessionCommand() {
@@ -32,7 +32,7 @@ export async function runSessionCommand() {
   if (raw) process.stdin.on("data", control);
   lines.on("close", inputClosed);
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
-  timer = setTimeout(stop, MAX_AUDIT_MS);
+  timer = setTimeout(stop, SESSION_IDLE_MS);
   try {
     for await (const line of lines) {
       if (interrupted) throw new Error("ASYNC_INTERRUPTED");
@@ -56,7 +56,7 @@ export async function runSessionCommand() {
         if ("canContinue" in value && !value.canContinue) { completed = true; break; }
       }
       // Each input/fix phase is bounded as well as the Hub's original attempt deadline.
-      timer = setTimeout(stop, MAX_AUDIT_MS);
+      timer = setTimeout(stop, SESSION_IDLE_MS);
     }
     if (interrupted || !completed) throw new Error("ASYNC_INTERRUPTED");
   } finally {

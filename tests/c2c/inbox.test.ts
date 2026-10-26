@@ -8,6 +8,35 @@ const registration = () => ({ hubId, workspaceId: "0123456789ab", taskId: "budge
 const result = { status: "PASS", complete: true, summary: "Test complete", findings: [] };
 afterEach(() => vi.useRealTimers());
 
+it.each(["callback", "expiry", "cancel", "restart"])("preserves %s semantics beyond 180 seconds within the 600-second budget", async mode => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const inbox = new AuditInbox(hubId);
+  try {
+    expect(() => inbox.register({ ...registration(), timeoutMs: 600_001 })).toThrow();
+    const ticket = inbox.register({ ...registration(), timeoutMs: 600_000 });
+    const waiting = inbox.wait(ticket);
+    const outcome = mode === "callback" ? expect(waiting).resolves.toEqual(result)
+      : expect(waiting).rejects.toThrow(mode === "expiry" ? "ASYNC_TIMEOUT"
+        : mode === "cancel" ? "ASYNC_ATTEMPT_TERMINAL" : "ASYNC_INBOX_CLOSED");
+    await vi.advanceTimersByTimeAsync(181_000);
+    if (mode === "callback") {
+      inbox.submit({ ...ticket, result });
+      expect(() => inbox.submit({ ...ticket, result })).not.toThrow();
+      expect(() => inbox.submit({ ...ticket, result: { ...result, summary: "conflict" } })).toThrow("ASYNC_CALLBACK_CONFLICT");
+    } else if (mode === "expiry") await vi.advanceTimersByTimeAsync(419_000);
+    else if (mode === "cancel") inbox.cancel(ticket);
+    else {
+      inbox.close();
+      const restarted = new AuditInbox(hubId);
+      expect(() => restarted.submit({ ...ticket, result })).toThrow("ASYNC_ATTEMPT_UNAVAILABLE");
+      restarted.close();
+    }
+    await outcome;
+    if (mode === "callback") await vi.advanceTimersByTimeAsync(419_000);
+    expect(() => inbox.submit({ ...ticket, result })).toThrow();
+  } finally { inbox.close(); }
+});
+
 it("bounds the runtime inbox, rejects duplicate registration, and reclaims expired entries", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   const inbox = new AuditInbox(hubId), first = registration(), ticket = inbox.register(first);
