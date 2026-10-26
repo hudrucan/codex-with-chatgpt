@@ -164,6 +164,11 @@ API, require its runtime token and reject proxy headers.
 
 Local source fingerprints cover HEAD, index and tracked/non-ignored file paths,
 modes and bytes, including deletions. Sensitive files contribute metadata only.
+Non-sensitive leaf symlinks may point directly to non-sensitive regular files
+already in the same Git-visible source set. Link text and mode enter the
+fingerprint; target bytes enter through the target's own entry. Links are never
+opened as files. Directory links, chains, broken links, targets absent from that
+source set and workspace escapes fail closed.
 Canonical workspace mismatches, unsupported paths and more than 64 MiB of readable
 content fail closed. See the [workflow](../skill/references/workflow-async.md)
 for operation and retry rules.

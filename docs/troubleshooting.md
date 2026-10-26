@@ -35,6 +35,7 @@ check the new address and reconcile the owned ChatGPT plugin.
 | `DESTROY_PENDING` | Preserve state and follow the isolated [deprovisioning recovery reference](../skill/references/deprovision.md#interrupted-destroy) |
 | `LIFECYCLE_BUSY` after a crash | Verify the lock's PID has exited before removing that specific lock |
 | `HUB_STATE_BUSY` after a crash | Verify no Hub operation is running before removing only `hubs/.lock` |
+| `HUB_STATE_ACCESS_DENIED` / `TUNNEL_STATE_ACCESS_DENIED` / `ENDPOINT_STATE_ACCESS_DENIED` | The OS denied creation of the state lock (`EPERM` or `EACCES`); use the permitted sandbox escalation or restore state-directory access. This does not indicate lock contention; do not delete locks to resolve it |
 | `HUB_STATE_INVALID` | Preserve state; inspect the exact Hub record before repair; do not merge or create replacement identities |
 | `WORKSPACE_REGISTRY_BUSY` after a crash | Verify no registry writer is running before removing only `workspace-registries/<hubId>.json.lock` |
 

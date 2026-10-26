@@ -11,7 +11,7 @@ export const hubSchema = z.object({ version: z.literal(1), hubId: hubIdSchema,
 }).strict();
 export type Hub = z.infer<typeof hubSchema>;
 export class HubError extends Error {
-  constructor(public code: string, message: string) { super(`${code}: ${message}`); this.name = "HubError"; }
+  constructor(public code: string, message: string, options?: ErrorOptions) { super(`${code}: ${message}`, options); this.name = "HubError"; }
 }
 export function hubFile(hubId: string): string {
   if (!hubIdSchema.safeParse(hubId).success)
@@ -62,8 +62,13 @@ export function withHubLock<T>(operation: () => T): T {
   try {
     fd = fs.openSync(file, "wx", 0o600);
   }
-  catch {
-    throw new HubError("HUB_STATE_BUSY", "Another local Hub operation holds the lock.");
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EEXIST")
+      throw new HubError("HUB_STATE_BUSY", "Another local Hub operation holds the lock.", { cause: error });
+    if (code === "EPERM" || code === "EACCES")
+      throw new HubError("HUB_STATE_ACCESS_DENIED", `Cannot create the local Hub state lock (${code}); state-directory write access is required.`, { cause: error });
+    throw error;
   }
   try {
     return operation();

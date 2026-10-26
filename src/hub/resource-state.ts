@@ -27,8 +27,13 @@ export function withHubResource<T extends {
     try {
       fd = fs.openSync(lock, "wx", 0o600);
     }
-    catch {
-      throw new Error(`${resource.toUpperCase()}_STATE_BUSY: Another local operation holds the lock.`);
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST")
+        throw new Error(`${resource.toUpperCase()}_STATE_BUSY: Another local operation holds the lock.`, { cause: error });
+      if (code === "EPERM" || code === "EACCES")
+        throw new Error(`${resource.toUpperCase()}_STATE_ACCESS_DENIED: Cannot create the local state lock (${code}); state-directory write access is required.`, { cause: error });
+      throw error;
     }
     try {
       let raw: unknown;

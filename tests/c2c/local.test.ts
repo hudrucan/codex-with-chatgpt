@@ -73,3 +73,79 @@ it("rejects an incorrect canonical workspace identity and unavailable source", (
   cleanup(root);
   expect(fingerprint).toThrow();
 });
+
+it("fingerprints Git-visible internal file links without opening their aliases", () => {
+  const alias = path.join(root, "shared.ts"), open = fs.openSync;
+  fs.symlinkSync("src/index.ts", alias);
+  git(root, "add", "shared.ts");
+  vi.spyOn(fs, "openSync").mockImplementation((file, ...args) => {
+    if (String(file) === alias && fs.lstatSync(alias).isSymbolicLink()) throw new Error("Source aliases must not be opened");
+    return open(file, ...args);
+  });
+  const before = fingerprint();
+  expect(fingerprint()).toBe(before);
+  fs.writeFileSync(path.join(root, "src/index.ts"), "changed target\n");
+  expect(fingerprint()).not.toBe(before);
+  const changed = fingerprint();
+  // Changing only link spelling still changes the source snapshot.
+  fs.unlinkSync(alias); fs.symlinkSync("./src/index.ts", alias);
+  expect(fingerprint()).not.toBe(changed);
+  const retargeted = fingerprint();
+  fs.unlinkSync(alias); fs.symlinkSync("hello.txt", alias);
+  expect(fingerprint()).not.toBe(retargeted);
+  const linked = fingerprint();
+  fs.unlinkSync(alias); fs.writeFileSync(alias, "regular file\n");
+  expect(fingerprint()).not.toBe(linked);
+});
+
+it.each(["external", "sensitive target", "sensitive alias", "ignored target", "dangling", "loop", "chain", "directory", "directory ancestor"])(
+  "rejects an unsupported %s source link without reading protected target content", kind => {
+    const alias = path.join(root, "alias"), protectedFile = path.join(state, "outside.txt");
+    fs.writeFileSync(protectedFile, "outside fixture\n");
+    fs.writeFileSync(path.join(root, ".npmrc"), "sensitive fixture\n");
+    fs.writeFileSync(path.join(root, ".gitignore"), "ignored.txt\n");
+    fs.writeFileSync(path.join(root, "ignored.txt"), "ignored fixture\n");
+    if (kind === "external") fs.symlinkSync(protectedFile, alias);
+    if (kind === "sensitive target") fs.symlinkSync(".npmrc", alias);
+    if (kind === "sensitive alias") {
+      fs.unlinkSync(path.join(root, ".npmrc")); fs.symlinkSync("hello.txt", path.join(root, ".npmrc"));
+    }
+    if (kind === "ignored target") fs.symlinkSync("ignored.txt", alias);
+    if (kind === "dangling") fs.symlinkSync("missing.txt", alias);
+    if (kind === "loop") fs.symlinkSync("alias", alias);
+    if (kind === "chain") { fs.symlinkSync("hello.txt", path.join(root, "second")); fs.symlinkSync("second", alias); }
+    if (kind === "directory") fs.symlinkSync("src", alias, "dir");
+    if (kind === "directory ancestor") {
+      fs.renameSync(path.join(root, "src"), path.join(root, "moved")); fs.symlinkSync("moved", path.join(root, "src"), "dir");
+    }
+    const open = fs.openSync, denied = [protectedFile, path.join(root, ".npmrc"), path.join(root, "ignored.txt")];
+    const accesses: string[] = [];
+    vi.spyOn(fs, "openSync").mockImplementation((file, ...args) => {
+      if (denied.includes(String(file))) { accesses.push(String(file)); throw new Error("Protected content must not be opened"); }
+      return open(file, ...args);
+    });
+    expect(fingerprint).toThrow();
+    expect(accesses).toEqual([]);
+  },
+);
+
+it("rejects a regular file replaced by a symlink before opening its contents", () => {
+  const file = path.join(root, "hello.txt"), secret = path.join(state, "outside.txt");
+  fs.writeFileSync(secret, "outside fixture\n");
+  const open = fs.openSync, reads = fs.readFileSync;
+  let swapped = false;
+  const contentReads: unknown[] = [];
+  vi.spyOn(fs, "openSync").mockImplementation((target, ...args) => {
+    if (String(target) === file && !swapped) {
+      swapped = true; fs.unlinkSync(file); fs.symlinkSync(secret, file);
+    }
+    return open(target, ...args);
+  });
+  vi.spyOn(fs, "readFileSync").mockImplementation((target, ...args) => {
+    if (typeof target === "number") contentReads.push(target);
+    return reads(target, ...args);
+  });
+  expect(fingerprint).toThrow();
+  expect(swapped).toBe(true);
+  expect(contentReads).toEqual([]);
+});
