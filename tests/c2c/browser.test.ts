@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createBrowserSender, type SendTab } from "../../src/c2c/browser.js";
+import { BrowserSendError, createBrowserSender, type SendTab } from "../../src/c2c/browser.js";
 
 const projectBase = `https://chatgpt.com/g/g-p-${"a".repeat(32)}-test`;
 const project = `${projectBase}/project`;
@@ -80,6 +80,42 @@ it.each(["uncertain", "draft", "thread", "timeout", "expired envelope"])("stops 
     expiresAt: kind === "expired envelope" ? Date.now() - 1 : request.expiresAt })).rejects.toThrow();
   await expect(sender.send({ ...request, attemptId: "new" })).rejects.toThrow("ASYNC_SEND_TERMINAL");
   expect(f.press).toHaveBeenCalledTimes(kind === "uncertain" ? 1 : 0);
+});
+
+it.each(["draft", "fill", "press", "navigation", "confirmed"])("reports delivery accurately after %s without exposing transport data or resending", async phase => {
+  const f = fixture();
+  const secret = "callback-capability-fixture";
+  if (phase === "draft") f.draft("user text");
+  if (phase === "fill") f.fill.mockRejectedValueOnce(new Error(secret));
+  if (phase === "press") f.press.mockRejectedValueOnce(new Error(secret));
+  if (phase === "navigation") f.press.mockImplementationOnce(async () => { f.navigate("https://chatgpt.com/c/different"); });
+  const sender = await createBrowserSender({ tabs: { selected: async () => f.tab } },
+    { composerName: "Observed composer", openProjectThread: async () => f.tab }, async () => project);
+  const delivery = phase === "confirmed" ? "sent" : ["press", "navigation"].includes(phase) ? "uncertain" : "not_sent";
+  if (phase === "confirmed") await expect(sender.send(request)).resolves.toMatchObject({ sent: true });
+  else {
+    const error = await sender.send({ ...request, message: secret }).catch(error => error);
+    expect(error).toBeInstanceOf(BrowserSendError);
+    expect(error.delivery).toBe(delivery);
+    expect(error.message).not.toContain(secret);
+    expect(JSON.stringify(error)).not.toContain(secret);
+  }
+  await expect(sender.send(request)).rejects.toMatchObject({ message: "ASYNC_SEND_TERMINAL", delivery });
+  expect(f.press).toHaveBeenCalledTimes(["press", "navigation", "confirmed"].includes(phase) ? 1 : 0);
+});
+
+it("uses the selected conversation across Project and routed Hub changes without resolving bindings", async () => {
+  const otherProject = conversation.replace("a".repeat(32), "b".repeat(32));
+  for (const url of [conversation, otherProject]) {
+    const f = fixture(url), resolve = vi.fn(async () => { throw new Error("hot path must not resolve"); });
+    const sender = await createBrowserSender({ tabs: { selected: async () => f.tab } },
+      { composerName: "Observed composer", openProjectThread: async () => { throw new Error("must not switch"); } }, resolve);
+    for (const hub of ["hub-one", "hub-two"]) {
+      await sender.send({ ...request, attemptId: hub, message: `handoff routed to ${hub}` });
+      expect(f.fill).toHaveBeenLastCalledWith(`handoff routed to ${hub}`);
+    }
+    expect(resolve).not.toHaveBeenCalled(); expect(f.press).toHaveBeenCalledTimes(2);
+  }
 });
 
 const localConversation = `${projectBase}/c/local-chatgpt%3Ae8af3401-76ec-4f63-b875-af2295a87db8`;

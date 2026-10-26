@@ -17,9 +17,9 @@ without Lazier; it owns connection operations and the C2C handoff contract.
   explicit update:** read [setup and lifecycle](references/setup.md). Successful
   setup/reconnect ends at **MCP READY**, then stop.
 - **C2C prompt or first-line Plan/Task/Fix/Commit:** read the local
-  [common contract](references/workflow.md). Manual Codex (`async=false` or
+  [common contract](references/workflow.md). Manual Codex (`auto=false` or
   omitted) needs only common. Plan only plans; Task implements within scope.
-- **Codex with explicit `async=true`:** also read the
+- **Codex with explicit `auto=true`:** also read the
   [sender](references/workflow-async.md). Preserve the selected mode and routing.
 - **Web handoff audit:** read [common](references/workflow.md) and the
   [receiver](references/workflow-web.md).

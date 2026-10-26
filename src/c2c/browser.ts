@@ -12,6 +12,12 @@ export interface SendTab {
 interface Browser { tabs: { selected(): Promise<SendTab | undefined> } }
 interface SendUI { composerName: string; openProjectThread(projectUrl: string): Promise<SendTab> }
 
+export type DeliveryStatus = "not_sent" | "uncertain" | "sent";
+export class BrowserSendError extends Error {
+  constructor(code: string, readonly delivery: DeliveryStatus) { super(code); }
+}
+const sendErrors = new Set(["ASYNC_SEND_TERMINAL", "ASYNC_TIMEOUT", "ASYNC_THREAD_CHANGED", "ASYNC_PROJECT_MISMATCH", "ASYNC_DRAFT_PRESENT"]);
+
 function thread(value: string | undefined) {
   if (!value) return;
   const url = new URL(value);
@@ -32,7 +38,7 @@ export async function createBrowserSender(browser: Browser, ui: SendUI, resolveP
     tab = await ui.openProjectThread(projectUrl);
   }
   const selected = tab!;
-  const used = new Set<string>();
+  const used = new Map<string, DeliveryStatus>();
   let stopped = false;
   const assertThread = async (allowPending = false) => {
     const value = await selected.url(), current = thread(value);
@@ -52,29 +58,37 @@ export async function createBrowserSender(browser: Browser, ui: SendUI, resolveP
   await assertThread();
   return {
     async send(request: { attemptId: string; message: string; remainingMs: number; expiresAt: number }) {
-      if (stopped || used.has(request.attemptId)) throw new Error("ASYNC_SEND_TERMINAL");
+      if (stopped || used.has(request.attemptId)) throw new BrowserSendError("ASYNC_SEND_TERMINAL", used.get(request.attemptId) ?? "not_sent");
       // Even an interrupted fill/press consumes this sender: no uncertain-send retry.
-      used.add(request.attemptId); stopped = true;
-      if (!Number.isFinite(request.expiresAt) || !Number.isFinite(request.remainingMs)) throw new Error("ASYNC_TIMEOUT");
-      const deadline = performance.now() + Math.min(request.remainingMs, request.expiresAt - Date.now());
-      const check = async (allowPending = false, limit = deadline) => {
-        if (performance.now() >= limit) throw new Error("ASYNC_TIMEOUT");
-        const ready = await assertThread(allowPending);
-        if (performance.now() >= limit) throw new Error("ASYNC_TIMEOUT");
-        return ready;
-      };
-      await check();
-      const composer = selected.playwright.getByRole("textbox", { name: ui.composerName, exact: true });
-      if ((await composer.innerText()).trim()) throw new Error("ASYNC_DRAFT_PRESENT");
-      await check(); await composer.fill(request.message);
-      await check(); await composer.press("Enter");
-      // ChatGPT may publish a local URL before assigning the Project conversation ID.
-      const navigationDeadline = Math.min(deadline, performance.now() + 10_000);
-      while (!await check(true, navigationDeadline)) {
-        await new Promise(resolve => setTimeout(resolve, Math.min(100, navigationDeadline - performance.now())));
+      used.set(request.attemptId, "not_sent"); stopped = true;
+      try {
+        if (!Number.isFinite(request.expiresAt) || !Number.isFinite(request.remainingMs)) throw new Error("ASYNC_TIMEOUT");
+        const deadline = performance.now() + Math.min(request.remainingMs, request.expiresAt - Date.now());
+        const check = async (allowPending = false, limit = deadline) => {
+          if (performance.now() >= limit) throw new Error("ASYNC_TIMEOUT");
+          const ready = await assertThread(allowPending);
+          if (performance.now() >= limit) throw new Error("ASYNC_TIMEOUT");
+          return ready;
+        };
+        await check();
+        const composer = selected.playwright.getByRole("textbox", { name: ui.composerName, exact: true });
+        if ((await composer.innerText()).trim()) throw new Error("ASYNC_DRAFT_PRESENT");
+        await check(); await composer.fill(request.message);
+        await check();
+        used.set(request.attemptId, "uncertain");
+        await composer.press("Enter");
+        // ChatGPT may publish a local URL before assigning the Project conversation ID.
+        const navigationDeadline = Math.min(deadline, performance.now() + 10_000);
+        while (!await check(true, navigationDeadline)) {
+          await new Promise(resolve => setTimeout(resolve, Math.min(100, navigationDeadline - performance.now())));
+        }
+        used.set(request.attemptId, "sent");
+        stopped = false;
+        return { attemptId: request.attemptId, sent: true };
+      } catch (error) {
+        const code = error instanceof Error && sendErrors.has(error.message) ? error.message : "ASYNC_SEND_UNCERTAIN";
+        throw new BrowserSendError(code, used.get(request.attemptId)!);
       }
-      stopped = false;
-      return { attemptId: request.attemptId, sent: true };
     },
   };
 }

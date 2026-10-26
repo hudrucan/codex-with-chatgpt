@@ -3,11 +3,23 @@ import path from "node:path";
 import type { z } from "zod";
 import { ensureDir, writeSecureJson } from "../config/paths.js";
 import { stateFile } from "../config/state-files.js";
-import { hubIdSchema, withHubControlPlane } from "./store.js";
+import { hubIdSchema, readConfiguredHub, withHubControlPlane } from "./store.js";
 export function resourceFile(resource: "tunnel" | "endpoint", hubId: string): string {
   if (!hubIdSchema.safeParse(hubId).success)
     throw new Error("HUB_STATE_INVALID: Invalid Hub ID.");
   return stateFile(`${resource}s`, `${hubId}.json`);
+}
+/** Read the atomically published state without creating directories or writer locks. */
+export function inspectHubResource<T extends { hubId: string }>(hubId: string, resource: "tunnel" | "endpoint", schema: z.ZodType<T>): T {
+  readConfiguredHub(hubId);
+  const file = resourceFile(resource, hubId);
+  let raw: unknown;
+  try { raw = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch { throw new Error(`${resource.toUpperCase()}_STATE_CONFLICT: Authoritative Hub state is missing or unreadable.`); }
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success || parsed.data.hubId !== hubId)
+    throw new Error(`${resource.toUpperCase()}_STATE_CONFLICT: Invalid ownership or format.`);
+  return parsed.data;
 }
 /** Hub-owned state only. Missing authoritative files require explicit recovery. */
 export function withHubResource<T extends {

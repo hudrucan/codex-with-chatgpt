@@ -27,6 +27,7 @@ import {
   NAMED_LOGIN_PROMPT,
   NAMED_REPAIR_MESSAGE,
   needsTunnelChoice,
+  inspectTunnelState,
   readTunnelState,
   TUNNEL_CHOICE_PROMPT,
 } from "../tunnel/state.js";
@@ -47,6 +48,7 @@ import {
   mcpUrlFromPublic,
   normalizePublicUrl,
   persistHubEndpoint,
+  inspectLastEndpoint,
   readLastEndpoint,
   reclaimUserMessage,
 } from "../config/endpoint.js";
@@ -429,8 +431,8 @@ program
   .option("--json", "machine-readable output", false)
   .action(async (opts: { json: boolean }) => {
     const hub = selectedHub();
-    readTunnelState(hub.hubId);
-    const endpoint = readLastEndpoint(hub.hubId);
+    inspectTunnelState(hub.hubId);
+    const endpoint = inspectLastEndpoint(hub.hubId);
     const observation = await findBridgeObservation(hub.hubId);
     if (observation.state === "unknown") {
       if (opts.json) {

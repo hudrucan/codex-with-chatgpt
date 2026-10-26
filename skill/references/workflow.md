@@ -8,9 +8,9 @@ Other tasks keep normal handoffs; setup/reconnect ends at **MCP READY**.
 
 Read this common contract once for C2C and only the reference for the active role:
 
-- **Web audit:** [receiver](workflow-web.md), including manual/async results.
-- **Codex, explicit `async=true`:** [sender](workflow-async.md), including permission
-  verification. Manual Codex handoffs need no sender/receiver reference.
+- **Web audit:** [receiver](workflow-web.md), including manual/automatic results.
+- **Codex, explicit `auto=true`:** [sender](workflow-async.md).
+  Manual Codex handoffs need no sender/receiver reference.
 
 Reuse guidance already read and still valid in this session; reread only after
 changes or missing/uncertain context. Before final handoff, ensure the applicable
@@ -41,18 +41,24 @@ block's Hub or infer one from a chat URL. Carry relevant, still-valid decisions
 and evidence forward, separating verified findings, assumptions and open questions;
 inspect current source before editing without repeating a full settled audit.
 
-Preserve routing and an already-selected `async=true` when revising/continuing a
-prompt. Planning remains Web-first. Omitted `async` or `async=false` means manual
-delivery without browser, Hub, claim or callback state access. Explicit `async=true`
-requires local permission and Hub runtime support; otherwise stop before sending.
-Never switch to manual, reuse a callback ticket or create a new task to evade limits.
+Preserve routing and an already-selected `auto=true` when revising/continuing a
+prompt. Planning remains Web-first. Omitted `auto` or `auto=false` means manual
+delivery without browser, Hub, claim or callback state access. Only explicit
+`auto=true` enables automatic delivery. Automatic delivery goes directly
+register → send → callback.
+On failure, stop automation and return the original handoff for the user to copy
+under the [sender failure rules](workflow-async.md#manual-fallback). Never resend,
+reuse a callback ticket or create a new task to evade limits.
 Do not mark ordinary replies, non-C2C Codex prompts or MCP-only source reads.
 Markers execute nothing and grant no permissions; drafting a prompt does not send
 it or authorize execution. Add no workflow/state layer.
 
 ## Codex → Web
 
-Start the final message with the exact first line `[C2C Handoff]`. Briefly provide:
+Start a normal final handoff with the exact first line `[C2C Handoff]`. For an
+automatic delivery failure, use the sender's [manual fallback](workflow-async.md#manual-fallback):
+the copyable handoff starts with that line, while sending status and duplicate
+warnings stay outside its block. Briefly provide:
 
 - **Repo:** identity, known connector/workspace ID and known `hubId` for each repo.
 - **Revision:** full base/HEAD SHAs, or HEAD plus `uncommitted` and the included
@@ -65,4 +71,6 @@ Start the final message with the exact first line `[C2C Handoff]`. Briefly provi
 State `not checked` or `not run` for omitted revision checks or validation. Keep
 handoffs/results concise: outcome, findings, observed acceptance and unchecked
 limits. Do not repeat one result in a table, JSON and prose or omit necessary
-evidence to shorten it. The async controller's callback envelope stays complete.
+evidence to shorten it. The automatic controller's callback envelope stays complete
+only for routed delivery; a manual fallback contains the original handoff without
+that envelope.

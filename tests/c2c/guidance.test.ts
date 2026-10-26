@@ -85,7 +85,7 @@ it("preserves marker, routing, context and concise handoff boundaries", () => {
     "guidance already read and still valid in this session",
     "matching connector/workspace routing block", "Never borrow another routing block's Hub",
     "separating verified findings, assumptions and open questions", "inspect current source before editing",
-    "Preserve routing and an already-selected `async=true`", "Never switch to manual",
+    "Preserve routing and an already-selected `auto=true`", "return the original handoff",
     "Markers execute nothing and grant no permissions", "unrun checks", "observed acceptance",
     "without browser, Hub, claim or callback state access", "callback envelope stays complete",
   ]) expect(common, requirement).toContain(requirement);
@@ -103,19 +103,24 @@ it("preserves marker, routing, context and concise handoff boundaries", () => {
   ]) expect(receiver, requirement).toContain(requirement);
 });
 
-it("reuses only permission evidence while retaining every async attempt gate", () => {
+it("delivers automatic handoffs directly and returns a safe manual fallback", () => {
   const sender = guidance("references/workflow-async.md");
   for (const requirement of [
-    "runtime identity, Hub owner, connector and permissions are known unchanged",
-    "Probe again after restart/rollout", "permission or connector changes", "permission errors",
-    "missing/uncertain evidence", "never a ticket/capability", "every attempt still registers",
-    "ownership, permission, source, deadline, claim and send-once checks",
+    "register → send → callback", "fresh correlation/capability", "ownership, permission, source, deadline, claim",
     "each repository with its own correctly routed workspace/root", "A fingerprint for one repository proves nothing about another",
     "do not extend the controller for batch work", "tty=true", "write_stdin", "READY",
     "Only then may delivery start", "complete envelope", "C2C_CALLBACK", "exactly once",
     "verifySourceForFix", "canAutoFix:true", "same process", "three audits/two fixes",
     "600-second maximum deadline", "acknowledgement never restarts it", "180 seconds of idle input", "Lost sessions cannot resume",
-    "without resending", "accepted:true", "matching result", "EPERM", "denial keeps async disabled",
-    "Do not change sandbox settings", "newline alone does not complete", "explicit reauthorization",
+    "without resending", "accepted:true", "matching result", "EPERM", "official terminal escalation",
+    "Do not change sandbox settings", "newline alone does not complete", "original complete handoff",
+    "`not_sent`", "`uncertain`", "`sent`", "warn outside the handoff", "never label it PASS",
+    "exact first line is `[C2C Handoff]`", "Exclude the callback ticket", "without resetting its task claim",
   ]) expect(sender, requirement).toContain(requirement);
+  for (const file of ["SKILL.md", "references/workflow.md", "references/workflow-async.md", "references/workflow-web.md", "references/setup.md"]) {
+    const text = guidance(file);
+    expect(text, file).not.toMatch(/permission probe|preflight|permission evidence|async=(?:true|false)/i);
+  }
+  expect(guidance("references/workflow.md")).toContain("Omitted `auto` or `auto=false` means manual");
+  expect(guidance("references/setup.md")).toContain("do not prove `audit.submit` acceptance");
 });

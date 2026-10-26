@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PRODUCT_NAME } from "../version.js";
 import { hubIdSchema } from "../hub/store.js";
-import { resourceFile, withHubResource } from "../hub/resource-state.js";
+import { inspectHubResource, resourceFile, withHubResource } from "../hub/resource-state.js";
 import { userFacingName } from "./naming.js";
 
 export const CHATGPT_DEVELOPER_MODE_URL = "https://chatgpt.com/#settings/Security";
@@ -34,6 +34,11 @@ export function endpointFile(hubId: string): string { return resourceFile("endpo
 export function readLastEndpoint(hubId: string): LastEndpoint | null {
   return withHubResource(hubId, "endpoint", endpointStateSchema,
     (current) => "empty" in current ? null : current);
+}
+
+export function inspectLastEndpoint(hubId: string): LastEndpoint | null {
+  const current = inspectHubResource(hubId, "endpoint", endpointStateSchema);
+  return "empty" in current ? null : current;
 }
 
 export function writeLastEndpoint(endpoint: Omit<LastEndpoint, "savedAt" | "version"> & { version?: 1; savedAt?: string }): LastEndpoint {

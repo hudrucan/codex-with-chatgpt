@@ -84,6 +84,11 @@ explicit setup/start/restart reconnects. Matching owned resources are reused.
 Uncertain runtime state or ownership conflicts must be resolved before repair.
 For diagnostics and lock recovery, see [troubleshooting](troubleshooting.md).
 
+`status` only reads validated Hub/resource snapshots and runtime health. It creates
+no state directories or lock files, including when the bridge is stopped or its
+state is invalid. Loopback access may still require official terminal escalation;
+an unreachable runtime remains unknown rather than being treated as stopped.
+
 ## Explicit updates
 
 `c2c update --json` verifies the exact `hudrucan/codex-with-chatgpt` origin and a clean

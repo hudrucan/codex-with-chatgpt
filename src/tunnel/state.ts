@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { hubIdSchema } from "../hub/store.js";
-import { resourceFile, withHubResource } from "../hub/resource-state.js";
+import { inspectHubResource, resourceFile, withHubResource } from "../hub/resource-state.js";
 
 const fields = {
   preference: z.enum(["unset", "quick", "named"]),
@@ -26,6 +26,7 @@ function access<R>(hubId: string, operation: (current: TunnelState, save: (value
 }
 
 export function readTunnelState(hubId: string): TunnelState { return access(hubId, (current) => current); }
+export function inspectTunnelState(hubId: string): TunnelState { return inspectHubResource(hubId, "tunnel", tunnelSchema); }
 
 export function writeTunnelState(state: Omit<TunnelState, "version"> & { version?: 1 }): TunnelState {
   return access(state.hubId, (_current, save) => save({ ...state, version: 1 }));

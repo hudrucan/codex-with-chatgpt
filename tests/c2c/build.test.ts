@@ -48,8 +48,8 @@ it("builds self-contained terminal/send-only modules and leaves manual delivery 
     expect(duplicate.status).toBe(1);
     expect(JSON.parse(duplicate.stdout).error).toContain("ASYNC_RESUME_UNSUPPORTED");
 
-    const probe = JSON.stringify({ hubId: "hub-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      workspaceId, taskId: "isolated-probe", attemptId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    const registration = JSON.stringify({ hubId: "hub-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId, taskId: "callback-stdin", attemptId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       handoffId: "a".repeat(64), timeoutMs: 1000 });
     // A nonblocking stdin pipe can be empty while the caller prepares its JSON.
     const delayed = await new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
@@ -59,7 +59,7 @@ it("builds self-contained terminal/send-only modules and leaves manual delivery 
       let stdout = "";
       child.stdout.on("data", chunk => { stdout += chunk; });
       child.stderr.resume(); child.stdin.on("error", () => {});
-      const input = setTimeout(() => child.stdin.end(probe.padEnd(4096)), 500);
+      const input = setTimeout(() => child.stdin.end(registration.padEnd(4096)), 500);
       const timeout = setTimeout(() => { child.kill(); reject(new Error("Callback stdin did not complete")); }, 10_000);
       child.on("error", reject);
       child.on("close", code => { clearTimeout(input); clearTimeout(timeout); resolve({ code, stdout }); });
@@ -68,7 +68,7 @@ it("builds self-contained terminal/send-only modules and leaves manual delivery 
     expect(JSON.parse(delayed.stdout)).toEqual({ ok: false, error: "ASYNC_CALLBACK_RUNTIME_UNAVAILABLE" });
     const oversized = spawnSync(process.execPath, [helper, "callback", "register"], {
       cwd: temp, env: { ...process.env, C2C_STATE_DIR: state }, encoding: "utf8",
-      input: probe.padEnd(4095) + "é", timeout: 10_000,
+      input: registration.padEnd(4095) + "é", timeout: 10_000,
     });
     expect(oversized.status).toBe(1);
     expect(JSON.parse(oversized.stdout)).toEqual({ ok: false, error: "ASYNC_LOCAL_REQUEST_INVALID" });

@@ -27,7 +27,7 @@ check the new address and reconcile the owned ChatGPT plugin.
 | `disconnected: true` | Intentional; reconnect only when requested |
 | Bridge state unknown | Resolve the local uncertainty; never spawn another process or delete the plugin |
 | Port occupied | Matching bridges are reused; otherwise the bridge chooses a free port |
-| Sandbox/state-dir write failure | `c2c sandbox-allow --json`; use the permitted escalation flow if needed |
+| Sandbox/state-dir or loopback `EPERM` | Use official terminal escalation; do not relax sandbox security to retry automatic delivery. Return the original handoff when delivery fails |
 | cloudflared missing | Install from the vendor/package source, then retry |
 | Custom cloudflared location | Set `C2C_CLOUDFLARED_PATH` to the executable's absolute path |
 | QUIC repeatedly reconnects | Set `C2C_TUNNEL_PROTOCOL=http2` in the launch environment and explicitly restart |
@@ -74,9 +74,10 @@ MCP evidence. A local health check does not clear the pending binding.
 Existing tokens keep their consented scopes; refreshing tokens or the tool catalog
 does not add permissions. Reauthorize the existing connection once with the
 [complete consent bundle](security.md#token--scope-design), then repeat the
-Skill's [permission verification](../skill/references/setup.md#verification-and-binding).
-Missing consent permissions block readiness. Preserve the Hub, connector and
-tunnel; never edit OAuth URLs or token state to bypass consent.
+Skill's [connection verification](../skill/references/setup.md#verification-and-binding).
+Missing consent permissions block automatic callback acceptance; return the
+original handoff for manual audit. Preserve the Hub, connector and tunnel; never
+edit OAuth URLs or token state to bypass consent.
 
 ## Reads and image access
 

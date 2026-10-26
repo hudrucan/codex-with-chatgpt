@@ -74,18 +74,15 @@ Inspect the exact connector ID, name and Server URL. A title or local health
 check is not binding evidence. Select the connector in a normal ChatGPT chat.
 Verify `workspace_info`, a small `read_file`, `search_workspace` and `git_status`
 with the explicit registered workspace ID, without supplying repository contents.
-Verify `audit.submit` with an isolated local register → authenticated MCP
-`submit_audit_result` → terminal wait probe using the
-[callback preflight](workflow-async.md#permission-probe). This is a permission
-check, not a coding/audit handoff. Require `accepted:true` and the matching
-terminal receipt; never submit a fabricated or unrelated attempt.
-
-Setup, reconnect and reauthorization require this complete verification before
-**MCP READY**. Refresh preserves old grants; restricted connections need one
-explicit reauthorization with the five visible permissions. Do not silently
-upgrade, start callback-only consent, or claim readiness from repository reads
-alone. If ChatGPT rejects a full grant after requesting fewer scopes, report the
-observed incompatibility and stop without a workaround.
+Setup, reconnect and reauthorization require these repository reads and visible
+five-scope consent before **MCP READY**. Callback permission is established by a
+real automatic handoff's register → send → callback, independently of setup.
+Repository reads and local health do not prove `audit.submit` acceptance. Do not
+register a separate verification attempt or submit a fabricated audit result.
+Refresh preserves old grants; restricted connections need explicit reauthorization
+with the five visible permissions. Do not silently upgrade or start callback-only
+consent. If ChatGPT rejects a full grant after requesting fewer scopes, report
+the observed incompatibility and stop without a workaround.
 
 For a stale catalog, use the existing connector's **Manage → Refresh tools**,
 then verify in a new ordinary chat. Do not recreate a working connector just to

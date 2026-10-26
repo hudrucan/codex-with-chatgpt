@@ -39,6 +39,7 @@ afterEach(async () => {
 });
 
 it("accepts only callback results, verifies source before fixes, and caps one claim at three audits/two fixes", async () => {
+  await session.close(); session = new AuditSession({ ...options(), timeoutMs: 10_000 });
   for (let i = 0; i < 3; i++) {
     const request = await session.submit(handoff + i, i > 0);
     await expect(session.submit(handoff)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
@@ -126,6 +127,20 @@ it("fails closed on EPERM without claiming a task or offering a browser message"
   try { await expect(session.submit(handoff)).rejects.toThrow("ASYNC_CALLBACK_TRANSPORT_UNAVAILABLE: EPERM"); }
   finally { transport.mockRestore(); }
   expect(fs.existsSync(path.join(state, "async-tasks"))).toBe(false);
+});
+
+it("stops after a callback transport failure without retrying the wait or releasing the task claim", async () => {
+  const request = await session.submit(handoff);
+  const transport = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("private transport detail", { cause: { code: "EPERM" } }));
+  try {
+    const error = await session.sent(request.attemptId).catch(error => error);
+    expect(error.message).toBe("ASYNC_CALLBACK_TRANSPORT_UNAVAILABLE: EPERM");
+    expect(error.message).not.toContain(ticket(request).capability);
+    expect(transport.mock.calls.filter(([url]) => String(url).endsWith("/wait"))).toHaveLength(1);
+    await expect(session.submit(handoff)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
+    expect(() => localAccess.claimTask(options().taskId)).toThrow("ASYNC_RESUME_UNSUPPORTED");
+    expect((await submit(request)).isError).toBe(true);
+  } finally { transport.mockRestore(); }
 });
 
 const sizedHandoff = (pattern: string, bytes = 48 * 1024) =>

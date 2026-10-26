@@ -49,7 +49,7 @@ authorizations for this task. Follow the common contract's delivery rules; inclu
 all authorized commit/push/rollout steps in one `[C2C Commit]`. With clean Git
 status, include a delivery prompt only for explicitly authorized push/rollout
 steps still pending; otherwise confirm completion. Drafting never sends,
-implements, commits, pushes or rolls out. An already-selected `async=true` stays async.
+implements, commits, pushes or rolls out. An already-selected `auto=true` stays automatic.
 
 ## Async callback result
 
