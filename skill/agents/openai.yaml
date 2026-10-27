@@ -1,0 +1,3 @@
+interface:
+  display_name: "codex-with-chatgpt"
+  short_description: "Connect ChatGPT to registered local repos via MCP"

@@ -6,7 +6,7 @@ description: >
   doctor/repair, disconnect, an explicit update, manual C2C handoffs or opt-in async audits.
 ---
 
-# Codex with ChatGPT
+# codex-with-chatgpt
 
 Use the existing Hub and explicit registered workspace routing. This Skill works
 without Lazier; it owns connection operations and the C2C handoff contract.
