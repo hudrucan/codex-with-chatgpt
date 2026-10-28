@@ -1,13 +1,15 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Evaluator, MODEL } from "../src/evaluate.js";
-import { initialize, lockState, readPrivate, validateStateDir, writePrivate, configSchema } from "../src/state.js";
+import { initialize, lockState, readPrivate, validateStateDir, writePrivate, configSchema, defaultStateDir } from "../src/state.js";
 import { sampleInput } from "../src/verify.js";
 import { fixture, response } from "./fixtures.js";
 
 const cleanups: Array<() => void> = [];
-afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
+afterEach(() => { vi.unstubAllEnvs(); for (const cleanup of cleanups.splice(0)) cleanup(); });
 function setup() { const f = fixture(); cleanups.push(f.cleanup); return f; }
 const apiKey = "test-typesafe-api-key-never-return";
 
@@ -97,6 +99,28 @@ describe("Jev evaluation boundary", () => {
 });
 
 describe("Jev state isolation", () => {
+  it.each(["win32", "darwin", "linux"])("preserves the supported default state location on %s", (platform) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+      expect(defaultStateDir()).toBe(platform === "win32"
+        ? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "jev-mcp")
+        : path.join(os.homedir(), "Library", "Application Support", "jev-mcp"));
+    } finally { Object.defineProperty(process, "platform", descriptor); }
+  });
+
+  it.each(["direct", "alias"])("rejects initialization in %s C2C state before creating a directory", (variant) => {
+    const f = setup();
+    const c2c = path.join(path.dirname(f.directory), "c2c");
+    fs.mkdirSync(c2c, { mode: 0o700 });
+    const alias = path.join(path.dirname(f.directory), "c2c-alias");
+    if (variant === "alias") fs.symlinkSync(c2c, alias, process.platform === "win32" ? "junction" : "dir");
+    vi.stubEnv("C2C_STATE_DIR", variant === "alias" ? alias : c2c);
+    const target = path.join(c2c, "jev-state");
+    expect(() => initialize(target, f.config)).toThrow("C2C");
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
   it("ignores obsolete quota fields without changing existing config or credentials, but rejects unknown fields", () => {
     const f = setup();
     const file = path.join(f.directory, "config.json");
@@ -124,10 +148,11 @@ describe("Jev state isolation", () => {
     expect(() => lockState(f.directory)).toThrow("locked");
     unlock();
     const alias = path.join(f.directory, "alias");
-    fs.symlinkSync(f.directory, alias);
+    fs.symlinkSync(f.directory, alias, process.platform === "win32" ? "junction" : "dir");
     expect(() => validateStateDir(alias)).toThrow();
     const file = path.join(f.directory, "config.json");
-    fs.chmodSync(file, 0o644);
+    if (process.platform === "win32") execFileSync("icacls.exe", [file, "/grant", "*S-1-1-0:R"], { windowsHide: true, stdio: "ignore" });
+    else fs.chmodSync(file, 0o644);
     expect(() => readPrivate(file, configSchema)).toThrow("0600");
     expect(() => writePrivate(file, f.config)).toThrow("0600");
   });

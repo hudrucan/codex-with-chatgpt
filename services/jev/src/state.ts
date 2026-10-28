@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { windowsPrivatePermissions } from "./windows-permissions.js";
 
 export class JevError extends Error {}
 
@@ -37,16 +38,32 @@ function assertExternal(directory: string): void {
     if (fs.existsSync(path.join(current, ".git"))) throw new JevError("Keep Jev runtime state outside Git repositories.");
     if (current === path.dirname(current)) break;
   }
+  const legacyC2c = path.join(os.homedir(), "Library", "Application Support", "codex-with-chatgpt");
+  const c2cOs = process.platform === "win32"
+    ? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "codex-with-chatgpt")
+    : process.platform === "darwin" ? legacyC2c
+      : path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"), "codex-with-chatgpt");
+  const c2cRoots = [legacyC2c, c2cOs, ...(process.env.C2C_STATE_DIR?.trim() ? [path.resolve(process.env.C2C_STATE_DIR)] : [])]
+    .map((root) => fs.existsSync(root) ? fs.realpathSync(root) : root);
+  if (within(repository, directory) || c2cRoots.some((root) => within(root, directory))) {
+    throw new JevError("Use a private Jev directory outside repositories and C2C state.");
+  }
 }
 
 export function defaultStateDir(): string {
+  if (process.platform === "win32") return path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "jev-mcp");
   return path.join(os.homedir(), "Library", "Application Support", "jev-mcp");
+}
+
+function privatePermissions(file: string, stat: fs.Stats): boolean {
+  return process.platform === "win32" ? windowsPrivatePermissions(file)
+    : (stat.mode & 0o077) === 0 && stat.uid === process.getuid?.();
 }
 
 export function privateFile(file: string): void {
   const stat = fs.lstatSync(file);
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()) {
-    throw new JevError("Private files must be owned by this user, mode 0600, and not symlinks.");
+  if (!stat.isFile() || stat.isSymbolicLink() || !privatePermissions(file, stat)) {
+    throw new JevError("Private files must be owned by this user, mode 0600 or a user-only Windows ACL, and not symlinks.");
   }
 }
 
@@ -63,6 +80,7 @@ export function writePrivate(file: string, value: unknown): void {
   const temporary = `${file}.tmp`;
   const fd = fs.openSync(temporary, "wx", 0o600);
   try {
+    if (process.platform === "win32") privateFile(temporary);
     fs.writeFileSync(fd, JSON.stringify(value, null, 2) + "\n");
     fs.fsyncSync(fd);
   } finally { fs.closeSync(fd); }
@@ -73,9 +91,7 @@ export function validateStateDir(directory: string): string {
   const stat = fs.lstatSync(directory);
   const canonical = fs.realpathSync(directory);
   assertExternal(canonical);
-  const c2c = path.join(os.homedir(), "Library", "Application Support", "codex-with-chatgpt");
-  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()
-    || within(repository, canonical) || within(c2c, canonical)) {
+  if (!stat.isDirectory() || stat.isSymbolicLink() || !privatePermissions(directory, stat)) {
     throw new JevError("Use a private Jev directory outside repositories and C2C state.");
   }
   return canonical;
@@ -89,6 +105,9 @@ export function initialize(directory: string, config: Config): void {
   });
   // Exclusive creation never adopts an existing directory or C2C identity.
   fs.mkdirSync(directory, { mode: 0o700 });
+  if (process.platform === "win32" && !windowsPrivatePermissions(directory, true)) {
+    throw new JevError("Cannot restrict the new Jev directory to this Windows user; directory retained for inspection.");
+  }
   validateStateDir(directory);
   writePrivate(path.join(directory, "config.json"), config);
   writePrivate(path.join(directory, "credentials.json"), credentials);

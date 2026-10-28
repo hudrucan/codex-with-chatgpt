@@ -14,7 +14,7 @@ or final decisions. Failure or uncertain results should not block the main task.
 Run from the repository root with its existing Node >=20 and pnpm toolchain:
 
 ```sh
-corepack pnpm exec tsc -p services/jev/tsconfig.json
+node services/jev/scripts/build.mjs
 corepack pnpm exec vitest run --config services/jev/vitest.config.ts
 ```
 
@@ -23,7 +23,12 @@ No new dependencies, fork, or vendored upstream code are required. The
 shape. The implementation uses the [TypeSafe HTTP API](https://docs.typesafe.ai/api.md)
 directly and the existing MCP SDK, Express, and Zod dependencies.
 
-## Independent Mac deployment
+On Windows, the build also uses the installed .NET Framework 4 compiler
+(`%SystemRoot%/Microsoft.NET/Framework64/v4.0.30319/csc.exe`, or `Framework` for
+32-bit Node) to compile a small ACL helper. Every check reads the current owner
+and access rules; there is no permission cache. A missing helper fails closed.
+
+## Independent deployment
 
 The commands below use deployment labels as examples; names are saved in external
 state, not hardcoded into the service. Choose an unused port and hostname.
@@ -44,6 +49,19 @@ node services/jev/dist/index.js start
 node services/jev/dist/index.js verify --public --infer
 ```
 
+To use an existing `cloudflared tunnel login` certificate instead of an API token:
+
+```sh
+node services/jev/dist/index.js provision-tunnel \
+  --zone huynm.dev --tunnel-name typesafe-jev --tunnel-provider cloudflared
+```
+
+CLI provisioning records creation intent before creating a tunnel, verifies its
+remote identity against the generated credentials, and routes DNS without an
+overwrite flag. A name conflict or uncertain creation stops the operation.
+A DNS conflict retains the newly owned tunnel and recovery state without
+overwriting the existing route. Existing API bindings remain supported.
+
 Like C2C, `start` launches a detached Node daemon inheriting the invoking process's
 environment, including its CA/proxy configuration. macOS GUI processes do not
 automatically inherit shell exports: run `start` from the shell where
@@ -51,11 +69,16 @@ automatically inherit shell exports: run `start` from the shell where
 arguments, or logs. A restart after logout/reboot requires starting from an
 environment with the key again. `serve` is available for a foreground process.
 
-State defaults to `~/Library/Application Support/jev-mcp`, independently of C2C.
+State defaults to `%LOCALAPPDATA%/jev-mcp` on Windows and retains
+`~/Library/Application Support/jev-mcp` on Unix hosts, independently of C2C.
 `--state-dir` selects an existing parent for a new private directory during `init`.
 Existing directories are never adopted. Runtime status, OAuth, consent secret,
 tunnel credentials, plugin manifests, and logs stay outside Git.
 Directories require owner-only permissions; private files require mode 0600.
+On Windows, a newly created state directory receives a protected ACL granting
+only the current user full control, inherited by its files and subdirectories.
+Every private read verifies the current owner and user-only ACL. Reparse points,
+foreign ownership, broader grants, or an unavailable ACL check stop the operation.
 
 `status` and `stop` authenticate a local-only admin endpoint and verify the saved
 process identity before acting. Stop retains OAuth and reusable tunnel

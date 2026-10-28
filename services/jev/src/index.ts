@@ -11,6 +11,7 @@ async function main(): Promise<void> {
     "state-dir": { type: "string", default: defaultStateDir() }, "public-url": { type: "string" }, name: { type: "string" },
     port: { type: "string", default: "49873" }, zone: { type: "string" }, "tunnel-name": { type: "string" },
     infer: { type: "boolean", default: false }, public: { type: "boolean", default: false },
+    "tunnel-provider": { type: "string", default: "api" },
   } });
   if (positionals.length !== 1) throw new JevError("Choose init, start, serve, status, stop, verify, or provision-tunnel.");
   const command = positionals[0];
@@ -32,10 +33,11 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(await verify(directory, values.public ? config.publicUrl : `http://127.0.0.1:${config.port}`, credentials.approvalSecret, values.infer), null, 2));
   } else if (command === "provision-tunnel") {
     if (!values.zone || !values["tunnel-name"]) throw new JevError("Provide --zone and --tunnel-name explicitly.");
+    if (values["tunnel-provider"] !== "api" && values["tunnel-provider"] !== "cloudflared") throw new JevError("Choose api or cloudflared for --tunnel-provider.");
     const control = path.join(directory, "control");
     if (!fs.existsSync(control)) fs.mkdirSync(control, { mode: 0o700 });
     const unlock = lockState(validateStateDir(control));
-    try { console.log(JSON.stringify(await provisionTunnel(directory, config, values.zone, values["tunnel-name"]))); }
+    try { console.log(JSON.stringify(await provisionTunnel(directory, config, values.zone, values["tunnel-name"], values["tunnel-provider"]))); }
     finally { unlock(); }
   } else if (command === "start") {
     console.log(JSON.stringify(await start(directory, config, credentials.approvalSecret)));

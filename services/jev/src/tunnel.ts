@@ -5,18 +5,81 @@ import { spawn } from "node:child_process";
 import { z } from "zod";
 import { type Config, JevError, readPrivate, writePrivate, privateFile } from "./state.js";
 import { verify } from "./verify.js";
+import { cloudflared, cloudflaredEnvironment } from "./cloudflared-command.js";
 
-const bindingSchema = z.object({
+const apiBindingSchema = z.object({
   version: z.literal(1), service: z.literal("jev-mcp"), name: z.string(), hostname: z.string(),
   zoneId: z.string(), accountId: z.string(), tunnelId: z.string().uuid().nullable(),
 }).strict();
-const tunnelCredentials = z.object({ AccountTag: z.string(), TunnelID: z.string().uuid().nullable(), TunnelSecret: z.string() }).strict();
+const cliBindingSchema = z.object({
+  version: z.literal(1), service: z.literal("jev-mcp"), provider: z.literal("cloudflared"),
+  name: z.string(), hostname: z.string(), zoneName: z.string(),
+  accountId: z.string().nullable(), tunnelId: z.string().uuid().nullable(),
+}).strict();
+const bindingSchema = z.union([apiBindingSchema, cliBindingSchema]);
+const tunnelCredentials = z.object({ AccountTag: z.string(), TunnelID: z.string().uuid().nullable(), TunnelSecret: z.string(), Endpoint: z.string().optional() }).strict();
+const remoteTunnelSchema = z.object({
+  id: z.string().uuid(), name: z.string(),
+  // Go's zero time represents an active tunnel in cloudflared JSON output.
+  deleted_at: z.string().nullable().optional().transform((value) => value === "0001-01-01T00:00:00Z" ? null : value),
+}).passthrough();
+
+async function provisionCli(directory: string, config: Config, zoneName: string, name: string) {
+  const hostname = new URL(config.publicUrl).hostname;
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(name) || !/^[a-z0-9.-]+$/.test(zoneName) || !hostname.endsWith(`.${zoneName}`)) {
+    throw new JevError("Invalid tunnel name or hostname outside the explicit zone.");
+  }
+  const file = path.join(directory, "tunnel-state.json");
+  const credentialsFile = path.join(directory, "tunnel-credentials.json");
+  const list = async () => {
+    const result: unknown = JSON.parse(await cloudflared(["list", "--output", "json", "--name", name]));
+    // cloudflared serializes an empty tunnel list as JSON null.
+    return z.array(remoteTunnelSchema).parse(result === null ? [] : result);
+  };
+  let binding: z.infer<typeof cliBindingSchema>;
+  if (fs.existsSync(file)) {
+    binding = readPrivate(file, cliBindingSchema);
+    if (binding.name !== name || binding.hostname !== hostname || binding.zoneName !== zoneName || !binding.tunnelId || !binding.accountId) {
+      throw new JevError("Tunnel ownership conflict or uncertain create outcome; reconcile saved state explicitly.");
+    }
+    const tunnels = await list();
+    const credentials = readPrivate(credentialsFile, tunnelCredentials);
+    if (tunnels.length !== 1 || tunnels[0].id !== binding.tunnelId || tunnels[0].name !== name || tunnels[0].deleted_at
+      || credentials.TunnelID !== binding.tunnelId || credentials.AccountTag !== binding.accountId) {
+      throw new JevError("Saved tunnel ownership no longer matches cloudflared.");
+    }
+  } else {
+    if ((await list()).length || fs.existsSync(credentialsFile)) throw new JevError("Tunnel name or credentials conflict; existing resources were not changed.");
+    binding = { version: 1, service: "jev-mcp", provider: "cloudflared", name, hostname, zoneName, accountId: null, tunnelId: null };
+    writePrivate(file, binding);
+    const created = remoteTunnelSchema.parse(JSON.parse(await cloudflared(["create", "--output", "json", "--credentials-file", credentialsFile, name])));
+    const credentials = readPrivate(credentialsFile, tunnelCredentials);
+    if (created.name !== name || created.deleted_at || credentials.TunnelID !== created.id || !credentials.AccountTag) {
+      throw new JevError("Unexpected cloudflared tunnel identity; create intent retained.");
+    }
+    const tunnels = await list();
+    if (tunnels.length !== 1 || tunnels[0].id !== created.id || tunnels[0].name !== name || tunnels[0].deleted_at) {
+      throw new JevError("Created tunnel ownership could not be verified; create intent retained.");
+    }
+    binding.tunnelId = created.id;
+    binding.accountId = credentials.AccountTag;
+    writePrivate(file, binding);
+  }
+  // No overwrite flag or inherited force-DNS setting: a conflicting route must fail closed.
+  await cloudflared(["route", "dns", binding.tunnelId!, hostname]);
+  const configFile = path.join(directory, "tunnel.yml");
+  if (fs.existsSync(configFile)) privateFile(configFile);
+  fs.writeFileSync(configFile, tunnelConfiguration(config, binding, credentialsFile), { mode: 0o600 });
+  privateFile(configFile);
+  return { hostname, tunnelName: name, tunnelId: binding.tunnelId, status: "provisioned; tunnel not started" };
+}
 
 function tunnelConfiguration(config: Config, binding: z.infer<typeof bindingSchema>, credentialsFile: string): string {
   return `tunnel: ${binding.tunnelId}\ncredentials-file: ${JSON.stringify(credentialsFile)}\ningress:\n  - hostname: ${binding.hostname}\n    service: http://127.0.0.1:${config.port}\n    originRequest:\n      httpHostHeader: ${binding.hostname}\n  - service: http_status:404\n`;
 }
 
-export async function provisionTunnel(directory: string, config: Config, zoneName: string, name: string) {
+export async function provisionTunnel(directory: string, config: Config, zoneName: string, name: string, provider: "api" | "cloudflared" = "api") {
+  if (provider === "cloudflared") return provisionCli(directory, config, zoneName, name);
   const token = process.env.CLOUDFLARE_API_TOKEN;
   if (!token) throw new JevError("Set CLOUDFLARE_API_TOKEN for tunnel provisioning only.");
   if (!/^[a-z0-9-]{1,63}$/.test(name)) throw new JevError("Invalid tunnel name.");
@@ -36,10 +99,10 @@ export async function provisionTunnel(directory: string, config: Config, zoneNam
   const zone = zones[0];
   const file = path.join(directory, "tunnel-state.json");
   const credentialsFile = path.join(directory, "tunnel-credentials.json");
-  let binding: z.infer<typeof bindingSchema>;
+  let binding: z.infer<typeof apiBindingSchema>;
   const dns = () => api<Array<{ id: string; type: string; name: string; content: string }>>(`/zones/${zone.id}/dns_records?name=${encodeURIComponent(hostname)}`);
   if (fs.existsSync(file)) {
-    binding = readPrivate(file, bindingSchema);
+    binding = readPrivate(file, apiBindingSchema);
     if (binding.name !== name || binding.hostname !== hostname || binding.zoneId !== zone.id || binding.accountId !== zone.account.id || !binding.tunnelId) {
       throw new JevError("Tunnel ownership conflict or uncertain create outcome; reconcile saved state explicitly.");
     }
@@ -92,7 +155,7 @@ export async function runTunnel(directory: string, config: Config, approvalSecre
   }
   signal?.throwIfAborted();
   const child = spawn("cloudflared", ["--no-autoupdate", "--config", path.join(directory, "tunnel.yml"), "tunnel", "run", binding.tunnelId], {
-    stdio: "inherit", env: { PATH: process.env.PATH, HOME: process.env.HOME },
+    stdio: "inherit", env: cloudflaredEnvironment(), windowsHide: true,
   });
   const stop = () => child.kill("SIGTERM");
   signal?.addEventListener("abort", stop, { once: true });

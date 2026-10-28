@@ -39,7 +39,7 @@ export async function start(directory: string, config: Config, approvalSecret: s
   const out = fs.openSync(log, "a", 0o600);
   const entry = fileURLToPath(new URL("./index.js", import.meta.url));
   const child = spawn(process.execPath, [entry, "serve", "--state-dir", directory], {
-    detached: true, stdio: ["ignore", out, out, "ipc"],
+    detached: true, stdio: ["ignore", out, out, "ipc"], windowsHide: true,
     // Match C2C's detached daemon environment inheritance, including local TLS/proxy settings.
     env: { ...process.env, TYPESAFE_API_KEY: key.data },
   });
