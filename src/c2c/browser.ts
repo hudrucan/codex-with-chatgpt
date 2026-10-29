@@ -1,3 +1,5 @@
+export { decodeTerminalOutput } from "./terminal-output.js";
+
 // Structural subset of the supported in-app browser API. No network or result reader.
 interface Composer {
   innerText(): Promise<string>;

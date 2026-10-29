@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import { z } from "zod";
 import { AuditSession } from "./session.js";
+import { formatTerminalResult } from "./terminal-result.js";
 
 const commandSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("submit"), handoff: z.string(), fixed: z.boolean().default(false) }).strict(),
@@ -12,14 +13,14 @@ const commandSchema = z.discriminatedUnion("operation", [
 const MAX_INPUT_BYTES = 6 * 48 * 1024 + 1024;
 const SESSION_IDLE_MS = 180_000;
 
-/** JSONL over the terminal's existing stdin/stdout; no daemon, IPC listener or persisted session. */
+/** JSONL input and framed TTY output; no daemon, IPC listener or persisted session. */
 export async function runSessionCommand() {
   // Codex keeps stdin open with tty=true. Raw mode prevents echo and canonical
   // terminal truncation of long handoff lines; restore this process's TTY on exit.
   const raw = process.stdin.isTTY && !process.stdin.isRaw;
   if (raw) process.stdin.setRawMode(true);
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  const output = (value: unknown) => process.stdout.write(JSON.stringify({ ok: true, value }) + "\n");
+  const output = (value: unknown) => process.stdout.write(formatTerminalResult({ ok: true, value }, !!process.stdout.isTTY));
   let session: AuditSession | undefined, timer: ReturnType<typeof setTimeout>;
   let completed = false, interrupted = false;
   const stop = () => {

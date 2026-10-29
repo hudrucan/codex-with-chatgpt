@@ -2,6 +2,7 @@ import process from "node:process";
 import { localAccess } from "./local.js";
 import { callbackLocal } from "./callback-client.js";
 import { runSessionCommand } from "./session-command.js";
+import { formatTerminalResult } from "./terminal-result.js";
 
 async function readInput(): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -28,8 +29,8 @@ try {
     value = await callbackLocal(first, await readInput());
   }
   else throw new Error("ASYNC_LOCAL_REQUEST_INVALID");
-  if (operation !== "async") process.stdout.write(JSON.stringify({ ok: true, value: value ?? null }) + "\n");
+  if (operation !== "async") process.stdout.write(formatTerminalResult({ ok: true, value: value ?? null }, !!process.stdout.isTTY));
 } catch (error) {
-  process.stdout.write(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) + "\n");
+  process.stdout.write(formatTerminalResult({ ok: false, error: error instanceof Error ? error.message : String(error) }, !!process.stdout.isTTY));
   process.exitCode = 1;
 }

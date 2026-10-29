@@ -35,6 +35,15 @@ Use one task-local terminal process and one in-app browser sender per workspace:
    opt-in is `auto=true`. Keep its session ID and send JSONL through `write_stdin`,
    not shell interpolation or credentials in argv. First line:
    `{"async":true,"hubId":"<known-hub>","workspaceId":"<id>","workspaceRoot":"<canonical-root>","taskId":"<stable-task>"}`.
+   With `tty=true`, long responses use `C2C_JSON_V1_OK` or `C2C_JSON_V1_ERROR`
+   frames of short ASCII lines, ending at `C2C_JSON_END`; short ASCII responses
+   such as READY and all pipe output remain JSONL. Retain the complete tool
+   output in memory immediately, including across tool chunks. Do not JSON.parse
+   an individual terminal line or strip physical newlines to guess an envelope.
+   An ERROR frame stops before browser setup; never treat it as a registration.
+   Decode with `decodeTerminalOutput` exported by `dist/c2c/browser.mjs`; it checks
+   byte length and SHA-256 before returning the original `{ok,value}` or
+   `{ok:false,error}` response. Do not print or persist the decoded envelope.
    `READY` validates options/source only.
 2. Send `{"operation":"submit","handoff":"[C2C Handoff]\n...","fixed":false}`.
    Success registers the attempt before claiming the task and returns `attemptId`,
@@ -42,6 +51,9 @@ Use one task-local terminal process and one in-app browser sender per workspace:
    the complete envelope, including `C2C_CALLBACK`, within the routed audit only.
    Registration/transport failure stops before browser access.
 3. Import `<checkout>/dist/c2c/browser.mjs` in the existing in-app browser REPL.
+   Use its `decodeTerminalOutput` on the retained complete submit response before
+   accessing the envelope; require `ok:true`. Missing or corrupted frames stop
+   delivery with `ASYNC_TERMINAL_OUTPUT_INVALID`, never a partial message.
    `createBrowserSender(browser, ui, resolveProject)` uses the supported browser's
    `tabs.selected()` and a UI-grounded `composerName`. Trust the selected ChatGPT
    conversation without resolving its Hub/Project or switching it. Only when none
