@@ -44,12 +44,16 @@ Use one task-local terminal process and one in-app browser sender per workspace:
    Decode with `decodeTerminalOutput` exported by `dist/c2c/browser.mjs`; it checks
    byte length and SHA-256 before returning the original `{ok,value}` or
    `{ok:false,error}` response. Do not print or persist the decoded envelope.
-   `READY` validates options/source only.
+   `READY` validates options and canonical workspace identity without hashing source.
 2. Send `{"operation":"submit","handoff":"[C2C Handoff]\n...","fixed":false}`.
    Success registers the attempt before claiming the task and returns `attemptId`,
    `message`, `remainingMs` and `expiresAt`. Only then may delivery start. Preserve
    the complete envelope, including `C2C_CALLBACK`, within the routed audit only.
    Registration/transport failure stops before browser access.
+   The full source snapshot is captured at submit, before registration, and compared
+   when the callback arrives. Drift during registration, sending or waiting rejects
+   the result; do not edit while an attempt is pending. No separate `fingerprint`
+   command is needed.
 3. Import `<checkout>/dist/c2c/browser.mjs` in the existing in-app browser REPL.
    Use its `decodeTerminalOutput` on the retained complete submit response before
    accessing the envelope; require `ok:true`. Missing or corrupted frames stop
@@ -62,6 +66,8 @@ Use one task-local terminal process and one in-app browser sender per workspace:
    requires exactly one current, owner-scoped Project binding; multiple configured
    Hubs require a selector. If tool bridging needs `ASYNC_PROJECT_REQUIRED`, obtain
    the URL in the terminal before creating the sender. Reuse it across rounds.
+   Import once; decode the retained terminal output and call `sender.send(envelope)`
+   in the same REPL invocation. Reuse the terminal and sender for subsequent rounds.
 4. Pass the complete returned envelope to `sender.send(envelope)` exactly once.
    It checks thread identity, draft and deadline, then presses Enter once. It never
    reads conversation history or audit responses. On send failure, `BrowserSendError`

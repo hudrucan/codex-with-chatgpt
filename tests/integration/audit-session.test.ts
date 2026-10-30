@@ -34,20 +34,26 @@ beforeEach(async () => {
   session = new AuditSession(options());
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await session.close(); await client.close(); await bridge.close();
   cleanup(state); cleanup(root); delete process.env.C2C_STATE_DIR;
 });
 
 it("accepts only callback results, verifies source before fixes, and caps one claim at three audits/two fixes", async () => {
+  const scans = vi.spyOn(localAccess, "sourceFingerprint");
   await session.close(); session = new AuditSession({ ...options(), timeoutMs: 10_000 });
+  expect(scans).not.toHaveBeenCalled();
   for (let i = 0; i < 3; i++) {
     const request = await session.submit(handoff + i, i > 0);
+    expect(scans).toHaveBeenCalledTimes(3 * i + 1);
     await expect(session.submit(handoff)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
     const waiting = session.sent(request.attemptId);
     expect((await submit(request, fix)).isError).not.toBe(true);
     expect(await waiting).toMatchObject({ status: "FIX", canAutoFix: false, canContinue: i < 2 });
+    expect(scans).toHaveBeenCalledTimes(3 * i + 2);
     if (i < 2) {
       expect(await session.verifySourceForFix()).toMatchObject({ canAutoFix: true });
+      expect(scans).toHaveBeenCalledTimes(3 * i + 3);
       write(root, "src/index.ts", `export const answer = ${i};\n`);
     }
   }
@@ -56,23 +62,67 @@ it("accepts only callback results, verifies source before fixes, and caps one cl
   expect(() => localAccess.claimTask(options().taskId)).toThrow("ASYNC_RESUME_UNSUPPORTED");
 });
 
-it.each(["before send acknowledgement", "during wait", "before fix"])("fails closed on source drift %s", async phase => {
+it.each(["during registration", "before send acknowledgement", "during wait", "before fix", "during fix authorization"])("fails closed on source drift %s", async phase => {
+  const fetch = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+    const response = await fetch(...args);
+    if ((phase === "during registration" && String(args[0]).endsWith("/register")) ||
+        (phase === "during fix authorization" && String(args[0]).endsWith("/cancel")))
+      write(root, "src/index.ts", "drift");
+    return response;
+  });
   const request = await session.submit(handoff);
-  if (phase === "before send acknowledgement") {
-    write(root, "src/index.ts", "drift");
-    await expect(session.sent(request.attemptId)).rejects.toThrow("ASYNC_SOURCE_DRIFT");
-  } else {
-    const waiting = session.sent(request.attemptId);
-    // Source is captured synchronously before waiting for the callback.
-    if (phase === "during wait") write(root, "src/index.ts", "drift");
-    expect((await submit(request, fix)).isError).not.toBe(true);
-    if (phase === "during wait") await expect(waiting).rejects.toThrow("ASYNC_SOURCE_DRIFT");
-    else {
-      await waiting; write(root, "src/index.ts", "drift");
-      await expect(session.verifySourceForFix()).rejects.toThrow("ASYNC_SOURCE_DRIFT");
-    }
+  if (phase === "before send acknowledgement") write(root, "src/index.ts", "drift");
+  const waiting = session.sent(request.attemptId);
+  if (phase === "during wait") write(root, "src/index.ts", "drift");
+  const rejected = ["during registration", "before send acknowledgement", "during wait"].includes(phase)
+    ? expect(waiting).rejects.toThrow("ASYNC_SOURCE_DRIFT") : undefined;
+  expect((await submit(request, fix)).isError).not.toBe(true);
+  if (rejected) await rejected;
+  else {
+    await waiting;
+    if (phase === "before fix") write(root, "src/index.ts", "drift");
+    await expect(session.verifySourceForFix()).rejects.toThrow("ASYNC_SOURCE_DRIFT");
   }
   await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
+});
+
+it("validates the source workspace before registration without scanning it at READY", () => {
+  const transport = vi.spyOn(globalThis, "fetch"), scans = vi.spyOn(localAccess, "sourceFingerprint");
+  expect(() => new AuditSession({ ...options(), workspaceId: "abcdef012345" })).toThrow("ASYNC_SOURCE_WORKSPACE_MISMATCH");
+  expect(scans).not.toHaveBeenCalled();
+  expect(transport).not.toHaveBeenCalled();
+});
+
+it.each(["submit", "callback", "fix"])("rejects a source scan that exhausts the deadline at %s", async phase => {
+  await session.close();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    session = new AuditSession(options());
+    const scan = localAccess.sourceFingerprint;
+    let slow = phase === "submit";
+    vi.spyOn(localAccess, "sourceFingerprint").mockImplementation((...args) => {
+      const source = scan(...args);
+      if (slow) vi.advanceTimersByTime(2100);
+      return source;
+    });
+    if (phase === "submit") {
+      await expect(session.submit(handoff)).rejects.toThrow("ASYNC_TIMEOUT");
+      expect(fs.existsSync(path.join(state, "async-tasks"))).toBe(false);
+    } else {
+      const request = await session.submit(handoff);
+      slow = phase === "callback";
+      const waiting = session.sent(request.attemptId);
+      const rejected = slow ? expect(waiting).rejects.toThrow("ASYNC_TIMEOUT") : undefined;
+      expect((await submit(request, fix)).structuredContent).toEqual({ accepted: true });
+      if (rejected) await rejected;
+      else {
+        await waiting; slow = true;
+        await expect(session.verifySourceForFix()).rejects.toThrow("ASYNC_FIX_NOT_AVAILABLE");
+      }
+    }
+    await expect(session.submit(handoff, true)).rejects.toThrow("ASYNC_AUDIT_LIMIT");
+  } finally { vi.useRealTimers(); }
 });
 
 it.each(["restart", "grant removal"])("rejects automatic fixes after %s", async kind => {

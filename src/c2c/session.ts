@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { callbackLocal } from "./callback-client.js";
 import { localAccess } from "./local.js";
+import { Workspace } from "../workspace/manager.js";
 import { auditPayloadSchema, correlationSchema, MAX_AUDIT_MS, type AuditPayload, type CallbackTicket } from "./protocol.js";
 
 export const sessionOptionsSchema = correlationSchema.pick({ hubId: true, workspaceId: true, taskId: true }).extend({
@@ -24,7 +25,8 @@ export class AuditSession {
 
   constructor(input: unknown) {
     this.options = sessionOptionsSchema.parse(input);
-    this.fingerprint();
+    if (new Workspace(this.options.workspaceRoot).id !== this.options.workspaceId)
+      throw new Error("ASYNC_SOURCE_WORKSPACE_MISMATCH");
   }
 
   async submit(handoff: string, fixed = false) {
@@ -37,16 +39,18 @@ export class AuditSession {
     const expiresAt = Date.now() + this.options.timeoutMs;
     const timer = setTimeout(() => abort.abort(), this.options.timeoutMs);
     try {
+      // Anchor the handoff before registration; any drift through delivery/wait
+      // invalidates the callback instead of adopting a later source snapshot.
       this.source = this.fingerprint();
+      if (performance.now() >= deadline) throw new Error("ASYNC_TIMEOUT");
       const { hubId, workspaceId, taskId } = this.options;
       const ticket = await callbackLocal("register", { hubId, workspaceId, taskId, attemptId: randomUUID(),
         handoffId: createHash("sha256").update(handoff).digest("hex"),
         timeoutMs: Math.max(1, Math.floor(deadline - performance.now())) }, abort.signal) as CallbackTicket;
       this.pending = { ticket, deadline, abort, timer };
-      if (this.stopped || abort.signal.aborted) throw new Error("ASYNC_TIMEOUT");
+      if (this.stopped || abort.signal.aborted || performance.now() >= deadline) throw new Error("ASYNC_TIMEOUT");
       // Prove transport/ownership before claiming or allowing browser delivery.
       if (this.audits === 0) localAccess.claimTask(taskId);
-      this.assertSource();
       this.audits++; this.result = undefined; this.verified = false;
       return { attemptId: ticket.attemptId, expiresAt, remainingMs: Math.max(0, Math.floor(deadline - performance.now())),
         message: `${handoff}\n\nC2C_CALLBACK ${JSON.stringify(ticket)}\n\n` +
@@ -68,11 +72,11 @@ export class AuditSession {
     if (this.stopped || this.busy || !pending || pending.ticket.attemptId !== attemptId) throw new Error("ASYNC_NOT_SENT");
     this.busy = true;
     try {
-      this.assertSource();
       const result = auditPayloadSchema.parse(await callbackLocal("wait", pending.ticket, pending.abort.signal));
       if (pending.abort.signal.aborted || performance.now() >= pending.deadline) throw new Error("ASYNC_TIMEOUT");
       if (this.stopped) throw new Error("ASYNC_INTERRUPTED");
       this.assertSource();
+      if (performance.now() >= pending.deadline) throw new Error("ASYNC_TIMEOUT");
       this.result = result;
       this.completedAttempt = pending;
       const { capability: _capability, ...identity } = pending.ticket;
@@ -91,12 +95,13 @@ export class AuditSession {
       throw new Error("ASYNC_FIX_NOT_AVAILABLE");
     this.busy = true;
     try {
-      this.assertSource();
       // Close the completed ticket while checking live Hub ownership/permission.
       // A restart, revoked registration or expired capability prevents editing.
       await callbackLocal("cancel", this.completedAttempt!.ticket);
       if (this.stopped || performance.now() >= this.completedAttempt!.deadline) throw new Error("ASYNC_FIX_NOT_AVAILABLE");
-      this.assertSource(); this.verified = true;
+      this.assertSource();
+      if (performance.now() >= this.completedAttempt!.deadline) throw new Error("ASYNC_FIX_NOT_AVAILABLE");
+      this.verified = true;
       return { ...this.result, canAutoFix: true };
     } catch (error) { this.stopped = true; throw error; }
     finally { this.busy = false; }

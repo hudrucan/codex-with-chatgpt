@@ -23,7 +23,8 @@ it("retains an exclusive zero-byte claim across module reloads without resetting
   expect(fs.readdirSync(directory)).toEqual([name]);
   const file = path.join(directory, name);
   expect(fs.statSync(file).size).toBe(0);
-  expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  // Windows reports writable files as 0666; POSIX mode bits do not describe its ACLs.
+  if (process.platform !== "win32") expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   expect(() => localAccess.claimTask(taskId)).toThrow("ASYNC_RESUME_UNSUPPORTED");
   vi.resetModules();
   const reloaded = await import("../../src/c2c/local.js");
