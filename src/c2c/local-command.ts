@@ -1,5 +1,5 @@
 import process from "node:process";
-import { localAccess } from "./local.js";
+import { sourceFingerprint } from "./source.js";
 import { callbackLocal } from "./callback-client.js";
 import { runSessionCommand } from "./session-command.js";
 import { formatTerminalResult } from "./terminal-result.js";
@@ -22,9 +22,7 @@ try {
   if (operation === "async") {
     await runSessionCommand();
   }
-  else if (operation === "claim" && /^[a-zA-Z0-9_-]{1,128}$/.test(first ?? "")) value = localAccess.claimTask(first);
-  else if (operation === "fingerprint" && first && /^[a-f0-9]{12}$/.test(second ?? "")) value = localAccess.sourceFingerprint(first, second);
-  else if (operation === "project" && /^[a-f0-9]{12}$/.test(first ?? "")) value = await localAccess.resolveProject(first, second);
+  else if (operation === "fingerprint" && first && /^[a-f0-9]{12}$/.test(second ?? "")) value = sourceFingerprint(first, second);
   else if (operation === "callback" && (first === "register" || first === "wait" || first === "cancel")) {
     value = await callbackLocal(first, await readInput());
   }

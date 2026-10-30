@@ -45,6 +45,18 @@ CLI lifecycle operations serialize per Hub. A crash can leave a lock;
 verify the recorded process is gone before removing that specific lock. Do not
 auto-remove locks by age or kill an unverified PID.
 
+## Local callback helpers
+
+The internal `dist/c2c/local.mjs` helper supports one-shot `callback register`,
+`callback wait`, `callback cancel` and local `fingerprint` operations for explicitly
+requested diagnostics. They do not authorize retries or separate verification attempts.
+Normal automatic delivery uses the [sender workflow](workflow-async.md).
+
+One-shot callback commands read one JSON document through EOF, up to 4096 bytes.
+Use a pipe whose writer closes stdin; an interactive PTY must also send EOF.
+A newline alone does not complete the request. Keep tickets out of shell
+interpolation and argv. Only the long-lived `async` controller uses JSONL with stdin kept open.
+
 ## ChatGPT UI recovery
 
 For a stale catalog, follow [Verification and binding](setup.md#verification-and-binding).

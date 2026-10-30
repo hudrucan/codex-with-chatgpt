@@ -156,11 +156,20 @@ It requires explicit OAuth `audit.submit`, a workspace still registered to this
 Hub, matching `hubId`, `workspaceId`, `taskId`, `attemptId`, `handoffId` and a
 256-bit capability. Capabilities are hashed in memory and never logged or persisted.
 
-The Hub holds at most 64 attempts for up to 600 seconds each; callback payloads
-are limited to 16 KiB. Identical results are idempotent until expiration;
-conflicting, cancelled, expired or foreign callbacks fail. Restart loses all
-attempts. Registration, event waiting and cancellation use the loopback admin
-API, require its runtime token and reject proxy headers.
+Capabilities expire within 600 seconds. The Hub retains each entry as a replay
+guard for another 600 seconds after its capability deadline; active attempts and
+guards share the 64-entry inbox limit. Reusing `(workspaceId, taskId)` with a new
+attempt ID or handoff does not bypass a guard, including after cancellation,
+interruption or timeout. FIX continuation requires the latest authenticated,
+invalidated FIX ticket and is capped at three rounds. This retained proof remains
+valid for continuation until guard expiry, without extending callback validity.
+Guards are not persisted;
+Hub restart loses both guards and capabilities and must not be used to retry delivery.
+
+Callback payloads are limited to 16 KiB. Identical results are idempotent until
+capability expiration; conflicting, cancelled, expired or foreign callbacks fail.
+Registration, event waiting and cancellation use the loopback admin API, require
+its runtime token and reject proxy headers.
 
 Local source fingerprints cover HEAD, index and tracked/non-ignored file paths,
 modes and bytes, including deletions. Sensitive files contribute metadata only.

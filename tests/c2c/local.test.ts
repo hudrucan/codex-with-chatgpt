@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { localAccess } from "../../src/c2c/local.js";
+import { sourceFingerprint } from "../../src/c2c/source.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, git, isolateStateDir, makeGitRepo, makeTmpDir } from "../helpers.js";
 
@@ -14,23 +13,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks(); cleanup(root); cleanup(state); delete process.env.C2C_STATE_DIR;
 });
-const fingerprint = () => localAccess.sourceFingerprint(root, workspaceId);
-
-it("retains an exclusive zero-byte claim across module reloads without resetting task identity", async () => {
-  const taskId = "local-claim-test";
-  localAccess.claimTask(taskId);
-  const directory = path.join(state, "async-tasks"), name = createHash("sha256").update(taskId).digest("hex");
-  expect(fs.readdirSync(directory)).toEqual([name]);
-  const file = path.join(directory, name);
-  expect(fs.statSync(file).size).toBe(0);
-  // Windows reports writable files as 0666; POSIX mode bits do not describe its ACLs.
-  if (process.platform !== "win32") expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-  expect(() => localAccess.claimTask(taskId)).toThrow("ASYNC_RESUME_UNSUPPORTED");
-  vi.resetModules();
-  const reloaded = await import("../../src/c2c/local.js");
-  expect(() => reloaded.localAccess.claimTask(taskId)).toThrow("ASYNC_RESUME_UNSUPPORTED");
-  expect(fs.readFileSync(file).length).toBe(0);
-});
+const fingerprint = () => sourceFingerprint(root, workspaceId);
 
 it.each(["tracked bytes", "index", "untracked bytes", "new untracked file", "deletion", "HEAD"])(
   "detects source drift in %s with no browser or transcript dependency", change => {
@@ -70,7 +53,7 @@ it("detects sensitive-file metadata drift without reading its contents", () => {
 });
 
 it("rejects an incorrect canonical workspace identity and unavailable source", () => {
-  expect(() => localAccess.sourceFingerprint(root, "abcdef012345")).toThrow("ASYNC_SOURCE_WORKSPACE_MISMATCH");
+  expect(() => sourceFingerprint(root, "abcdef012345")).toThrow("ASYNC_SOURCE_WORKSPACE_MISMATCH");
   cleanup(root);
   expect(fingerprint).toThrow();
 });

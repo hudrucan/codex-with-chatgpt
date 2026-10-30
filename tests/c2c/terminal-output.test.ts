@@ -3,13 +3,23 @@ import { expect, it } from "vitest";
 import { decodeTerminalOutput, TERMINAL_OUTPUT_LIMIT } from "../../src/c2c/terminal-output.js";
 import { formatTerminalResult } from "../../src/c2c/terminal-result.js";
 
-const response = { ok: true, value: { attemptId: "fixture-attempt", message: "[C2C Handoff]\nTiếng Việt 🪟\n".repeat(900), remainingMs: 600000 } };
+const response = { ok: true, value: { ticket: {
+  hubId: "hub-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", workspaceId: "abcdef012345", taskId: "authorized-task",
+  attemptId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", handoffId: "b".repeat(64), capability: "a".repeat(64),
+}, remainingMs: 600000, expiresAt: 1800000000000 } };
 
-it.each([false, true])("preserves a complete Unicode envelope through tty=%s", async tty => {
+it.each([false, true])("preserves the complete compact ticket through tty=%s", async tty => {
   const output = formatTerminalResult(response, tty);
   expect(await decodeTerminalOutput(output)).toEqual(response);
   if (tty) expect(output.split(/\r?\n/).every(line => line.length <= 64)).toBe(true);
   else expect(output).toBe(JSON.stringify(response) + "\n");
+});
+
+it("preserves Unicode audit findings without returning the handoff", async () => {
+  const result = { ok: true, value: { status: "FIX", complete: true, summary: "Audit 🪟", findings: [
+    { file: "src/index.ts", line: 1, evidence: "Unicode evidence 🪟".repeat(50), fix: "Scoped fix" },
+  ], canContinue: true } };
+  expect(await decodeTerminalOutput(formatTerminalResult(result, true))).toEqual(result);
 });
 
 it("survives 80-column PTY wrapping and terminal controls without changing the envelope", async () => {
@@ -44,13 +54,13 @@ it("rejects oversized output and invalid UTF-8 even when its digest matches", as
 });
 
 it("preserves controller error responses and refuses to guess truncated JSON", async () => {
-  const error = { ok: false, error: "ASYNC_RESUME_UNSUPPORTED: This task is already claimed; stop async and use the manual workflow." };
+  const error = { ok: false, error: "ASYNC_CALLBACK_TRANSPORT_UNAVAILABLE: EPERM" };
   expect(await decodeTerminalOutput(formatTerminalResult(error, true))).toEqual(error);
   await expect(decodeTerminalOutput('{"ok":true,"value":')).rejects.toThrow("ASYNC_TERMINAL_OUTPUT_INVALID");
 });
 
-it("keeps short READY responses readable before browser setup", async () => {
-  const ready = { ok: true, value: { status: "READY" } };
-  expect(formatTerminalResult(ready, true)).toBe(JSON.stringify(ready) + "\n");
-  expect(await decodeTerminalOutput(formatTerminalResult(ready, true))).toEqual(ready);
+it("keeps short fix authorization responses readable", async () => {
+  const verified = { ok: true, value: { canAutoFix: true } };
+  expect(formatTerminalResult(verified, true)).toBe(JSON.stringify(verified) + "\n");
+  expect(await decodeTerminalOutput(formatTerminalResult(verified, true))).toEqual(verified);
 });

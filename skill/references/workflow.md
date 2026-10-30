@@ -43,9 +43,12 @@ inspect current source before editing without repeating a full settled audit.
 
 Preserve routing and an already-selected `auto=true` when revising/continuing a
 prompt. Planning remains Web-first. Omitted `auto` or `auto=false` means manual
-delivery without browser, Hub, claim or callback state access. Only explicit
-`auto=true` enables automatic delivery. Automatic delivery goes directly
-register → send → callback.
+delivery without browser, Hub or callback state access. Only explicit
+`auto=true` enables automatic delivery. First require an existing browser and selected
+ChatGPT conversation, before source hashing or registration. If either is missing,
+return the manual handoff without preparing an attempt. Never launch a browser,
+resolve Project bindings, open tabs or create conversations for automatic delivery.
+When available, go directly prepare → send once → MCP callback → result.
 On failure, stop automation and return the original handoff for the user to copy
 under the [sender failure rules](workflow-async.md#manual-fallback). Never resend,
 reuse a callback ticket or create a new task to evade limits.

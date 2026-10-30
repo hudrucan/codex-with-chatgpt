@@ -18,7 +18,7 @@ Successful setup or reconnect ends at `MCP READY`.
 | --- | --- |
 | `bridge/` | Express assembly, loopback listener, port fallback, runtime discovery and local admin API |
 | `mcp/` | Repository-read tools, terminal audit callback and stateless Streamable HTTP transport |
-| `c2c/` | Local helper, source checks, task claims, owner-scoped Project resolution and runtime audit inbox |
+| `c2c/` | Terminal controller, source checks, pinned-thread sender and bounded runtime audit inbox |
 | `auth/` | OAuth discovery, client registration, PKCE, token rotation/revocation and token hashes |
 | `pairing/` | Expiring one-time pairing codes, attempt limits and rate limiting |
 | `hub/` | Independent identity, deterministic discovery and explicit selection |

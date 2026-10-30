@@ -34,7 +34,7 @@ async function connect(scopes: string[]) {
   return value;
 }
 function register(timeoutMs = 2000): Promise<CallbackTicket> {
-  return callbackLocal("register", { hubId: bridge.hubId, workspaceId, taskId: "callback-task",
+  return callbackLocal("register", { hubId: bridge.hubId, workspaceId, taskId: randomUUID(),
     attemptId: randomUUID(), handoffId: "a".repeat(64), timeoutMs }) as Promise<CallbackTicket>;
 }
 function submit(ticket: CallbackTicket, payload: unknown = result, caller = client) {

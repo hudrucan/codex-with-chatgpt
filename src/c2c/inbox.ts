@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { callbackSchema, callbackTicketSchema, registerAttemptSchema, type AuditPayload, type CallbackTicket, type Correlation } from "./protocol.js";
+import { callbackSchema, callbackTicketSchema, registerAttemptSchema, MAX_AUDIT_MS, type AuditPayload, type CallbackTicket, type Correlation } from "./protocol.js";
 
 export class AuditInboxError extends Error {
   constructor(readonly code: string) { super(code); }
@@ -8,6 +8,7 @@ interface Entry {
   identity: Correlation;
   capabilityHash: Buffer;
   deadline: number;
+  round: number;
   result?: AuditPayload;
   cancelled: boolean;
   timer: ReturnType<typeof setTimeout>;
@@ -22,13 +23,26 @@ export class AuditInbox {
   constructor(readonly hubId: string) {}
 
   register(input: unknown): CallbackTicket {
-    const { timeoutMs, ...identity } = registerAttemptSchema.parse(input);
+    const { timeoutMs, previousAttempt, ...identity } = registerAttemptSchema.parse(input);
     if (this.closed) throw new AuditInboxError("ASYNC_INBOX_CLOSED");
     if (identity.hubId !== this.hubId) throw new AuditInboxError("ASYNC_CALLBACK_OWNER_MISMATCH");
+    for (const [id, entry] of this.entries) {
+      if (performance.now() >= entry.deadline + MAX_AUDIT_MS) this.expire(id);
+    }
     if (this.entries.has(identity.attemptId)) throw new AuditInboxError("ASYNC_ATTEMPT_EXISTS");
     if (this.entries.size >= 64) throw new AuditInboxError("ASYNC_INBOX_FULL");
+    const previous = [...this.entries.values()].filter(entry => entry.identity.workspaceId === identity.workspaceId &&
+      entry.identity.taskId === identity.taskId).at(-1);
+    if (previous) {
+      if (!previousAttempt || previousAttempt.attemptId !== previous.identity.attemptId)
+        throw new AuditInboxError("ASYNC_TASK_REPLAY");
+      // Retained FIX proof can outlive callback validity; registration already pruned expired guards.
+      this.authenticate(previous, previousAttempt);
+      if (previous.result?.status !== "FIX" || !previous.cancelled || previous.round >= 3)
+        throw new AuditInboxError("ASYNC_TASK_REPLAY");
+    } else if (previousAttempt) throw new AuditInboxError("ASYNC_TASK_REPLAY");
     const capability = randomBytes(32).toString("hex");
-    const entry: Entry = { identity, capabilityHash: digest(capability), deadline: performance.now() + timeoutMs,
+    const entry: Entry = { identity, capabilityHash: digest(capability), deadline: performance.now() + timeoutMs, round: (previous?.round ?? 0) + 1,
       cancelled: false, timer: setTimeout(() => this.expire(identity.attemptId), timeoutMs) };
     entry.timer.unref();
     this.entries.set(identity.attemptId, entry);
@@ -86,15 +100,25 @@ export class AuditInbox {
     const entry = this.entries.get(ticket.attemptId);
     if (!entry) throw new AuditInboxError("ASYNC_ATTEMPT_UNAVAILABLE");
     if (performance.now() >= entry.deadline) { this.expire(ticket.attemptId); throw new AuditInboxError("ASYNC_TIMEOUT"); }
+    this.authenticate(entry, ticket);
+    return entry;
+  }
+  private authenticate(entry: Entry, ticket: CallbackTicket): void {
     if (Object.entries(entry.identity).some(([key, value]) => ticket[key as keyof Correlation] !== value) ||
         !timingSafeEqual(entry.capabilityHash, digest(ticket.capability))) throw new AuditInboxError("ASYNC_CALLBACK_MISMATCH");
-    return entry;
   }
   private expire(attemptId: string): void {
     const entry = this.entries.get(attemptId);
     if (!entry) return;
     clearTimeout(entry.timer);
-    this.entries.delete(attemptId);
     entry.waiter?.reject(new AuditInboxError("ASYNC_TIMEOUT"));
+    entry.waiter = undefined;
+    // Keep the same bounded entry as a replay guard after its capability expires.
+    const remaining = entry.deadline + MAX_AUDIT_MS - performance.now();
+    if (remaining <= 0) this.entries.delete(attemptId);
+    else {
+      entry.timer = setTimeout(() => this.expire(attemptId), remaining);
+      entry.timer.unref();
+    }
   }
 }

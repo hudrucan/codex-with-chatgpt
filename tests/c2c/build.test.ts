@@ -4,7 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { expect, it } from "vitest";
 import ts from "typescript";
 import { buildC2C } from "../../scripts/build-c2c.mjs";
-import { localAccess } from "../../src/c2c/local.js";
+import { sourceFingerprint } from "../../src/c2c/source.js";
 import { Workspace } from "../../src/workspace/manager.js";
 import { cleanup, makeGitRepo, makeTmpDir } from "../helpers.js";
 
@@ -31,22 +31,18 @@ it("builds self-contained terminal/send-only modules and leaves manual delivery 
     });
     for (const options of [{ async: true }, { async: false }, {}]) {
       const response = run("async", [], options);
-      expect(response.status, response.stderr).toBe("async" in options && options.async ? 1 : 0);
+      expect(response.status, response.stderr).toBe(1);
       const parsed = JSON.parse(response.stdout);
-      if ("async" in options && options.async) {
-        expect(parsed.ok).toBe(false);
-        expect(parsed.error).toBeTruthy(); // Missing explicit correlation/root cannot start a session.
-      } else expect(parsed).toEqual({ ok: true, value: null });
+      expect(parsed.ok).toBe(false);
+      expect(parsed.error).toBeTruthy(); // Only an explicit prepare can start this internal controller.
       expect(fs.existsSync(state)).toBe(false);
     }
     const workspaceId = new Workspace(root).id;
     const source = run("fingerprint", [root, workspaceId]);
     expect(source.status, source.stderr).toBe(0);
-    expect(JSON.parse(source.stdout).value).toBe(localAccess.sourceFingerprint(root, workspaceId));
-    expect(run("claim", ["helper-task"]).status).toBe(0);
-    const duplicate = run("claim", ["helper-task"]);
-    expect(duplicate.status).toBe(1);
-    expect(JSON.parse(duplicate.stdout).error).toContain("ASYNC_RESUME_UNSUPPORTED");
+    expect(JSON.parse(source.stdout).value).toBe(sourceFingerprint(root, workspaceId));
+    expect(run("claim", ["helper-task"]).status).toBe(1);
+    expect(fs.existsSync(state)).toBe(false);
 
     const registration = JSON.stringify({ hubId: "hub-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       workspaceId, taskId: "callback-stdin", attemptId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

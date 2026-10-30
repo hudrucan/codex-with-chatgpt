@@ -1,139 +1,123 @@
 # Automatic C2C sender
 
 Load with the [common contract](workflow.md) only for explicit `auto=true`
-on the Codex sender. Web handoff audits use the [receiver contract](workflow-web.md),
-not this terminal/browser flow.
+on the Codex sender. Web audits use the [receiver](workflow-web.md).
+Omitted `auto` or `auto=false` stays manual without browser, Hub or task-state access.
 
-Omitted `auto` or `auto=false` uses manual delivery without browser, Hub or task
-state access. Automatic delivery requires the routed `hubId`, explicit registered
-`workspaceId`, canonical `workspaceRoot` and one stable `taskId` for that workspace.
-Missing ownership blocks sending; do not infer it from a chat URL or substitute
-another Hub/thread. Keep the original complete handoff before registering it.
+## Existing conversation only
 
-Go directly register → send → callback. Every attempt registers fresh
-correlation/capability and performs ownership, permission, source, deadline, claim
-and send-once checks. Registration proves local transport availability only;
-OAuth `audit.submit` is enforced on the actual MCP callback. Local health and
-repository reads do not prove callback acceptance.
-Request official terminal escalation for `127.0.0.1` or state access when needed.
-On EPERM or denied escalation, stop the attempt and use the manual fallback;
-permission approval does not authorize an automatic retry of a failed operation.
-Callback operations use that terminal, independently of REPL fetch permissions.
-Do not change sandbox settings, add another transport, rollout or re-consent
-without authorization.
+Before starting the terminal controller, source hashing, callback registration or
+task claiming, require an existing browser and selected ChatGPT conversation in the
+current REPL. Otherwise, immediately return the original manual `[C2C Handoff]`.
+Never launch a browser, resolve Project bindings, open tabs or create conversations
+for automatic delivery.
 
-For a multi-repo request, audit each repository with its own correctly routed
-workspace/root, task-local terminal session and attempt/source gate. A fingerprint
-for one repository proves nothing about another. Keep each task ID stable through
-its rounds; do not extend the controller for batch work or bypass a claim/limit.
+Import `<checkout>/dist/c2c/browser.mjs` once in that existing browser REPL. Call
+`createBrowserSender(browser, composerName)` with the observed composer name. It pins
+the selected conversation and rejects missing, Project landing or transient URLs
+with `ASYNC_THREAD_REQUIRED`. Do not read conversation history or audit replies.
+Retain this sender and the original complete handoff in memory for the task.
 
-Use one task-local terminal process and one in-app browser sender per workspace:
+Only after sender creation succeeds, use prepare → send once → MCP callback → result.
+Registration checks ownership and creates fresh correlation/capability. OAuth
+`audit.submit` is enforced on the actual MCP callback; local health and repository
+reads do not prove callback acceptance.
 
-1. Run `node <checkout>/dist/c2c/local.mjs async` with the supported terminal tool,
-   `tty=true` to keep stdin open and official loopback approval when required.
-   The CLI command and JSON `async` field are runtime internals; the public prompt
-   opt-in is `auto=true`. Keep its session ID and send JSONL through `write_stdin`,
-   not shell interpolation or credentials in argv. First line:
-   `{"async":true,"hubId":"<known-hub>","workspaceId":"<id>","workspaceRoot":"<canonical-root>","taskId":"<stable-task>"}`.
-   With `tty=true`, long responses use `C2C_JSON_V1_OK` or `C2C_JSON_V1_ERROR`
-   frames of short ASCII lines, ending at `C2C_JSON_END`; short ASCII responses
-   such as READY and all pipe output remain JSONL. Retain the complete tool
-   output in memory immediately, including across tool chunks. Do not JSON.parse
-   an individual terminal line or strip physical newlines to guess an envelope.
-   An ERROR frame stops before browser setup; never treat it as a registration.
-   Decode with `decodeTerminalOutput` exported by `dist/c2c/browser.mjs`; it checks
-   byte length and SHA-256 before returning the original `{ok,value}` or
-   `{ok:false,error}` response. Do not print or persist the decoded envelope.
-   `READY` validates options and canonical workspace identity without hashing source.
-2. Send `{"operation":"submit","handoff":"[C2C Handoff]\n...","fixed":false}`.
-   Success registers the attempt before claiming the task and returns `attemptId`,
-   `message`, `remainingMs` and `expiresAt`. Only then may delivery start. Preserve
-   the complete envelope, including `C2C_CALLBACK`, within the routed audit only.
-   Registration/transport failure stops before browser access.
-   The full source snapshot is captured at submit, before registration, and compared
-   when the callback arrives. Drift during registration, sending or waiting rejects
-   the result; do not edit while an attempt is pending. No separate `fingerprint`
-   command is needed.
-3. Import `<checkout>/dist/c2c/browser.mjs` in the existing in-app browser REPL.
-   Use its `decodeTerminalOutput` on the retained complete submit response before
-   accessing the envelope; require `ok:true`. Missing or corrupted frames stop
-   delivery with `ASYNC_TERMINAL_OUTPUT_INVALID`, never a partial message.
-   `createBrowserSender(browser, ui, resolveProject)` uses the supported browser's
-   `tabs.selected()` and a UI-grounded `composerName`. Trust the selected ChatGPT
-   conversation without resolving its Hub/Project or switching it. Only when none
-   exists may the resolver use `project <workspaceId> [hubId]` with the routed Hub
-   and `ui.openProjectThread(projectUrl)` with observed navigation. The helper
-   requires exactly one current, owner-scoped Project binding; multiple configured
-   Hubs require a selector. If tool bridging needs `ASYNC_PROJECT_REQUIRED`, obtain
-   the URL in the terminal before creating the sender. Reuse it across rounds.
-   Import once; decode the retained terminal output and call `sender.send(envelope)`
-   in the same REPL invocation. Reuse the terminal and sender for subsequent rounds.
-4. Pass the complete returned envelope to `sender.send(envelope)` exactly once.
-   It checks thread identity, draft and deadline, then presses Enter once. It never
-   reads conversation history or audit responses. On send failure, `BrowserSendError`
-   reports `delivery`; catch it in the REPL and report only
-   `{code: error.message, delivery: error.delivery}` so the tool preserves this
-   metadata without dumping the request or error cause. Codex handles the manual
-   fallback below.
-   After success, send `{"operation":"sent","attemptId":"<returned-id>"}` to the same
-   terminal session to open one bounded HTTP event wait. Use normal terminal
-   completion waits, not inbox polling or transcript DOM. Only an MCP
-   `submit_audit_result` completes the attempt; a chat reply cannot.
+## Prepare and send
+
+Use the routed `hubId`, explicit registered `workspaceId` and canonical
+`workspaceRoot`. Never infer ownership from a chat URL or borrow another Hub.
+Choose one task ID for this independently authorized user request and keep it stable
+across its rounds. Use one terminal process and one pinned sender per task.
+
+1. After the browser check, run `node <checkout>/dist/c2c/local.mjs async` with the
+   supported terminal tool and `tty=true`. Request official terminal escalation for
+   loopback or state access when needed. Send one JSONL command through `write_stdin`:
+   `{"operation":"prepare","options":{"hubId":"<hub>","workspaceId":"<id>","workspaceRoot":"<root>","taskId":"<request-id>"},"handoff":"[C2C Handoff]\n..."}`.
+   `async` is internal; the public opt-in is `auto=true`.
+2. Prepare returns `{ticket,expiresAt,remainingMs}` and immediately opens one bounded
+   HTTP event wait. It never polls or echoes the original handoff through PTY.
+   With `tty=true`, ticket and result output uses short ASCII `C2C_JSON_V1_OK` or
+   `C2C_JSON_V1_ERROR` frames ending in `C2C_JSON_END`. Framing still protects ticket,
+   capability and result bytes against Windows PTY wrapping. Pipes use JSONL.
+   Retain complete output across tool chunks. Do not JSON.parse individual terminal
+   lines or strip physical newlines to guess a response.
+3. In the same existing browser REPL, use `decodeTerminalOutput` on the complete
+   prepare response and require `ok:true`. Missing/corrupted frames stop delivery
+   with `ASYNC_TERMINAL_OUTPUT_INVALID`. Decode and call
+   `sender.send(response.value, originalHandoff)` in one invocation,
+   exactly once. The sender verifies the retained handoff against the ticket's
+   `handoffId`, checks the pinned thread, draft and deadline, and presses Enter once.
+   Preserve the complete `C2C_CALLBACK` ticket only within the routed audit. Never
+   print or persist the decoded ticket or capability.
+4. Wait for the terminal result without another command. Only MCP
+   `submit_audit_result` completes the attempt.
+   A chat reply cannot complete it. On browser failure, catch `BrowserSendError` in
+   the REPL and report only `{code:error.message,delivery:error.delivery}` without
+   dumping the request or error cause, then follow [manual fallback](#manual-fallback).
 5. On FIX with `canContinue:true`, send `{"operation":"verifySourceForFix"}`
-   immediately before editing. Proceed only on `canAutoFix:true`: this checks
-   unchanged source and invalidates the completed capability against the live Hub.
-   After one in-scope fix and focused validation, submit the new handoff with
-   `fixed:true` in this same process, then use the same sender and wait again.
+   immediately before editing. Proceed only on `canAutoFix:true`: this invalidates
+   the completed capability against the live Hub and rechecks unchanged source.
+   After one scoped fix and focused validation, send
+   `{"operation":"prepare","handoff":"[C2C Handoff]\n..."}` in the same process,
+   omitting immutable options. Reuse the same sender and repeat the send/wait steps.
    Stop on PASS/BLOCKED/ERROR or `canContinue:false`. Maximum: three audits/two fixes.
 
-The default 600-second maximum deadline includes registration, sending and waiting;
-send acknowledgement never restarts it. Optional `timeoutMs` may shorten this deadline.
-Input/fix phases expire independently after 180 seconds of idle input.
-Source drift or ownership, permission and transport failures stop the session.
-EOF/interrupt cancels the attempt. Lost sessions cannot resume, and persistent
-task claims must not be removed or bypassed with a new ID.
+The default 600-second maximum deadline includes preparation, registration, sending
+and waiting. Optional `timeoutMs` in options may shorten it; nothing restarts it.
+Each normal audit uses two source fingerprints: before registration and on callback receipt.
+Drift during registration, sending or waiting rejects the result. FIX adds one
+check immediately before editing. Never edit while an attempt is pending or run a
+separate `fingerprint` command as an extra gate.
+
+Input/fix phases have no separate idle timer. Lost sessions cannot resume.
+The Hub keeps bounded replay
+guards for `(workspaceId,taskId)` until ten minutes after each attempt's capability
+deadline, including after cancellation, interruption or timeout. Fresh attempt IDs
+or changed handoff text do not bypass the guard. FIX continuation must present the
+latest authenticated, invalidated FIX ticket. After verification, editing/testing
+may outlast the callback deadline, but continuation must precede guard expiry.
+Guards share the existing 64-entry inbox limit and expire without permanent files.
+A Hub restart loses both guards and capabilities; never restart it to retry delivery.
+Abandoned legacy claim files are ignored and left untouched. A separately authorized
+new task gets its own process and task ID. Expiration does not authorize a retry.
+
+For a multi-repo request, each repository needs its own correctly routed workspace/root
+and terminal/sender. A fingerprint for one repository proves nothing about another;
+do not extend the controller for batch work or navigate to find another thread.
 
 E2E passes only when the Hub returns `accepted:true` and the terminal receives the
-matching result. Wrong correlation/capability and conflicting, expired or revoked
-callbacks fail closed; exact duplicates are idempotent until expiration.
+matching result. Wrong correlation/capability, conflicting, expired or revoked
+callbacks fail closed; exact duplicates are idempotent until capability expiration.
 
 ## Manual fallback
 
-On register, browser setup/send, callback transport or terminal audit failure,
-stop automation without resending. Retain the original handoff in Codex's current
-context; do not persist it or reconstruct it from the callback envelope.
-Browser errors report only a safe code and `delivery`:
+On missing browser/conversation or any prepare, send or callback failure, stop
+automation without resending. EOF, Ctrl+C or interruption cancels a
+pending attempt. Interrupt the same terminal if it is still running; cancellation
+is best effort and cannot unsend a message. Do not retry registration, sending,
+callback submission or waiting, recreate a controller/sender for the failed task,
+reuse a ticket for another audit or change task IDs to bypass limits.
+On EPERM or denied escalation, later approval does not authorize a retry.
+Do not change sandbox settings, add another transport, rollout or re-consent without
+authorization. Callback transport stays in the terminal.
 
-- `not_sent`: Enter was not attempted; the handoff was not sent.
-- `uncertain`: Enter was attempted but sending could not be confirmed.
+Report a safe code and sending state outside the copyable handoff:
+
+- `not_sent`: Enter was not attempted, including missing browser/thread or prepare failure.
+- `uncertain`: Enter was attempted but delivery could not be confirmed.
 - `sent`: sending was confirmed; a later callback failure does not undo delivery.
 
-Registration/browser setup failures are `not_sent`. After a successful browser
-send, a failed terminal wait is `sent`, even if its command acknowledgement was
-lost. If the browser tool itself fails without returning delivery metadata, report
-`uncertain` unless there is explicit evidence Enter was never attempted.
+If the browser tool fails without delivery metadata, report `uncertain` unless
+there is explicit evidence Enter was never attempted. For `uncertain` or `sent`,
+warn outside the handoff that manual sending may duplicate an already delivered
+message. A returned ERROR/BLOCKED is an audit failure; never label it PASS or claim
+callback acceptance without evidence.
 
-Report the sending state and safe failure code outside the copyable handoff.
-For `uncertain` or `sent`, warn outside the handoff that manually sending it may
-duplicate a message already delivered. Acknowledge a returned ERROR/BLOCKED as an
-audit failure; never label it PASS or claim callback acceptance without evidence.
+Output the original complete handoff using the [common handoff format](workflow.md#codex--web)
+in a separate copyable block whose first line is `[C2C Handoff]`. Exclude the callback
+ticket, `C2C_CALLBACK`, capability, credentials and raw transport dumps. Do not persist
+the handoff or reconstruct it from a ticket. Report source drift and unchecked limits;
+validation applies only to the tested revision. The user decides whether and where to copy it.
 
-Then output the original complete handoff as a separate copyable block whose
-exact first line is `[C2C Handoff]`. Preserve every repo's connector/Hub/workspace,
-revision and uncommitted scope, changes, actual validation, risks and blockers.
-Exclude the callback ticket, `C2C_CALLBACK`, capability, credentials and raw tool
-or transport dumps. Add observed source drift or unchecked limits honestly;
-validation still refers only to the revision actually tested.
-Codex only provides the text; the user decides whether and where to copy it.
-
-Abort or terminate the same terminal session to cancel a pending attempt, without
-resetting its task claim. Cancellation is best effort and cannot unsend a message.
-Do not retry registration, browser sending or callback submission/waiting; do not
-create a new task to evade an existing claim or audit limits.
-
-The helper retains one-shot `callback register`, `callback wait` and `callback
-cancel`, plus local `claim`, `fingerprint` and `project` helpers. Callback commands
-read one JSON document through EOF, up to 4096 bytes. Prefer a pipe whose writer
-closes stdin; an interactive PTY must also send EOF. A newline alone does not
-complete these commands. Keep tickets out of shell interpolation and argv.
-Only the long-lived `async` command uses JSONL with stdin kept open.
+For explicitly requested diagnostics, see [local callback helpers](operations.md#local-callback-helpers).

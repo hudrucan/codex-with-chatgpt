@@ -23,6 +23,7 @@ export const callbackSchema = callbackTicketSchema.extend({ result: auditPayload
   .refine(value => new TextEncoder().encode(JSON.stringify(value)).length <= 16_384);
 export const registerAttemptSchema = correlationSchema.extend({
   timeoutMs: z.number().int().min(1).max(MAX_AUDIT_MS),
+  previousAttempt: callbackTicketSchema.optional(),
 }).strict();
 export type Correlation = z.infer<typeof correlationSchema>;
 export type CallbackTicket = z.infer<typeof callbackTicketSchema>;

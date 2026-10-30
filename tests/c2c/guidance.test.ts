@@ -61,7 +61,7 @@ it("keeps host/mode guidance reachable inside a standalone installed Skill", () 
 });
 
 it("keeps repository backlinks valid after moving connection procedures", () => {
-  for (const name of ["docs/lifecycle.md", "docs/troubleshooting.md", "README.md"]) {
+  for (const name of ["docs/architecture.md", "docs/security.md", "docs/lifecycle.md", "docs/troubleshooting.md", "README.md"]) {
     const source = path.join(root, name);
     for (const [, target] of fs.readFileSync(source, "utf8").matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
       if (target.includes("://") || target.startsWith("#")) continue;
@@ -87,7 +87,7 @@ it("preserves marker, routing, context and concise handoff boundaries", () => {
     "separating verified findings, assumptions and open questions", "inspect current source before editing",
     "Preserve routing and an already-selected `auto=true`", "return the original handoff",
     "Markers execute nothing and grant no permissions", "unrun checks", "observed acceptance",
-    "without browser, Hub, claim or callback state access", "callback envelope stays complete",
+    "without browser, Hub or callback state access", "callback envelope stays complete",
   ]) expect(common, requirement).toContain(requirement);
   const receiver = guidance("references/workflow-web.md");
   for (const requirement of [
@@ -106,17 +106,42 @@ it("preserves marker, routing, context and concise handoff boundaries", () => {
 it("delivers automatic handoffs directly and returns a safe manual fallback", () => {
   const sender = guidance("references/workflow-async.md");
   for (const requirement of [
-    "register → send → callback", "fresh correlation/capability", "ownership, permission, source, deadline, claim",
-    "each repository with its own correctly routed workspace/root", "A fingerprint for one repository proves nothing about another",
-    "do not extend the controller for batch work", "tty=true", "write_stdin", "READY",
-    "Only then may delivery start", "complete envelope", "C2C_CALLBACK", "exactly once",
-    "verifySourceForFix", "canAutoFix:true", "same process", "three audits/two fixes",
-    "600-second maximum deadline", "acknowledgement never restarts it", "180 seconds of idle input", "Lost sessions cannot resume",
-    "without resending", "accepted:true", "matching result", "EPERM", "official terminal escalation",
-    "Do not change sandbox settings", "newline alone does not complete", "original complete handoff",
-    "`not_sent`", "`uncertain`", "`sent`", "warn outside the handoff", "never label it PASS",
-    "exact first line is `[C2C Handoff]`", "Exclude the callback ticket", "without resetting its task claim",
+    "prepare → send once → MCP callback", "fresh correlation/capability", "audit.submit",
+    "hubId", "workspaceId", "workspaceRoot", "task ID", "tty=true", "write_stdin",
+    '"operation":"prepare"', "{ticket,expiresAt,remainingMs}", "C2C_JSON_V1_OK", "C2C_JSON_V1_ERROR", "C2C_JSON_END",
+    "decodeTerminalOutput", "ok:true", "ASYNC_TERMINAL_OUTPUT_INVALID", "sender.send(response.value, originalHandoff)",
+    "handoffId", "verifySourceForFix", "canAutoFix:true", "three audits/two fixes",
+    "600-second maximum deadline", "two source fingerprints", "Lost sessions cannot resume",
+    "(workspaceId,taskId)", "ten minutes", "64-entry", "authenticated, invalidated FIX ticket",
+    "accepted:true", "matching result", "EPERM", "official terminal escalation", "original complete handoff", "exactly once",
+    "`not_sent`", "`uncertain`", "`sent`", "BrowserSendError",
+    "workflow.md#codex--web", "operations.md#local-callback-helpers",
   ]) expect(sender, requirement).toContain(requirement);
+  for (const requirement of [
+    /Before starting[^.]*terminal[^.]*source hashing[^.]*callback registration[^.]*require an existing browser and selected ChatGPT conversation/,
+    /Otherwise[^.]*return the original manual \`\[C2C Handoff\]\`/,
+    /Never launch a browser[^.]*resolve Project bindings[^.]*open tabs[^.]*create conversations/,
+    /Only after sender creation succeeds[^.]*prepare → send once/,
+    /multi-repo[^.]*each repository[^.]*workspace\/root[^.]*terminal\/sender/,
+    /fingerprint for one repository proves nothing about another/,
+    /do not[^.]*controller[^.]*batch work/,
+    /verifySourceForFix[^.]*immediately before editing/,
+    /same process[^.]*omitting immutable options/,
+    /timeoutMs[^.]*nothing restarts it/,
+    /Input\/fix phases have no [^.]*idle timer/,
+    /failure[^.]*stop automation without resending/,
+    /Do not retry[^.]*registration[^.]*sending[^.]*callback submission[^.]*waiting/,
+    /Do not change sandbox settings[^.]*another transport[^.]*rollout[^.]*re-consent without authorization/,
+    /warn outside the handoff[^.]*duplicate an already delivered message/,
+    /never label it PASS or claim callback acceptance without evidence/,
+    /first line is \`\[C2C Handoff\]\`/,
+    /Exclude[^.]*callback ticket[^.]*capability[^.]*credentials/,
+    /Hub restart loses both guards and capabilities[^.]*never restart it to retry delivery/,
+    /legacy claim files are ignored and left untouched/,
+  ]) expect(sender).toMatch(requirement);
+  const operations = guidance("references/operations.md");
+  for (const requirement of ["callback register", "callback wait", "callback cancel", "fingerprint", "EOF", "4096 bytes", "newline alone does not complete", "shell interpolation and argv"])
+    expect(operations, requirement).toContain(requirement);
   for (const file of ["SKILL.md", "references/workflow.md", "references/workflow-async.md", "references/workflow-web.md", "references/setup.md"]) {
     const text = guidance(file);
     expect(text, file).not.toMatch(/permission probe|preflight|permission evidence|async=(?:true|false)/i);
