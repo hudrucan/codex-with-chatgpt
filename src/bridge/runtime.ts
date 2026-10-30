@@ -26,7 +26,8 @@ export function runtimeFile(hubId: string): string {
 
 export function writeRuntimeState(state: HubRuntimeState): void {
   const parsed = runtimeReadSchema.parse(state);
-  writeSecureJson(runtimeFile(parsed.hubId), parsed);
+  // Runtime metadata contains a usable admin bearer, unlike hashed OAuth state.
+  writeSecureJson(runtimeFile(parsed.hubId), parsed, { windowsAcl: true });
 }
 
 function readRuntime(file: string, hubId?: string): RuntimeState | null {

@@ -22,11 +22,17 @@ it("preserves Unicode audit findings without returning the handoff", async () =>
   expect(await decodeTerminalOutput(formatTerminalResult(result, true))).toEqual(result);
 });
 
-it("survives 80-column PTY wrapping and terminal controls without changing the envelope", async () => {
-  const wrap = (text: string) => text.split(/\r?\n/).map(line => line.match(/.{1,80}/g)?.join("\r\n") ?? "").join("\r\n");
+it.each([20, 37, 63, 80])("survives simulated %i-column wrapping and terminal controls without changing the envelope", async columns => {
+  const wrap = (text: string) => text.split(/\r?\n/).map(line => line.match(new RegExp(`.{1,${columns}}`, "g"))?.join("\r\n") ?? "").join("\r\n");
   const captured = "\x1b[2J\x1b[m\x1b[H\x1b]0;Fixture terminal\x07" + wrap(formatTerminalResult(response, true)) + "\x1b[K";
   expect(await decodeTerminalOutput(captured)).toEqual(response);
   await expect(decodeTerminalOutput(wrap(formatTerminalResult(response, false)))).rejects.toThrow("ASYNC_TERMINAL_OUTPUT_INVALID");
+});
+
+it("accepts ConPTY row padding and carriage returns only after verifying the complete frame", async () => {
+  const output = formatTerminalResult(response, true).split("\r\n")
+    .map(line => "\r" + line.padEnd(80, " ") + "\b").join("\r\n");
+  expect(await decodeTerminalOutput(output)).toEqual(response);
 });
 
 it.each(["missing chunk", "changed chunk", "reordered chunks", "missing footer", "duplicate response", "invalid length", "invalid digest", "changed status"])(
@@ -59,8 +65,9 @@ it("preserves controller error responses and refuses to guess truncated JSON", a
   await expect(decodeTerminalOutput('{"ok":true,"value":')).rejects.toThrow("ASYNC_TERMINAL_OUTPUT_INVALID");
 });
 
-it("keeps short fix authorization responses readable", async () => {
+it("frames short fix authorization and error responses on TTYs as well", async () => {
   const verified = { ok: true, value: { canAutoFix: true } };
-  expect(formatTerminalResult(verified, true)).toBe(JSON.stringify(verified) + "\n");
+  expect(formatTerminalResult(verified, true)).toContain("C2C_JSON_V1_OK");
   expect(await decodeTerminalOutput(formatTerminalResult(verified, true))).toEqual(verified);
+  expect(formatTerminalResult({ ok: false, error: "ASYNC_TIMEOUT" }, true)).toContain("C2C_JSON_V1_ERROR");
 });

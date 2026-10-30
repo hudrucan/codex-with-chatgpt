@@ -4,7 +4,7 @@ import { TERMINAL_OUTPUT_BEGIN, TERMINAL_OUTPUT_END, TERMINAL_OUTPUT_LIMIT } fro
 /** Pipes retain JSONL; PTYs use bounded ASCII frames instead of long JSON strings. */
 export function formatTerminalResult(result: unknown, tty: boolean): string {
   const json = JSON.stringify(result);
-  if (!tty || (json.length <= 64 && /^[\x20-\x7e]*$/.test(json))) return json + "\n";
+  if (!tty) return json + "\n";
   const bytes = Buffer.from(json);
   if (bytes.length > TERMINAL_OUTPUT_LIMIT) throw new Error("ASYNC_TERMINAL_OUTPUT_INVALID");
   const digest = createHash("sha256").update(bytes).digest("hex");

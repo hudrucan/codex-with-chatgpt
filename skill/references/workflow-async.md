@@ -40,6 +40,8 @@ across its rounds. Use one terminal process and one pinned sender per task.
    With `tty=true`, ticket and result output uses short ASCII `C2C_JSON_V1_OK` or
    `C2C_JSON_V1_ERROR` frames ending in `C2C_JSON_END`. Framing still protects ticket,
    capability and result bytes against Windows PTY wrapping. Pipes use JSONL.
+   Keep the terminal at least 20 columns wide, including during resizing. All TTY
+   responses are framed; the decoder verifies wrapped digest/payload bytes.
    Retain complete output across tool chunks. Do not JSON.parse individual terminal
    lines or strip physical newlines to guess a response.
 3. In the same existing browser REPL, use `decodeTerminalOutput` on the complete
@@ -98,6 +100,9 @@ pending attempt. Interrupt the same terminal if it is still running; cancellatio
 is best effort and cannot unsend a message. Do not retry registration, sending,
 callback submission or waiting, recreate a controller/sender for the failed task,
 reuse a ticket for another audit or change task IDs to bypass limits.
+An interrupted fill or pre-Enter failure may leave a callback draft. Inspect it
+manually after cancellation; never send the stale ticket or automatically clear
+the composer over user edits.
 On EPERM or denied escalation, later approval does not authorize a retry.
 Do not change sandbox settings, add another transport, rollout or re-consent without
 authorization. Callback transport stays in the terminal.

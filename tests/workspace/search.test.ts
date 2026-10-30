@@ -172,7 +172,15 @@ describe("ripgrep process failures", () => {
   it("accepts an intentional limit kill but rejects an unsolicited termination", async () => {
     await useProcess(`process.stdout.write(${JSON.stringify(match() + "\n" + match() + "\n")}); setInterval(() => {}, 1000);`);
     expect(await searchWorkspace(ws, { query: "needle-alpha", limit: 1 })).toMatchObject({ engine: "ripgrep", matchCount: 1, truncated: true });
-    await useProcess('process.kill(process.pid, "SIGTERM");');
+    // A self-termination on Windows is reported as exit 1, also ripgrep's no-match code.
+    // Terminate from the parent so Node retains the actual signal metadata.
+    process.env.C2C_RG_PATH = "test-ripgrep"; resetRipgrepCache();
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    vi.mocked(spawn).mockImplementationOnce((_, args, options) => {
+      const child = actual.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], options);
+      child.once("spawn", () => child.kill("SIGTERM"));
+      return child;
+    });
     await expect(searchWorkspace(ws, { query: "needle-alpha" })).rejects.toMatchObject({ name: "SearchError", code: "SEARCH_FAILED" });
   });
 });

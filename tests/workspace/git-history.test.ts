@@ -153,6 +153,8 @@ describe("bounded read-only Git history", () => {
   });
 
   it("caps filtered changed paths and omits overlong paths without returning fragments", async () => {
+    // Git for Windows otherwise omits the long-path fixture during staging.
+    git(root, "config", "core.longpaths", "true");
     const paths = Array.from({ length: 22 }, (_, i) => `file-${String(i).padStart(2, "0")}.txt`);
     for (const file of paths) write(root, file, file + " content\n");
     const longPath = Array(3).fill("a".repeat(180)).join("/") + "/long.txt";

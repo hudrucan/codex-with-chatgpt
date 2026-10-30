@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import { createPrivateWindowsFile } from "./windows-permissions.js";
 
 /**
  * State directory resolution, following OS conventions.
@@ -32,12 +33,14 @@ export function stateSubdir(name: string): string {
   return ensureDir(path.join(getStateDir(), name));
 }
 
-/** Write a JSON file with owner-only permissions. */
-export function writeSecureJson(file: string, data: unknown): void {
+/** Atomically write 0600 JSON; opt into a native Windows DACL for plaintext secrets. */
+export function writeSecureJson(file: string, data: unknown, options: { windowsAcl?: boolean } = {}): void {
   ensureDir(path.dirname(file));
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporary, JSON.stringify(data, null, 2), { mode: 0o600, flag: "wx" });
+    const privateWindows = process.platform === "win32" && options.windowsAcl;
+    if (privateWindows) createPrivateWindowsFile(temporary);
+    fs.writeFileSync(temporary, JSON.stringify(data, null, 2), { mode: 0o600, flag: privateWindows ? "r+" : "wx" });
     fs.renameSync(temporary, file);
   } finally {
     fs.rmSync(temporary, { force: true });

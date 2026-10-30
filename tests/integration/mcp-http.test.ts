@@ -3,10 +3,11 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Logger } from "../../src/logger/index.js";
+import { Logger, redact } from "../../src/logger/index.js";
 import { AuthStore } from "../../src/auth/store.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { callGitDiffReady, makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir, pkceVerifierAndChallenge } from "../helpers.js";
@@ -14,6 +15,10 @@ import { callGitDiffReady, makeTmpDir, cleanup, write, makeGitRepo, git, isolate
 vi.mock("node:child_process", async importOriginal => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawn: vi.fn(actual.spawn) };
+});
+vi.mock("node:crypto", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
 });
 
 let root: string;
@@ -130,20 +135,25 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "git_show", ["commit", "comparison", "diff", "truncated", "returnedBytes"]);
   });
 
-  it("traces authenticated and rejected MCP requests without recording request secrets", async () => {
+  it.each(["aaaaaaaa-abcd-4abc-8abc-aaaaaaaaaaaa", "aaaaaaaa-2345-4567-8abc-aaaaaaaaaaaa"] as const)(
+    "traces MCP request %s without recording request secrets", async requestId => {
+    const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
+    // The SDK may still be opening its background GET stream at this point.
+    vi.mocked(randomUUID).mockReturnValue(requestId);
     const marker = "private-request-payload-do-not-log";
     const response = await fetch(`${bridge.localBaseUrl()}/mcp`, {
       method: "POST", headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 551, method: "unknown", params: { secret: marker } }),
-    });
+    }).finally(() => vi.mocked(randomUUID).mockImplementation(actual.randomUUID));
     await response.text();
     const id = response.headers.get("x-request-id");
-    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(id).toBe(requestId);
     const unauthorized = await fetch(`${bridge.localBaseUrl()}/mcp`, { method: "POST" });
     await unauthorized.text();
     expect(unauthorized.status).toBe(401);
     const logs = fs.readFileSync(path.join(stateDir, "mcp-http.log"), "utf8");
-    const entries = logs.split("\n").filter(line => line.includes(id!));
+    // Numeric UUID groups can resemble pairing codes and must stay redacted.
+    const entries = logs.split("\n").filter(line => line.includes(redact(id!)) && line.includes('"httpMethod":"POST"'));
     expect(entries).toHaveLength(2);
     expect(entries[0]).toContain("MCP HTTP received");
     expect(entries[1]).toContain('"responseComplete":true');

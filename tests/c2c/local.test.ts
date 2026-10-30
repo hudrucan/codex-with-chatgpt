@@ -58,6 +58,36 @@ it("rejects an incorrect canonical workspace identity and unavailable source", (
   expect(fingerprint).toThrow();
 });
 
+it("detects raw CRLF drift despite a clean Git diff and preserves Unicode paths with spaces", () => {
+  const file = path.join(root, "Unicode space 🪟.txt");
+  git(root, "config", "core.autocrlf", "true");
+  fs.writeFileSync(file, "Unicode 🪟\r\n");
+  git(root, "add", "."); git(root, "commit", "-m", "CRLF fixture");
+  const before = fingerprint();
+  fs.writeFileSync(file, "Unicode 🪟\n");
+  expect(git(root, "diff", "--numstat")).toBe("");
+  expect(fingerprint()).not.toBe(before);
+});
+
+it("rejects more than 64 MiB of source before reading an oversized file", () => {
+  const file = path.join(root, "oversized.txt"), fd = fs.openSync(file, "w");
+  try { fs.ftruncateSync(fd, 64 * 1024 * 1024 + 1); } finally { fs.closeSync(fd); }
+  const read = fs.readFileSync;
+  let oversizedReads = 0;
+  vi.spyOn(fs, "readFileSync").mockImplementation((target, ...args) => {
+    if (typeof target === "number" && fs.fstatSync(target).size > 64 * 1024 * 1024) oversizedReads++;
+    return read(target, ...args);
+  });
+  expect(fingerprint).toThrow("ASYNC_SOURCE_UNAVAILABLE");
+  expect(oversizedReads).toBe(0);
+});
+
+it.runIf(process.platform === "win32")("rejects source directory junctions instead of traversing their target", () => {
+  fs.renameSync(path.join(root, "src"), path.join(root, "moved"));
+  fs.symlinkSync(path.join(root, "moved"), path.join(root, "src"), "junction");
+  expect(fingerprint).toThrow("ASYNC_SOURCE_UNAVAILABLE");
+});
+
 it("fingerprints Git-visible internal file links without opening their aliases", () => {
   const alias = path.join(root, "shared.ts"), open = fs.openSync;
   fs.symlinkSync("src/index.ts", alias);

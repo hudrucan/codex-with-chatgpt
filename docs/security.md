@@ -30,7 +30,7 @@
 | Sensitive files | Deny-by-default patterns (.env*, keys, SSH, cloud creds, keychains…) enforced at resolve time — reads, listings, and search all pass through the same gate; `git diff` adds pathspec excludes; `.env.example` allowed |
 | Oversized file / tree / diff DoS | read_file rejects text files over 16 MiB before scanning and caps lines and bytes per response; list_directory caps discovery and reports truncated traversal; git_diff generates filtered snapshots once, bounds preparation time/concurrency and disk usage, and paginates by byte offset; search caps matches and file sizes. See [read limits](multi-repo.md#mcp-tools) |
 | Tunnel exposure | Bridge binds 127.0.0.1 only (refuses 0.0.0.0); the only public surface is HTTPS via the tunnel, protected by OAuth; `/health` exposes only Hub identity, service version and process status |
-| Admin API abuse | Loopback-only + random admin token (0600 runtime file) + requests with proxy headers (`cf-connecting-ip`, `x-forwarded-for`) rejected; unauthenticated probes get 404 |
+| Admin API abuse | Loopback-only + random admin token (0600 runtime file; protected owner-only DACL on Windows) + requests with proxy headers (`cf-connecting-ip`, `x-forwarded-for`) rejected; unauthenticated probes get 404 |
 | Log credential leakage | Logger redacts token prefixes, bearer headers, token-like parameters, and pairing-code-shaped strings before writing |
 
 ## Custom ignore rules
@@ -68,6 +68,16 @@ State lives under the OS-convention app dir
 files 0600. Named-hostname preference and tunnel metadata live there too
 (`tunnels/<hubId>.json`) — never in the project. Only SHA-256 hashes of
 tokens are persisted — a stolen token-hash file does not yield usable bearer tokens.
+On Windows, POSIX modes do not restrict the inherited DACL. Runtime metadata
+contains a usable admin bearer, so new runtime files are created with a protected
+DACL granting only the process user's SID full control before any token bytes are
+written. Atomic replacement retains that DACL; ACL creation failure preserves
+the previous runtime file and fails with `STATE_ACL_UNAVAILABLE`. This uses inbox
+Windows PowerShell/.NET without a profile or interactive session. Existing files
+are not rewritten on read. Other state files and directories still depend on the
+Windows account's inherited ACLs; keep the state root private and unavailable for
+writing by other users. Do not treat `0600` as evidence of Windows ACL protection.
+
 Hub records live in `hubs/<hubId>.json`. Read grants live in
 `workspace-registries/<hubId>.json`, with matching Hub ownership and canonical
 roots. Auth, runtime, tunnel, endpoint and lifecycle files are keyed by the same
@@ -93,8 +103,10 @@ validated local acknowledgements, never the ChatGPT Project or its Instructions.
 State-path symlinks are rejected before destructive access. Partial destroy
 retains its Hub receipt for exact-resource recovery; Hub identity is removed last.
 
-**Storage limitation**: client registrations and token hashes are file-based rather
-than OS-keychain-based. Raw tokens are never written anywhere. Keychain integration is not implemented.
+**Storage limitation**: client registrations and OAuth token hashes are file-based
+rather than OS-keychain-based. OAuth access/refresh tokens are not persisted; the
+runtime admin bearer is stored in the protected runtime file described above.
+Keychain integration is not implemented.
 
 ## MCP capability boundary
 

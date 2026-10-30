@@ -10,7 +10,8 @@ export async function decodeTerminalOutput(output: string): Promise<unknown> {
   const text = output
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trim();
-  const lines = text.split(/\r?\n/);
+  // ConPTY can pad rows, prefix CR, or move the cursor back at a row's end.
+  const lines = text.split(/\r?\n/).map(line => line.replace(/^[ \t\r]+|[ \t\r\x08]+$/g, ""));
   const starts = lines.flatMap((line, i) => line.startsWith(TERMINAL_OUTPUT_BEGIN) ? [i] : []);
   const begin = starts[0] ?? -1, end = lines.indexOf(TERMINAL_OUTPUT_END);
   if (begin < 0) {
@@ -20,11 +21,15 @@ export async function decodeTerminalOutput(output: string): Promise<unknown> {
   if (starts.length !== 1 || ![TERMINAL_OUTPUT_BEGIN + "_OK", TERMINAL_OUTPUT_BEGIN + "_ERROR"].includes(lines[begin]) ||
       lines.lastIndexOf(TERMINAL_OUTPUT_END) !== end || end < begin + 4)
     throw invalid();
-  const [length, digest, ...chunks] = lines.slice(begin + 1, end);
-  if (!/^[1-9]\d{0,5}$/.test(length) || Number(length) > TERMINAL_OUTPUT_LIMIT || !/^[a-f0-9]{64}$/.test(digest) ||
-      !chunks.length || chunks.some((chunk, i) => !/^[A-Za-z0-9_-]{1,64}$/.test(chunk) || (i < chunks.length - 1 && chunk.length !== 64)))
+  const [length, ...body] = lines.slice(begin + 1, end);
+  if (!/^[1-9]\d{0,5}$/.test(length) || Number(length) > TERMINAL_OUTPUT_LIMIT ||
+      !body.length || body.some(chunk => !/^[A-Za-z0-9_-]{1,64}$/.test(chunk)))
     throw invalid();
-  const encoded = chunks.join("");
+  // ConPTY can insert physical line breaks inside both the digest and payload
+  // when the terminal narrows or resizes. Reassemble only this bounded frame;
+  // its fixed digest length, byte length and checksum still verify every byte.
+  const framed = body.join(""), digest = framed.slice(0, 64), encoded = framed.slice(64);
+  if (!/^[a-f0-9]{64}$/.test(digest)) throw invalid();
   if (encoded.length !== Math.ceil(Number(length) * 4 / 3)) throw invalid();
   let bytes: Uint8Array<ArrayBuffer>;
   try { bytes = Uint8Array.from(atob(encoded.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0)); }

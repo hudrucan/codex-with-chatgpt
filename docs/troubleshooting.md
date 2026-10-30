@@ -79,6 +79,69 @@ Missing consent permissions block automatic callback acceptance; return the
 original handoff for manual audit. Preserve the Hub, connector and tunnel; never
 edit OAuth URLs or token state to bypass consent.
 
+## Windows automatic C2C
+
+`auto=true` requires an existing browser REPL with a selected ChatGPT conversation.
+Local Hub health, an active RDP login or a running Scheduled Task does not prove
+that condition. A missing browser/thread returns the original manual handoff
+before source scanning or callback registration. Locked/disconnected RDP and
+noninteractive sessions do not authorize a background browser, a new tab or a
+delivery retry. A reboot loses pending callbacks and replay guards; pending tasks
+cannot resume. Recovery needs a separately authorized request, never a Hub restart
+to retry an old attempt.
+
+The terminal controller uses raw TTY input and checksummed ASCII output frames;
+pipes use JSONL. Keep the terminal at least 20 columns wide, including during
+resizes, and retain complete tool output for `decodeTerminalOutput`. Resize before
+prepare when possible: ConPTY can repaint an old frame during an in-flight resize.
+Duplicate frames fail closed; a repainted prepare ticket is never a matching audit
+receipt. The decoder reassembles wrapped digest/payload lines only inside a bounded frame and verifies
+its byte length and checksum. Missing markers, altered bytes and narrower
+terminals fail closed. Synthetic wrapping tests are separate from native ConPTY
+tests using cmd/Windows PowerShell and local OAuth MCP. Neither proves a browser
+send or ChatGPT audit; E2E still requires MCP `accepted:true` and a matching terminal
+receipt. Windows CI uses the hosted Windows runner, not an LTSC/RDP certification.
+
+A failed composer fill or pre-Enter check may leave a callback draft. Stop the
+terminal attempt and inspect the draft manually; do not send it, reuse its ticket
+or clear it automatically over user edits. `uncertain`/`sent` delivery means a
+manual send may duplicate an existing message. See the
+[sender failure rules](../skill/references/workflow-async.md#manual-fallback).
+
+### Browser REPL binding failure
+
+If tab inventory still shows the conversation but URL/composer calls report
+`browser.user is unavailable`, the browser REPL binding may be stale. During
+explicitly requested diagnostics, with no pending controller or callback attempt,
+reset only the browser REPL once, select the same existing browser/conversation
+through the documented initialization API, and verify its URL and composer before
+prepare. This clears JavaScript handles without closing tabs or changing Hub/OAuth
+state. Do not open another tab, inspect conversation history, modify the browser
+runtime, or add automatic reset/retry logic to the sender. If an attempt already
+started, follow cancellation/manual fallback instead; a REPL reset cannot resume it.
+
+### Checkout, process and permissions
+
+Check the selected Skill's bound checkout and `dist/c2c` build, including paths
+with spaces. Editing another checkout does not update the installed Skill or
+running Hub. Check known user/project Skill roots for duplicate discovery without
+copying or replacing installations. Git ownership rejection is a real boundary:
+do not add global `safe.directory` exceptions. CRLF-only byte changes can invalidate
+an audit even when Git's normalized diff is empty. Unsupported junctions/links
+and source over the 64 MiB fingerprint budget fail closed.
+
+If a Hub is launched by an existing Scheduled Task, verify its configured user,
+logon trigger/type and explicit state directory. Running under a different account
+can select different state and cannot impersonate the original owner. This product
+does not install a boot task or restore browser/terminal sessions. Inspect runtime
+file ACLs with `Get-Acl -LiteralPath <runtime-file>` without printing file contents.
+If Codex uses a separate sandbox SID, use the sender's official terminal escalation
+for its single controller before prepare when required. Do not broaden the DACL
+or retry a failed attempt to gain access.
+For `STATE_ACL_UNAVAILABLE`, verify inbox Windows PowerShell/.NET and permission to
+create an owner-only file; preserve existing state instead of weakening ACLs.
+See [storage protection](security.md#storage).
+
 ## Reads and image access
 
 `ACCESS_DENIED_SENSITIVE_FILE` is expected for `.env`, keys, credentials and

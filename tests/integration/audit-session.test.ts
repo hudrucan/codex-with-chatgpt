@@ -309,6 +309,15 @@ it.each([
     if (mode === "stdin closed at prepare") child.stdin.end(JSON.stringify(command) + "\n");
     else child.stdin.write(JSON.stringify(command) + "\n");
     const response = await read();
+    if (mode === "stdin closed at prepare" && response.ok) {
+      // Windows may deliver pipe EOF after registration completes. Both orderings
+      // must stop the process and revoke any ticket already emitted.
+      expect(response.value.ticket.taskId).toBe("native-task");
+      expect(await read()).toEqual({ ok: false, error: "ASYNC_INTERRUPTED" });
+      expect((await closed)[0], stderr).toBe(1);
+      expect((await submit(response.value)).isError).toBe(true);
+      return;
+    }
     if (expectedError) {
       expect(response).toEqual({ ok: false, error: expectedError }); expect((await closed)[0], stderr).toBe(1); return;
     }
