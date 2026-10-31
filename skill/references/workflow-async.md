@@ -54,7 +54,13 @@ reads do not prove callback acceptance.
 Use the routed `hubId`, explicit registered `workspaceId` and canonical
 `workspaceRoot`. Never infer ownership from a chat URL or borrow another Hub.
 Choose one task ID for this independently authorized user request and keep it stable
-across its rounds. Use one terminal process and one pinned sender per task.
+across its rounds. `taskId` must contain 1–128 ASCII characters matching
+`^[A-Za-z0-9_-]+$`. Periods, spaces and slashes are not allowed. For example, use
+`release-v0-3-0-b979f170` for a versioned release.
+
+Validate the ID locally before starting the terminal controller, source hashing
+or callback registration. Never change task IDs to retry a failed attempt or
+bypass replay protection. Use one terminal process and one pinned sender per task.
 
 1. Immediately before prepare, call `await sender.verifyBinding()` in the browser
    REPL. This reacquires and verifies the same browser/tab/conversation and empty
