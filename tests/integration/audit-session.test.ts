@@ -28,7 +28,7 @@ const submit = (request: { ticket: CallbackTicket }, result = pass) => client.ca
 beforeEach(async () => {
   state = isolateStateDir(); root = makeTmpDir("audit-session"); makeGitRepo(root);
   bridge = await startBridge({ hubId: fixtureHub(root).hubId, port: 0 });
-  const token = bridge.authStore.issueTokens({ clientId: "session-test", scopes: ["audit.submit"] }).accessToken;
+  const token = bridge.authStore.issueTokens({ clientId: "session-test", scopes: ["audit.submit", "git.read"] }).accessToken;
   client = new Client({ name: "session-test", version: "1" });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${bridge.localBaseUrl()}/mcp`), {
     requestInit: { headers: { authorization: `Bearer ${token}` } },
@@ -200,6 +200,49 @@ it("accepts an OAuth callback after 180 seconds within the default 600-second bu
     expect(await waiting).toMatchObject({ status: "PASS", canContinue: false });
     expect((await submit(request)).structuredContent).toEqual({ accepted: true });
   } finally { transportTimeout.mockRestore(); vi.useRealTimers(); }
+});
+
+function loseFirstToolResponse(name: string) {
+  const original = globalThis.fetch, argumentsSeen: unknown[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    const matches = body?.method === "tools/call" && body.params?.name === name;
+    if (matches) argumentsSeen.push(body.params.arguments);
+    const response = await original(input, init);
+    if (matches && argumentsSeen.length === 1) {
+      await response.arrayBuffer();
+      throw new TypeError("Response lost after server processing", { cause: { code: "ECONNRESET" } });
+    }
+    return response;
+  });
+  return argumentsSeen;
+}
+
+it("accepts an exact MCP callback retry after its first accepted response is lost", async () => {
+  await session.close(); session = new AuditSession({ ...options(), timeoutMs: 10_000 });
+  const request = await session.prepare(handoff), waiting = session.wait();
+  const seen = loseFirstToolResponse("submit_audit_result");
+  await expect(submit(request)).rejects.toThrow("Response lost");
+  expect((await submit(request)).structuredContent).toEqual({ accepted: true });
+  expect(seen).toEqual([{ ...request.ticket, result: pass }, { ...request.ticket, result: pass }]);
+  const { capability: _capability, ...identity } = request.ticket;
+  const receipt = await waiting;
+  expect(receipt).toMatchObject({ ...identity, ...pass });
+  expect(receipt).not.toHaveProperty("capability");
+  expect((await submit(request, { ...pass, summary: "Different payload" })).isError).toBe(true);
+});
+
+it("retries a lost read response with the same diff snapshot instead of adopting later source", async () => {
+  write(root, "src/index.ts", "export const value = 'original snapshot';\n");
+  const base = { workspace: options().workspaceId, mode: "head", max_bytes: 1024, offset: 0 };
+  const first = (await client.callTool({ name: "git_diff", arguments: base })).structuredContent!;
+  expect(first.status).toBe("ready");
+  const args = { ...base, snapshot_id: first.snapshotId };
+  const seen = loseFirstToolResponse("git_diff");
+  await expect(client.callTool({ name: "git_diff", arguments: args })).rejects.toThrow("Response lost");
+  write(root, "src/index.ts", "export const value = 'later source';\n");
+  expect((await client.callTool({ name: "git_diff", arguments: args })).structuredContent).toEqual(first);
+  expect(seen).toEqual([args, args]);
 });
 
 it("continues verified FIX rounds after ten-minute edit phases without accepting expired callbacks or exceeding three audits", async () => {

@@ -27,9 +27,10 @@ it.each([conversation, "https://chatgpt.com/c/12345678-abcd"])("pins selected th
   const f = fixture(url), sender = await createBrowserSender(f.browser, "Observed composer"), prepared = request();
   await expect(sender.send(prepared, handoff)).resolves.toEqual({ attemptId: prepared.ticket.attemptId, sent: true });
   expect(f.fill).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(`${handoff}\n\nC2C_CALLBACK ${JSON.stringify(prepared.ticket)}\n`));
+  expect(f.fill.mock.calls[0][0]).toContain(`C2C_DEADLINE ${prepared.expiresAt}\n`);
   expect(f.press).toHaveBeenCalledExactlyOnceWith("Enter");
   expect(f.selected).toHaveBeenCalledTimes(1);
-  expect(f.readUrl).toHaveBeenCalledTimes(5); // Binding/composer verification, pre-fill, pre-Enter, confirmation.
+  expect(f.readUrl).toHaveBeenCalledTimes(7); // Binding, checks around draft reads, pre-Enter and confirmation.
   await expect(sender.send(prepared, handoff)).rejects.toMatchObject({ message: "ASYNC_SEND_TERMINAL", delivery: "sent" });
   await expect(sender.send(next(), handoff)).resolves.toMatchObject({ sent: true });
   expect(f.press).toHaveBeenCalledTimes(2);
@@ -194,4 +195,98 @@ it("consumes the sender synchronously before any await to prevent concurrent del
   await sending;
   await expect(sender.send(prepared, handoff)).rejects.toThrow("ASYNC_SEND_TERMINAL");
   expect(f.press).toHaveBeenCalledTimes(1);
+});
+
+const readFailure = (code: string) => Object.assign(new Error("Read transport failed"), { code });
+
+it.each(["selection", "URL"])("does not retry initial %s without a pinned conversation", async phase => {
+  const f = fixture();
+  if (phase === "selection") f.selected.mockRejectedValueOnce(readFailure("ECONNRESET"));
+  else f.readUrl.mockRejectedValueOnce(readFailure("ETIMEDOUT"));
+  await expect(createBrowserSender(f.browser, "Composer")).rejects.toMatchObject({ message: "ASYNC_BROWSER_UNAVAILABLE", delivery: "not_sent" });
+  expect(f.selected).toHaveBeenCalledTimes(1);
+  expect(f.readUrl).toHaveBeenCalledTimes(phase === "URL" ? 1 : 0);
+  expect(f.fill).not.toHaveBeenCalled(); expect(f.press).not.toHaveBeenCalled();
+});
+
+it.each(["ETIMEDOUT", "ECONNRESET", "EAI_AGAIN", "TimeoutError"])("recovers one initial composer read failure: %s", async code => {
+  const f = fixture();
+  f.innerText.mockRejectedValueOnce(code === "TimeoutError"
+    ? Object.assign(new Error("Read timed out"), { name: code }) : readFailure(code));
+  const sender = await createBrowserSender(f.browser, "Composer");
+  expect(f.innerText).toHaveBeenCalledTimes(2);
+  expect(f.fill).not.toHaveBeenCalled();
+  await sender.send(request(), handoff);
+  expect(f.press).toHaveBeenCalledTimes(1);
+});
+
+it.each(["verifyBinding", "pre-fill"])("recovers one pinned URL failure during %s without rebinding or resending", async phase => {
+  const f = fixture(), bind = vi.fn(async () => f.browser), sender = await createBrowserSender(bind, "Composer");
+  f.readUrl.mockRejectedValueOnce(readFailure("ECONNRESET"));
+  if (phase === "verifyBinding") await sender.verifyBinding();
+  const prepared = request();
+  await sender.send(prepared, handoff);
+  expect(bind).toHaveBeenCalledTimes(phase === "verifyBinding" ? 2 : 1);
+  expect(f.fill).toHaveBeenCalledTimes(1); expect(f.press).toHaveBeenCalledTimes(1);
+  await expect(sender.send(prepared, handoff)).rejects.toMatchObject({ delivery: "sent" });
+});
+
+it.each(["EACCES", "EPERM", "AUTHENTICATION_REQUIRED", "ASYNC_SOURCE_DRIFT", "ASYNC_TIMEOUT", "UNKNOWN"])(
+  "does not recover permanent or unknown verification error %s", async code => {
+    const f = fixture(), sender = await createBrowserSender(f.browser, "Composer");
+    f.innerText.mockRejectedValueOnce(readFailure(code));
+    await expect(sender.verifyBinding()).rejects.toMatchObject({ message: "ASYNC_COMPOSER_UNAVAILABLE", delivery: "not_sent" });
+    expect(f.innerText).toHaveBeenCalledTimes(2); // Initial verification plus the single failed read.
+    await expect(sender.send(request(), handoff)).rejects.toThrow("ASYNC_SEND_TERMINAL");
+    expect(f.fill).not.toHaveBeenCalled(); expect(f.press).not.toHaveBeenCalled();
+  },
+);
+
+it("stops after a second transient verification failure and cannot revive the sender", async () => {
+  const f = fixture(), sender = await createBrowserSender(f.browser, "Composer");
+  f.innerText.mockRejectedValue(readFailure("ETIMEDOUT"));
+  await expect(sender.verifyBinding()).rejects.toMatchObject({ delivery: "not_sent" });
+  expect(f.innerText).toHaveBeenCalledTimes(3);
+  await expect(sender.verifyBinding()).rejects.toThrow("ASYNC_SEND_TERMINAL");
+  expect(f.innerText).toHaveBeenCalledTimes(3);
+  expect(f.fill).not.toHaveBeenCalled(); expect(f.press).not.toHaveBeenCalled();
+});
+
+it.each(["thread", "draft"])("preserves a changed %s encountered during verification recovery", async kind => {
+  const f = fixture(), sender = await createBrowserSender(f.browser, "Composer");
+  f.innerText.mockImplementationOnce(async () => {
+    if (kind === "thread") f.navigate("https://chatgpt.com/c/abcdef");
+    else f.draft("Keep this new draft");
+    throw readFailure("ECONNRESET");
+  });
+  await expect(sender.send(request(), handoff)).rejects.toMatchObject({
+    message: kind === "thread" ? "ASYNC_THREAD_CHANGED" : "ASYNC_DRAFT_PRESENT", delivery: "not_sent",
+  });
+  expect(f.fill).not.toHaveBeenCalled(); expect(f.press).not.toHaveBeenCalled();
+  if (kind === "draft") expect(await f.innerText()).toBe("Keep this new draft");
+});
+
+it("does not spend another verification read after the original send deadline", async () => {
+  const f = fixture(), sender = await createBrowserSender(f.browser, "Composer");
+  vi.useFakeTimers({ toFake: ["performance", "Date"] });
+  try {
+    f.innerText.mockImplementationOnce(async () => { vi.advanceTimersByTime(5001); throw readFailure("ETIMEDOUT"); });
+    await expect(sender.send(request(), handoff)).rejects.toMatchObject({ message: "ASYNC_TIMEOUT", delivery: "not_sent" });
+    expect(f.innerText).toHaveBeenCalledTimes(2);
+    expect(f.fill).not.toHaveBeenCalled(); expect(f.press).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it.each(["fill", "pre-Enter", "Enter", "confirmation"])("never retries a transient failure at %s", async phase => {
+  const f = fixture(), sender = await createBrowserSender(f.browser, "Composer"), failure = readFailure("ECONNRESET");
+  if (phase === "fill") f.fill.mockRejectedValueOnce(failure);
+  if (phase === "pre-Enter") f.fill.mockImplementationOnce(async () => { f.readUrl.mockRejectedValueOnce(failure); });
+  if (phase === "Enter") f.press.mockRejectedValueOnce(failure);
+  if (phase === "confirmation") f.press.mockImplementationOnce(async () => { f.readUrl.mockRejectedValueOnce(failure); });
+  await expect(sender.send(request(), handoff)).rejects.toMatchObject({
+    delivery: ["Enter", "confirmation"].includes(phase) ? "uncertain" : "not_sent",
+  });
+  expect(f.fill).toHaveBeenCalledTimes(1);
+  expect(f.press).toHaveBeenCalledTimes(["Enter", "confirmation"].includes(phase) ? 1 : 0);
+  await expect(sender.send(next(), handoff)).rejects.toThrow("ASYNC_SEND_TERMINAL");
 });

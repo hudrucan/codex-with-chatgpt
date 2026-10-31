@@ -48,12 +48,15 @@ delivery without browser, Hub or callback state access. Only explicit
 ChatGPT conversation, with live URL/composer verification before source hashing or
 registration. For each new automatic request, establish fresh handles through
 the host's documented API; variables retained across turns do not prove access.
-Use only the sender's bounded initialization recovery before a controller exists.
-If either is missing,
-return the manual handoff without preparing an attempt. Never launch a browser,
+For initial `browser.user is unavailable` or `ASYNC_BROWSER_BINDING_STALE`,
+follow [initialization recovery](workflow-async.md#initialization-recovery) before
+manual fallback. A stale binding is not a missing browser or conversation.
+If either is genuinely missing, return the manual handoff without resetting or
+preparing an attempt. Never launch a browser,
 resolve Project bindings, open tabs or create conversations for automatic delivery.
 When available, go directly prepare → send once → MCP callback → result.
-On failure, stop automation and return the original handoff for the user to copy
+Use only the sender/receiver's bounded recovery for the failed phase.
+On an unrecovered failure, stop automation and return the original handoff for the user to copy
 under the [sender failure rules](workflow-async.md#manual-fallback). Never resend,
 reuse a callback ticket or create a new task to evade limits.
 Do not mark ordinary replies, non-C2C Codex prompts or MCP-only source reads.

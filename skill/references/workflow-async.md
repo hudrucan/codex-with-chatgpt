@@ -7,13 +7,15 @@ Omitted `auto` or `auto=false` stays manual without browser, Hub or task-state a
 ## Existing conversation only
 
 Before starting the terminal controller, source hashing, callback registration or
-task claiming, require an existing browser and selected ChatGPT conversation in the
-current REPL. Establish a fresh binding at the beginning of each new automatic
+task claiming, require an existing browser and selected ChatGPT conversation.
+Establish a fresh binding at the beginning of each new automatic
 request through the host's documented browser initialization API, using only the
 same existing browser and selected tab. JavaScript variables, tab inventory and
 ambient browser context do not prove that URL/composer access still works;
 do not decide availability from `typeof browser` or assume handles survive turns.
-Otherwise, immediately return the original manual `[C2C Handoff]`.
+Handle stale-binding failures under [initialization recovery](#initialization-recovery)
+before manual fallback. If the browser or selected conversation is genuinely missing,
+return the original manual `[C2C Handoff]` without resetting or preparing an attempt.
 Never launch a browser, resolve Project bindings, open tabs or create conversations
 for automatic delivery.
 
@@ -32,22 +34,55 @@ landing/transient URLs fail with `ASYNC_THREAD_REQUIRED`; stale bindings report
 Do not read conversation history or audit replies. Retain this sender and the
 original complete handoff in memory for the task; do not reuse it for a new task.
 
-If binding is stale before any terminal controller, source hashing or callback
-registration, at most one browser REPL reinitialization/rebind is allowed, only
-when the host officially supports a reset that preserves tabs and drafts. Keep
-the observed browser/tab IDs and conversation URL in transient task context,
-reset only that REPL, reimport the module and verify the exact same selected
-conversation and empty composer. Do not persist these values or select another
-conversation. A mismatch, unavailable reset, or failed recovery returns `not_sent`
-with the safe blocker above; there is no second reset. C2C cannot perform a host
-REPL reset from inside its own module or guarantee a durable host-runtime repair.
-This bounded initialization recovery is not a delivery retry. Never reset or
-recreate a sender after a controller has started, including between FIX rounds.
-
 Only after sender creation succeeds, use prepare → send once → MCP callback → result.
 Registration checks ownership and creates fresh correlation/capability. OAuth
 `audit.submit` is enforced on the actual MCP callback; local health and repository
 reads do not prove callback acceptance.
+
+## Initialization recovery
+
+On initial `browser.user is unavailable` (optional trailing period) or
+`ASYNC_BROWSER_BINDING_STALE`, one CUA REPL reset/rebind is required before
+manual fallback when:
+
+- No controller, source hashing or callback registration has started; no attempt is active.
+- The host's documented REPL-only reset preserves tabs and user drafts.
+- The existing browser/tab IDs and conversation URL are known and can be verified.
+
+Retain that identity only in memory. Reset only the browser REPL through the host
+tool, rebind the same selected tab, reimport the module and recreate the initial
+sender if needed. Verify matching IDs, live URL and empty composer before starting
+the controller. Keep reset outside `bindExistingBrowser` and the C2C browser module.
+Never open tabs, navigate or clear a draft during recovery.
+
+If any condition is unmet or recovery fails, return `not_sent` with the blocker.
+No second reset. Generic `ASYNC_BROWSER_UNAVAILABLE` or `ASYNC_COMPOSER_UNAVAILABLE`
+alone does not authorize recovery. Never reset or recreate a sender after controller
+creation, including FIX rounds. Delivery retries remain forbidden; this recovery
+does not guarantee a durable host fix.
+
+## Verification reads
+
+Sender creation, `verifyBinding()` and the pre-fill check allow one additional
+verification on `TimeoutError` or transport codes `ETIMEDOUT`, `ECONNRESET` and
+`EAI_AGAIN`. The module repeats only URL/composer reads on the pinned tab, within
+the original deadline. It rechecks the thread and empty draft; it never resets,
+rebinds, fills or presses Enter during recovery. Initial selection/URL failures
+without a pinned conversation still fail closed.
+
+Other errors are terminal: missing browser/composer, stale binding after controller
+creation, authentication/authorization, ownership, source drift, changed thread,
+user draft, replay, invalid payload or expiration. Unknown errors do not authorize
+recovery. After fill or Enter, stop on failure without retrying reads or delivery.
+
+| Phase | Recovery limit | Delivery on failure |
+| --- | --- | --- |
+| Initial stale binding | One host reset under the conditions above | `not_sent` |
+| Pinned URL/composer verification before fill | One read-only verification | `not_sent` |
+| Controller, prepare/register, terminal decode or callback wait | None; never restart or re-register | `not_sent` before Enter; otherwise preserve sending state |
+| Fill | None; preserve any remaining draft | `not_sent` |
+| Enter or post-Enter confirmation | None; never resend | `uncertain` |
+| Web MCP read/callback | Only the [receiver's exceptions](workflow-web.md#bounded-recovery) | Preserve `sent` |
 
 ## Prepare and send
 
@@ -65,9 +100,9 @@ bypass replay protection. Use one terminal process and one pinned sender per tas
 1. Immediately before prepare, call `await sender.verifyBinding()` in the browser
    REPL. This reacquires and verifies the same browser/tab/conversation and empty
    composer through the supplied binding function, preserving the sender's
-   consumed-ticket state. Only an initial stale binding before the controller
-   starts may use the single initialization recovery above; once it exists,
-   failure stops automation without resetting or retrying.
+   consumed-ticket state. Initial stale binding follows initialization recovery
+   above. After controller creation, only the verification reads above may recover;
+   never reset or recreate the sender.
    After the browser check, run `node <checkout>/dist/c2c/local.mjs async` with the
    supported terminal tool and `tty=true`. Request official terminal escalation for
    loopback or state access when needed. Send one JSONL command through `write_stdin`:
@@ -82,12 +117,15 @@ bypass replay protection. Use one terminal process and one pinned sender per tas
    responses are framed; the decoder verifies wrapped digest/payload bytes.
    Retain complete output across tool chunks. Do not JSON.parse individual terminal
    lines or strip physical newlines to guess a response.
-3. In the same existing browser REPL, use `decodeTerminalOutput` on the complete
-   prepare response and require `ok:true`. Missing/corrupted frames stop delivery
+3. In the same existing browser REPL, run
+   `const response = await decodeTerminalOutput(fullPrepareOutput)` and require
+   `response.ok === true`. Missing/corrupted frames stop delivery
    with `ASYNC_TERMINAL_OUTPUT_INVALID`. Decode and call
-   `sender.send(response.value, originalHandoff)` in one invocation,
+   `await sender.send(response.value, originalHandoff)` in one invocation,
    exactly once. The sender verifies the retained handoff against the ticket's
    `handoffId`, checks the pinned thread, draft and deadline, and presses Enter once.
+   The envelope includes `C2C_DEADLINE` (absolute Unix milliseconds) for bounded
+   receiver recovery; it never extends the Hub deadline.
    Preserve the complete `C2C_CALLBACK` ticket only within the routed audit. Never
    print or persist the decoded ticket or capability.
 4. Wait for the terminal result without another command. Only MCP
@@ -133,11 +171,15 @@ callbacks fail closed; exact duplicates are idempotent until capability expirati
 
 ## Manual fallback
 
-On missing browser/conversation or any prepare, send or callback failure, stop
+For initial stale-binding failures, apply [initialization recovery](#initialization-recovery)
+before entering this fallback. A genuinely missing browser or conversation does
+not authorize reset.
+After the bounded recovery above and in the receiver contract, on any unrecovered
+browser, prepare, send or callback failure, stop
 automation without resending. EOF, Ctrl+C or interruption cancels a
 pending attempt. Interrupt the same terminal if it is still running; cancellation
-is best effort and cannot unsend a message. Do not retry registration, sending,
-callback submission or waiting, recreate a controller/sender for the failed task,
+is best effort and cannot unsend a message. Do not retry registration, sending or
+callback waiting. Never recreate a controller/sender for the failed task,
 reuse a ticket for another audit or change task IDs to bypass limits.
 An interrupted fill or pre-Enter failure may leave a callback draft. Inspect it
 manually after cancellation; never send the stale ticket or automatically clear

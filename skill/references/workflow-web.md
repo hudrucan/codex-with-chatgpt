@@ -39,6 +39,30 @@ persistent orchestration/checkpoints or agents, and do not commit just to hand o
 Use the ten repository-read MCP tools for audits. Project Instructions keep their
 routing role and need no handoff update. Setup/reconnect still ends at **MCP READY**.
 
+## Bounded recovery
+
+For an identifiable transport timeout/disconnect (`ETIMEDOUT`, `ECONNRESET`,
+`EAI_AGAIN`, or a transport `TimeoutError`), retry a read-only MCP audit call once
+with the same connector, workspace and arguments. Retain and verify the original
+revision/snapshot; never combine evidence from changed revisions. For `git_diff`,
+retry only with a known `snapshot_id` and the same offset. A lost first response
+without a snapshot ID cannot be retried safely. Normal `preparing` responses follow
+the tool's polling contract; they are not transport failures.
+
+Do not retry tool error results, unknown errors, authentication/authorization,
+ownership, source drift, changed revision, invalid input, expired/unavailable
+snapshots or replay failures. If identity cannot be verified, return BLOCKED;
+after an unrecovered MCP failure, return ERROR. Never reuse old success.
+
+For an ambiguous callback transport timeout/disconnect, one exact
+`submit_audit_result` retry is allowed within the original `C2C_DEADLINE`.
+Retain the same ticket and serialized result; do not re-audit, change the payload
+or register another attempt. Check the deadline immediately before retrying.
+If the deadline is absent, unverifiable or expired, stop. The Hub's idempotency
+contract accepts an identical duplicate until expiration; it rejects conflicts.
+No retry after `accepted:true`, a tool error/denial or a second transport failure.
+Never retry browser sending, callback waiting or registration.
+
 ## Manual result
 
 When appropriate, include one ready-to-copy next prompt: `[C2C Fix]` for supported
@@ -57,7 +81,7 @@ For a newly sent `[C2C Handoff]` containing `C2C_CALLBACK`, audit through the
 routed MCP and complete this attempt only with `submit_audit_result`. Copy
 `hubId`, `workspaceId`, `taskId`, `attemptId`, `handoffId` and `capability`
 unchanged from this new ticket, never history or ordinary replies. Keep its
-capability within the routed audit; never reuse a ticket/capability.
+capability within the routed audit; never use a ticket/capability for another attempt.
 
 Follow the existing tool schema and deadline. Submit a terminal result containing
 only `status`, `complete:true`, `summary` and `findings`:
@@ -66,15 +90,15 @@ only `status`, `complete:true`, `summary` and `findings`:
 - `FIX`: supported in-scope findings, each containing only repo-relative `file`,
   positive integer `line`, `evidence` and concrete `fix`.
 - `BLOCKED`: missing/ambiguous routing or insufficient evidence; `findings:[]`.
-- `ERROR`: first repository-read MCP failure, with the actual error in `summary`
-  and `findings:[]`; do not retry or reuse old success.
+- `ERROR`: unrecovered repository-read MCP failure, with the actual error in
+  `summary` and `findings:[]`; only bounded recovery above is allowed.
 
 Respect schema limits: summary/evidence/fix at most 2048 characters each, file
 at most 512, at most 20 findings, complete callback at most 16,384 UTF-8 bytes.
 The attempt's default/maximum 600-second deadline includes registration, sending and
 waiting; acknowledgement does not restart it. Missing evidence is neither a
 defect nor PASS. If the callback tool is unavailable, denied or fails, report the
-blocker and stop without retrying or substituting a chat result. Emit no legacy
+blocker after bounded recovery and stop without substituting a chat result. Emit no legacy
 audit frames, ACKs or Fix/Commit prompts. Only MCP `accepted:true` and the matching
 terminal receipt complete delivery.
 
