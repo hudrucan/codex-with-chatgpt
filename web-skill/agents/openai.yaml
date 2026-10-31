@@ -1,0 +1,5 @@
+interface:
+  display_name: "codex-with-chatgpt"
+  short_description: "Audit C2C handoffs through the existing MCP"
+policy:
+  allow_implicit_invocation: true

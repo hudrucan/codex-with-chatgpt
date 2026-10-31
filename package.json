@@ -14,6 +14,8 @@
     "build": "node scripts/build.mjs",
     "plugin:pack": "node scripts/package-plugin.mjs",
     "plugin:check": "node scripts/package-plugin.mjs --check",
+    "skill:web:pack": "node scripts/package-web-skill.mjs",
+    "skill:web:check": "node scripts/package-web-skill.mjs --check",
     "dev": "tsx src/cli/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",

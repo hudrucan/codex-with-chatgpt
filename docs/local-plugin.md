@@ -1,5 +1,7 @@
 # Offline Codex Local plugin
 
+For the standalone ChatGPT Web receiver, see [Web Skill](web-skill.md).
+
 The optional prototype distributes the existing canonical `skill/` as one
 plugin-managed Skill. It does not install or run a Hub, register MCP, add hooks,
 change OAuth, or replace the Web receiver bundled with Lazier. The standalone

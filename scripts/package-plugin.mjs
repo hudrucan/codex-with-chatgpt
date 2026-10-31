@@ -167,6 +167,10 @@ export async function expectedDistribution({ sourceRoot = repository, runtimeChe
 
 export async function packagePlugin({ output = path.join(repository, "dist", "plugin-marketplace"), check = false, ...options }) {
   const expected = await expectedDistribution(options);
+  return writeDistribution(expected, output, check);
+}
+
+export function writeDistribution(expected, output, check = false) {
   const parent = canonicalDirectory(path.dirname(output));
   if (path.resolve(output) !== path.join(parent, path.basename(output)) || !/^[a-zA-Z0-9][a-zA-Z0-9._ -]*$/.test(path.basename(output))) fail("Invalid output path");
   if (fs.existsSync(output)) {
@@ -184,6 +188,8 @@ export async function packagePlugin({ output = path.join(repository, "dist", "pl
   }
   return { artifact: path.join(output, expected.archive), sha256: expected.sha256, files: expected.distribution.size };
 }
+
+export { canonicalDirectory, read, files, git, json, sha256, zip, validateLinks };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
