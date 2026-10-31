@@ -8,7 +8,7 @@ import { buildC2C } from "./build-c2c.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pluginName = "codex-with-chatgpt";
-const marketplaceName = "c2c-local-prototype";
+const marketplaceName = "hudrucan";
 const skillFiles = ["SKILL.md", "agents/openai.yaml", ...[
   "deprovision", "operations", "projects", "setup", "workflow", "workflow-async", "workflow-web",
 ].map(name => `references/${name}.md`)];
@@ -141,7 +141,8 @@ export async function expectedDistribution({ sourceRoot = repository, runtimeChe
   skill.set("SKILL.md", Buffer.from(entrypoint.replace("<ACTUAL_CHECKOUT_PATH>", runtime.split(path.sep).join("/"))));
   validateLinks(skill);
   const plugin = new Map([
-    [".codex-plugin/plugin.json", json({ name: pluginName, version: metadata.version, description: metadata.description, skills: "./skills/" })],
+    [".codex-plugin/plugin.json", json({ name: pluginName, version: metadata.version, description: metadata.description,
+      skills: "./skills/", interface: { displayName: pluginName } })],
     ["LICENSE", read(source, "LICENSE")],
     ...[...skill].map(([name, bytes]) => [`skills/${pluginName}/${name}`, bytes]),
   ]);
@@ -151,7 +152,7 @@ export async function expectedDistribution({ sourceRoot = repository, runtimeChe
     files: Object.fromEntries([...plugin].map(([name, bytes]) => [name, sha256(bytes)])),
   }));
   const distribution = new Map([
-    [".agents/plugins/marketplace.json", json({ name: marketplaceName, interface: { displayName: "C2C Local prototype" },
+    [".agents/plugins/marketplace.json", json({ name: marketplaceName, interface: { displayName: "hudrucan" },
       plugins: [{ name: pluginName, source: { source: "local", path: `./${pluginName}` },
         policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" } }] })],
     ...[...plugin].map(([name, bytes]) => [`${pluginName}/${name}`, bytes]),

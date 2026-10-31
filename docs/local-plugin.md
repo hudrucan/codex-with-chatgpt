@@ -24,7 +24,7 @@ and built helpers are compared by SHA-256; JavaScript and helper bundles are reb
 in memory. Different Git revisions are allowed when the checked runtime source and
 artifacts match. A missing file, changed source, stale artifact, symlink/junction,
 relative/traversing path, invalid Skill reference or unexpected Skill file stops
-packaging. The prototype preserves version `0.3.0` from `package.json` and checks
+packaging. The package derives version `0.4.0` from `package.json` and checks
 the existing runtime version constant against it.
 
 The command writes only `dist/plugin-marketplace/`:
@@ -39,7 +39,7 @@ codex-with-chatgpt/
     SKILL.md
     agents/openai.yaml
     references/*.md
-codex-with-chatgpt-0.3.0.zip
+codex-with-chatgpt-0.4.0.zip
 SHA256SUMS
 ```
 
@@ -79,13 +79,20 @@ manifest. See [OpenAI's package reference](https://developers.openai.com/plugins
 Use a process-only config override to ask the installed host to read the catalog:
 
 ```powershell
-codex -c 'marketplaces.c2c-local-prototype={source_type="local",source="D:/repos/codex-with-chatgpt/dist/plugin-marketplace"}' plugin list --marketplace c2c-local-prototype --available --json
+codex -c 'marketplaces.hudrucan={source_type="local",source="D:/repos/codex-with-chatgpt/dist/plugin-marketplace"}' plugin list --marketplace hudrucan --available --json
 ```
 
-Expect one available `codex-with-chatgpt@c2c-local-prototype`, version `0.3.0`,
+Expect one available `codex-with-chatgpt@hudrucan`, version `0.4.0`,
 `installed: false`, `enabled: false`. This validates host catalog/manifest parsing;
 it does not prove installed Skill activation. No user configuration is persisted.
 The distribution's nested catalog is outside normal repository discovery.
+
+The `hudrucan` publisher marketplace can contain multiple plugins, including
+`codex-context-mode@hudrucan`. Each marketplace ID resolves to one catalog root.
+When that ID is already configured, preserve its verified entries in a shared
+catalog outside repositories before adding C2C; do not replace the existing
+catalog with the C2C-only generated catalog. Keep every local source inside the
+shared root and verify copied distributions against their original sources.
 
 ## Later installation and rollback
 
@@ -99,13 +106,13 @@ Keep exactly one active C2C Skill and verify it in a fresh session.
 
 For an authorized installation, register the extracted marketplace root with
 `codex plugin marketplace add <absolute-marketplace-root>`, then use
-`codex plugin add codex-with-chatgpt@c2c-local-prototype`. Do not overwrite a
+`codex plugin add codex-with-chatgpt@hudrucan`. Do not overwrite a
 conflicting marketplace identity or install a second copy with a suffix. Validate
 the installed cache against the generated plugin tree and perform an explicitly
 authorized E2E with callback acceptance and matching terminal receipt.
 
 For an authorized rollback, remove only the verified prototype installation via
-`codex plugin remove codex-with-chatgpt@c2c-local-prototype`, restore the preserved
+`codex plugin remove codex-with-chatgpt@hudrucan`, restore the preserved
 standalone Skill to its original discovery location, and check a fresh session.
 Do not remove the shared runtime checkout or restart/deprovision the Hub, tunnel,
 Scheduled Task, registry or OAuth. Keep Lazier's Web receiver until a separate

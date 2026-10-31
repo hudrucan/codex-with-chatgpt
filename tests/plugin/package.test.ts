@@ -40,13 +40,18 @@ it("packages one canonical bound Skill, a local marketplace and verifiable repro
   expect(first.sha256).toBe(rebuilt.sha256);
   expect(digest(fs.readFileSync(first.artifact))).toBe(first.sha256);
   const { distribution } = await expectedDistribution(options);
+  const marketplace = JSON.parse(distribution.get(".agents/plugins/marketplace.json").toString("utf8"));
+  expect(marketplace.name).toBe("hudrucan");
+  expect(marketplace.plugins.map((plugin: { name: string }) => `${plugin.name}@${marketplace.name}`))
+    .toEqual(["codex-with-chatgpt@hudrucan"]);
   expect([...distribution.keys()].filter(name => name.endsWith("SKILL.md")))
     .toEqual(["codex-with-chatgpt/skills/codex-with-chatgpt/SKILL.md"]);
   expect([...distribution.keys()].some(name => /(?:^|\/)(?:node_modules|\.git|\.mcp.json|hooks|auth|runtime)(?:\/|$)/.test(name))).toBe(false);
   const plugin = path.join(output, "codex-with-chatgpt");
   const manifest = JSON.parse(fs.readFileSync(path.join(plugin, ".codex-plugin/plugin.json"), "utf8"));
-  expect(manifest).toEqual({ name: "codex-with-chatgpt", version: "0.3.0",
-    description: JSON.parse(fs.readFileSync(path.join(source, "package.json"), "utf8")).description, skills: "./skills/" });
+  expect(manifest).toEqual({ name: "codex-with-chatgpt", version: "0.4.0",
+    description: JSON.parse(fs.readFileSync(path.join(source, "package.json"), "utf8")).description,
+    skills: "./skills/", interface: { displayName: "codex-with-chatgpt" } });
   const entry = fs.readFileSync(path.join(plugin, "skills/codex-with-chatgpt/SKILL.md"), "utf8");
   expect(entry).toContain(`Checkout: \`${runtime.split(path.sep).join("/")}\``);
   expect(entry).not.toContain("<ACTUAL_CHECKOUT_PATH>");
