@@ -12,6 +12,8 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "plugin:pack": "node scripts/package-plugin.mjs",
+    "plugin:check": "node scripts/package-plugin.mjs --check",
     "dev": "tsx src/cli/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",

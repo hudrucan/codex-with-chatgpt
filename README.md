@@ -84,6 +84,7 @@ See [the tool reference](docs/multi-repo.md#mcp-tools) for operations and limits
 
 - [Codex ↔ ChatGPT Web workflow](skill/references/workflow.md): manual handoffs, opt-in async callbacks and validation trust.
 - [Architecture](docs/architecture.md): components, request flow and development checks.
+- [Offline Codex Local plugin](docs/local-plugin.md): optional prototype packaging, verification and later installation/rollback.
 - [Security](docs/security.md): authorization, file policies and credential storage.
 - [Lifecycle](docs/lifecycle.md): setup, naming, binding, reconnect and disconnect.
 - [Multi-repo access](docs/multi-repo.md): registrations, selectors and registry format.
