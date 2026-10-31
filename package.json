@@ -1,6 +1,6 @@
 {
   "name": "codex-with-chatgpt",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Secure read-only MCP Hub connecting ChatGPT to registered local repositories.",
   "type": "module",
   "license": "MIT",

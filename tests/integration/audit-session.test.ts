@@ -41,14 +41,30 @@ afterEach(async () => {
   cleanup(state); cleanup(root); delete process.env.C2C_STATE_DIR;
 });
 
-it.each([undefined, { tabs: { selected: async () => undefined } }])(
-  "returns manual fallback before source hashing or registration without an existing selected conversation", async browser => {
+it.each(["missing browser", "missing tab", "stale URL", "stale composer", "missing composer", "draft"])(
+  "returns manual fallback before source hashing or registration for %s", async phase => {
     const transport = vi.spyOn(globalThis, "fetch"), scans = vi.spyOn(sourceAccess, "sourceFingerprint");
+    const browser = phase === "missing browser" ? undefined : { tabs: { selected: async () =>
+      phase === "missing tab" ? undefined : { id: "existing", url: async () => {
+        if (phase === "stale URL") throw new Error("browser.user is unavailable.");
+        return "https://chatgpt.com/c/12345678-abcd";
+      }, playwright: { getByRole: () => ({
+        innerText: async () => {
+          if (phase === "stale composer") throw new Error("browser.user is unavailable.");
+          if (phase === "missing composer") throw new Error("Composer missing");
+          return phase === "draft" ? "User draft" : "";
+        },
+        fill: vi.fn(), press: vi.fn(),
+      }) } },
+    } };
+    const code = phase.startsWith("stale") ? "ASYNC_BROWSER_BINDING_STALE"
+      : phase === "draft" ? "ASYNC_DRAFT_PRESENT"
+      : phase === "missing composer" ? "ASYNC_COMPOSER_UNAVAILABLE" : "ASYNC_THREAD_REQUIRED";
     // Sender setup is the first step of the automatic flow, before terminal prepare.
     await expect((async () => {
       await createBrowserSender(browser, "Observed composer");
       await session.prepare(handoff);
-    })()).rejects.toThrow("ASYNC_THREAD_REQUIRED");
+    })()).rejects.toMatchObject({ message: code, delivery: "not_sent" });
     expect(transport).not.toHaveBeenCalled(); expect(scans).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(state, "async-tasks"))).toBe(false);
   },

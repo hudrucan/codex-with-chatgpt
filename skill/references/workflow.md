@@ -45,7 +45,11 @@ Preserve routing and an already-selected `auto=true` when revising/continuing a
 prompt. Planning remains Web-first. Omitted `auto` or `auto=false` means manual
 delivery without browser, Hub or callback state access. Only explicit
 `auto=true` enables automatic delivery. First require an existing browser and selected
-ChatGPT conversation, before source hashing or registration. If either is missing,
+ChatGPT conversation, with live URL/composer verification before source hashing or
+registration. For each new automatic request, establish fresh handles through
+the host's documented API; variables retained across turns do not prove access.
+Use only the sender's bounded initialization recovery before a controller exists.
+If either is missing,
 return the manual handoff without preparing an attempt. Never launch a browser,
 resolve Project bindings, open tabs or create conversations for automatic delivery.
 When available, go directly prepare → send once → MCP callback → result.

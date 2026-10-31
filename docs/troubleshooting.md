@@ -110,15 +110,23 @@ manual send may duplicate an existing message. See the
 
 ### Browser REPL binding failure
 
-If tab inventory still shows the conversation but URL/composer calls report
-`browser.user is unavailable`, the browser REPL binding may be stale. During
-explicitly requested diagnostics, with no pending controller or callback attempt,
-reset only the browser REPL once, select the same existing browser/conversation
-through the documented initialization API, and verify its URL and composer before
-prepare. This clears JavaScript handles without closing tabs or changing Hub/OAuth
-state. Do not open another tab, inspect conversation history, modify the browser
-runtime, or add automatic reset/retry logic to the sender. If an attempt already
-started, follow cancellation/manual fallback instead; a REPL reset cannot resume it.
+Tab inventory and JavaScript variables can remain visible while URL/composer access
+fails with `browser.user is unavailable`. A browser REPL reset followed by rebinding
+the same tab has restored access during diagnostics, but the recurrence trigger is
+unknown; elapsed time or a turn transition alone does not establish a timeout.
+This is a host browser-runtime limitation; local Hub health cannot diagnose it.
+
+The sender now verifies URL, empty composer and unchanged conversation before
+prepare, and can acquire fresh handles before each later prepare while retaining
+duplicate-send guards. It reports `ASYNC_BROWSER_BINDING_STALE` with `not_sent`
+instead of treating visible variables as proof of a working binding. See the
+[sender initialization and recovery procedure](../skill/references/workflow-async.md#existing-conversation-only)
+for the single host-supported reset allowed before a controller starts. C2C does
+not reset the host REPL itself. If a controller already exists, including between
+FIX rounds, stop with cancellation/manual fallback; resetting cannot resume it.
+Never open another tab, navigate, clear user drafts, modify the browser runtime or
+retry a delivery. Simulated stale-handle tests do not prove durable recovery;
+real E2E still requires MCP acceptance and the matching terminal receipt.
 
 ### Checkout, process and permissions
 

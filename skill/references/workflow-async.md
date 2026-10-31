@@ -8,15 +8,41 @@ Omitted `auto` or `auto=false` stays manual without browser, Hub or task-state a
 
 Before starting the terminal controller, source hashing, callback registration or
 task claiming, require an existing browser and selected ChatGPT conversation in the
-current REPL. Otherwise, immediately return the original manual `[C2C Handoff]`.
+current REPL. Establish a fresh binding at the beginning of each new automatic
+request through the host's documented browser initialization API, using only the
+same existing browser and selected tab. JavaScript variables, tab inventory and
+ambient browser context do not prove that URL/composer access still works;
+do not decide availability from `typeof browser` or assume handles survive turns.
+Otherwise, immediately return the original manual `[C2C Handoff]`.
 Never launch a browser, resolve Project bindings, open tabs or create conversations
 for automatic delivery.
 
-Import `<checkout>/dist/c2c/browser.mjs` once in that existing browser REPL. Call
-`createBrowserSender(browser, composerName)` with the observed composer name. It pins
-the selected conversation and rejects missing, Project landing or transient URLs
-with `ASYNC_THREAD_REQUIRED`. Do not read conversation history or audit replies.
-Retain this sender and the original complete handoff in memory for the task.
+Import `<checkout>/dist/c2c/browser.mjs` in that browser REPL. Call
+`createBrowserSender(bindExistingBrowser, composerName)` with the observed composer
+name. `bindExistingBrowser` is a host-supplied async function that obtains live
+handles for the same existing browser/selected tab using documented APIs; it must
+never launch, open, navigate, reset or recover a browser. The older
+`createBrowserSender(browser, composerName)` form remains supported, but cannot
+refresh a stale browser object by itself. Creation pins the browser ID (when
+available), tab ID and conversation route, reads the composer without modifying
+it, requires an empty draft, and rechecks the URL before prepare. Missing/Project
+landing/transient URLs fail with `ASYNC_THREAD_REQUIRED`; stale bindings report
+`ASYNC_BROWSER_BINDING_STALE`; other browser/composer failures report
+`ASYNC_BROWSER_UNAVAILABLE`/`ASYNC_COMPOSER_UNAVAILABLE`, all `not_sent`.
+Do not read conversation history or audit replies. Retain this sender and the
+original complete handoff in memory for the task; do not reuse it for a new task.
+
+If binding is stale before any terminal controller, source hashing or callback
+registration, at most one browser REPL reinitialization/rebind is allowed, only
+when the host officially supports a reset that preserves tabs and drafts. Keep
+the observed browser/tab IDs and conversation URL in transient task context,
+reset only that REPL, reimport the module and verify the exact same selected
+conversation and empty composer. Do not persist these values or select another
+conversation. A mismatch, unavailable reset, or failed recovery returns `not_sent`
+with the safe blocker above; there is no second reset. C2C cannot perform a host
+REPL reset from inside its own module or guarantee a durable host-runtime repair.
+This bounded initialization recovery is not a delivery retry. Never reset or
+recreate a sender after a controller has started, including between FIX rounds.
 
 Only after sender creation succeeds, use prepare → send once → MCP callback → result.
 Registration checks ownership and creates fresh correlation/capability. OAuth
@@ -30,7 +56,13 @@ Use the routed `hubId`, explicit registered `workspaceId` and canonical
 Choose one task ID for this independently authorized user request and keep it stable
 across its rounds. Use one terminal process and one pinned sender per task.
 
-1. After the browser check, run `node <checkout>/dist/c2c/local.mjs async` with the
+1. Immediately before prepare, call `await sender.verifyBinding()` in the browser
+   REPL. This reacquires and verifies the same browser/tab/conversation and empty
+   composer through the supplied binding function, preserving the sender's
+   consumed-ticket state. Only an initial stale binding before the controller
+   starts may use the single initialization recovery above; once it exists,
+   failure stops automation without resetting or retrying.
+   After the browser check, run `node <checkout>/dist/c2c/local.mjs async` with the
    supported terminal tool and `tty=true`. Request official terminal escalation for
    loopback or state access when needed. Send one JSONL command through `write_stdin`:
    `{"operation":"prepare","options":{"hubId":"<hub>","workspaceId":"<id>","workspaceRoot":"<root>","taskId":"<request-id>"},"handoff":"[C2C Handoff]\n..."}`.
@@ -60,7 +92,8 @@ across its rounds. Use one terminal process and one pinned sender per task.
 5. On FIX with `canContinue:true`, send `{"operation":"verifySourceForFix"}`
    immediately before editing. Proceed only on `canAutoFix:true`: this invalidates
    the completed capability against the live Hub and rechecks unchanged source.
-   After one scoped fix and focused validation, send
+   After one scoped fix and focused validation, call `await sender.verifyBinding()`
+   again before the next prepare, then send
    `{"operation":"prepare","handoff":"[C2C Handoff]\n..."}` in the same process,
    omitting immutable options. Reuse the same sender and repeat the send/wait steps.
    Stop on PASS/BLOCKED/ERROR or `canContinue:false`. Maximum: three audits/two fixes.

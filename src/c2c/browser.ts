@@ -12,7 +12,8 @@ export interface SendTab {
   url(): Promise<string | undefined>;
   playwright: { getByRole(role: string, options: { name: string; exact: boolean }): Composer };
 }
-interface Browser { tabs: { selected(): Promise<SendTab | undefined> } }
+interface Browser { browserId?: string; tabs: { selected(): Promise<SendTab | undefined> } }
+type BrowserSource = Browser | undefined | (() => Promise<Browser | undefined>);
 
 export type DeliveryStatus = "not_sent" | "uncertain" | "sent";
 export class BrowserSendError extends Error {
@@ -20,27 +21,65 @@ export class BrowserSendError extends Error {
 }
 const sendErrors = new Set(["ASYNC_TIMEOUT", "ASYNC_THREAD_CHANGED", "ASYNC_DRAFT_PRESENT", "ASYNC_HANDOFF_MISMATCH"]);
 
+function bindingError(error: unknown, fallback: string): BrowserSendError {
+  if (error instanceof BrowserSendError) return error;
+  const stale = error instanceof Error && /^browser\.user is unavailable\.?$/.test(error.message);
+  return new BrowserSendError(stale ? "ASYNC_BROWSER_BINDING_STALE" : fallback, "not_sent");
+}
+
 function thread(value: string | undefined) {
   if (!value) return;
   try {
     const url = new URL(value);
     if (url.origin !== "https://chatgpt.com" || url.search || url.hash || url.username || url.password) return;
-    return url.pathname.match(/^(?:\/g\/g-p-[a-f0-9]{32}(?:-[a-z0-9-]+)?)?\/c\/([a-f0-9-]+)\/?$/)?.[1];
+    if (/^(?:\/g\/g-p-[a-f0-9]{32}(?:-[a-z0-9-]+)?)?\/c\/[a-f0-9-]+\/?$/.test(url.pathname))
+      return url.pathname.replace(/\/$/, "");
   } catch { return; }
 }
 
 /** Pin the existing selected conversation; automatic delivery never opens or resolves a Project. */
-export async function createBrowserSender(browser: Browser | undefined, composerName: string) {
-  const selected = await browser?.tabs.selected(), identity = selected && thread(await selected.url());
-  if (!selected || !identity) throw new Error("ASYNC_THREAD_REQUIRED");
+export async function createBrowserSender(source: BrowserSource, composerName: string) {
+  async function bind() {
+    try {
+      const browser = typeof source === "function" ? await source() : source;
+      const selected = await browser?.tabs.selected(), identity = selected && thread(await selected.url());
+      if (!selected || !identity) throw new BrowserSendError("ASYNC_THREAD_REQUIRED", "not_sent");
+      return { selected, identity, browserId: browser?.browserId };
+    } catch (error) { throw bindingError(error, "ASYNC_BROWSER_UNAVAILABLE"); }
+  }
+  async function verify(binding: Awaited<ReturnType<typeof bind>>) {
+    try {
+      const composer = binding.selected.playwright.getByRole("textbox", { name: composerName, exact: true });
+      if ((await composer.innerText()).trim()) throw new BrowserSendError("ASYNC_DRAFT_PRESENT", "not_sent");
+    } catch (error) { throw bindingError(error, "ASYNC_COMPOSER_UNAVAILABLE"); }
+    try {
+      if (thread(await binding.selected.url()) !== binding.identity)
+        throw new BrowserSendError("ASYNC_THREAD_CHANGED", "not_sent");
+    } catch (error) { throw bindingError(error, "ASYNC_BROWSER_UNAVAILABLE"); }
+  }
+  let binding = await bind();
+  await verify(binding);
+  const pinned = { tabId: binding.selected.id, identity: binding.identity, browserId: binding.browserId };
   const used = new Map<string, DeliveryStatus>();
   let stopped = false;
   return {
+    // Call only before prepare, initially or after a completed, authorized FIX round.
+    async verifyBinding() {
+      if (stopped) throw new BrowserSendError("ASYNC_SEND_TERMINAL", "not_sent");
+      stopped = true;
+      const fresh = await bind();
+      if (fresh.selected.id !== pinned.tabId || fresh.identity !== pinned.identity || fresh.browserId !== pinned.browserId)
+        throw new BrowserSendError("ASYNC_THREAD_CHANGED", "not_sent");
+      await verify(fresh);
+      binding = fresh;
+      stopped = false;
+    },
     async send(request: { ticket: CallbackTicket; remainingMs: number; expiresAt: number }, handoff: string) {
       const { ticket } = request, { attemptId } = ticket;
       if (stopped || used.has(attemptId)) throw new BrowserSendError("ASYNC_SEND_TERMINAL", used.get(attemptId) ?? "not_sent");
       // Even an interrupted fill/press consumes this sender: no uncertain-send retry.
       used.set(attemptId, "not_sent"); stopped = true;
+      const { selected, identity } = binding;
       try {
         if (!Number.isFinite(request.expiresAt) || !Number.isFinite(request.remainingMs)) throw new Error("ASYNC_TIMEOUT");
         const deadline = performance.now() + Math.min(request.remainingMs, request.expiresAt - Date.now());
