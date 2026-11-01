@@ -49,7 +49,7 @@ it("packages one canonical bound Skill, a local marketplace and verifiable repro
   expect([...distribution.keys()].some(name => /(?:^|\/)(?:node_modules|\.git|\.mcp.json|hooks|auth|runtime)(?:\/|$)/.test(name))).toBe(false);
   const plugin = path.join(output, "codex-with-chatgpt");
   const manifest = JSON.parse(fs.readFileSync(path.join(plugin, ".codex-plugin/plugin.json"), "utf8"));
-  expect(manifest).toEqual({ name: "codex-with-chatgpt", version: "0.4.0",
+  expect(manifest).toEqual({ name: "codex-with-chatgpt", version: "0.5.0",
     description: JSON.parse(fs.readFileSync(path.join(source, "package.json"), "utf8")).description,
     skills: "./skills/", interface: { displayName: "codex-with-chatgpt" } });
   const entry = fs.readFileSync(path.join(plugin, "skills/codex-with-chatgpt/SKILL.md"), "utf8");
@@ -79,7 +79,7 @@ it("packages one canonical bound Skill, a local marketplace and verifiable repro
 }, 60_000);
 
 it.each([
-  ["stale helper", "runtime", "dist/c2c/browser.mjs", "// stale\n"],
+  ["stale helper", "runtime", "dist/c2c/local.mjs", "// stale\n"],
   ["stale CLI", "runtime", "dist/cli/index.js", "// stale\n"],
   ["runtime source mismatch", "runtime", "src/version.ts", 'export const VERSION = "0.0.0";\n'],
   ["version mismatch", "source", "src/version.ts", 'export const VERSION = "0.0.0";\n'],

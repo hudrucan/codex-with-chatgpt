@@ -4,6 +4,10 @@ Load with the [common contract](workflow.md) for Web audits; reuse already-read,
 still-valid guidance in this session. Direct repository audits/planning may also
 use C2C; the handoff marker gates only automatic handoff audits.
 
+Web owns planning and auditing. Prompt scope, conversation input and Codex's
+implementation autonomy follow the common contract; keep this receiver focused
+on repository evidence and callback validation.
+
 A handoff starting with `[C2C Handoff]` triggers an audit through C2C MCP without
 a separate audit request. The marker does not grant connector/workspace access.
 Use the routed connector and explicit registered workspace on every call,
@@ -105,4 +109,4 @@ terminal receipt complete delivery.
 Keep the callback summary short: outcome, findings and unchecked limits, with
 necessary evidence in findings. Report acceptance only when observed. Do not
 repeat the same result in tables, JSON and prose; the required callback is the
-structured result. Async authorizes no commits, pushes, rollout or expanded scope.
+structured result. A callback grants no new permissions; retain the user's authorized scope.

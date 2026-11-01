@@ -81,14 +81,13 @@ edit OAuth URLs or token state to bypass consent.
 
 ## Windows automatic C2C
 
-`auto=true` requires an existing browser REPL with a selected ChatGPT conversation.
-Local Hub health, an active RDP login or a running Scheduled Task does not prove
-that condition. A missing browser/thread returns the original manual handoff
-before source scanning or callback registration. Locked/disconnected RDP and
-noninteractive sessions do not authorize a background browser, a new tab or a
-delivery retry. A reboot loses pending callbacks and replay guards; pending tasks
-cannot resume. Recovery needs a separately authorized request, never a Hub restart
-to retry an old attempt.
+`auto=true` requires the user's conversation URL/ID supplied by Web and a local
+configured C2C-owned private Edge profile. Each local controller starts/reuses it
+and resolves its current CDP endpoint; thread environment sharing is unnecessary.
+It uses CDP directly, without a browser REPL or selected-tab discovery. Missing input or
+CDP access fails before source scanning or callback registration. Authentication
+and challenge failures require user action, never a delivery retry. A reboot
+loses pending callbacks and replay guards; pending tasks cannot resume.
 
 The terminal controller uses raw TTY input and checksummed ASCII output frames;
 pipes use JSONL. Keep the terminal at least 20 columns wide, including during
@@ -107,26 +106,6 @@ terminal attempt and inspect the draft manually; do not send it, reuse its ticke
 or clear it automatically over user edits. `uncertain`/`sent` delivery means a
 manual send may duplicate an existing message. See the
 [sender failure rules](../skill/references/workflow-async.md#manual-fallback).
-
-### Browser REPL binding failure
-
-Tab inventory and JavaScript variables can remain visible while URL/composer access
-fails with `browser.user is unavailable`. A browser REPL reset followed by rebinding
-the same tab has restored access during diagnostics, but the recurrence trigger is
-unknown; elapsed time or a turn transition alone does not establish a timeout.
-This is a host browser-runtime limitation; local Hub health cannot diagnose it.
-
-The sender now verifies URL, empty composer and unchanged conversation before
-prepare, and can acquire fresh handles before each later prepare while retaining
-duplicate-send guards. It reports `ASYNC_BROWSER_BINDING_STALE` with `not_sent`
-instead of treating visible variables as proof of a working binding. See the
-[sender initialization and recovery procedure](../skill/references/workflow-async.md#existing-conversation-only)
-for the single host-supported reset allowed before a controller starts. C2C does
-not reset the host REPL itself. If a controller already exists, including between
-FIX rounds, stop with cancellation/manual fallback; resetting cannot resume it.
-Never open another tab, navigate, clear user drafts, modify the browser runtime or
-retry a delivery. Simulated stale-handle tests do not prove durable recovery;
-real E2E still requires MCP acceptance and the matching terminal receipt.
 
 ### Checkout, process and permissions
 

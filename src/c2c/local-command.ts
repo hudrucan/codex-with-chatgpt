@@ -3,6 +3,8 @@ import { sourceFingerprint } from "./source.js";
 import { callbackLocal } from "./callback-client.js";
 import { runSessionCommand } from "./session-command.js";
 import { formatTerminalResult } from "./terminal-result.js";
+import { CdpSendError } from "./cdp.js";
+import { configureCdpProfile } from "./cdp-profile.js";
 
 async function readInput(): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -22,6 +24,7 @@ try {
   if (operation === "async") {
     await runSessionCommand();
   }
+  else if (operation === "cdp-configure") value = await configureCdpProfile(await readInput());
   else if (operation === "fingerprint" && first && /^[a-f0-9]{12}$/.test(second ?? "")) value = sourceFingerprint(first, second);
   else if (operation === "callback" && (first === "register" || first === "wait" || first === "cancel")) {
     value = await callbackLocal(first, await readInput());
@@ -29,6 +32,7 @@ try {
   else throw new Error("ASYNC_LOCAL_REQUEST_INVALID");
   if (operation !== "async") process.stdout.write(formatTerminalResult({ ok: true, value: value ?? null }, !!process.stdout.isTTY));
 } catch (error) {
-  process.stdout.write(formatTerminalResult({ ok: false, error: error instanceof Error ? error.message : String(error) }, !!process.stdout.isTTY));
+  process.stdout.write(formatTerminalResult({ ok: false, error: error instanceof Error ? error.message : String(error),
+    ...(error instanceof CdpSendError ? { delivery: error.delivery } : {}) }, !!process.stdout.isTTY));
   process.exitCode = 1;
 }

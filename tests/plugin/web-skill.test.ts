@@ -54,12 +54,16 @@ it("packages exactly one portable Web Skill, automatic metadata, canonical recei
   expect(entries.get("codex-with-chatgpt/references/workflow-web.md"))
     .toEqual(fs.readFileSync(path.join(source, "skill/references/workflow-web.md")));
   const original = fs.readFileSync(path.join(source, "skill/references/workflow.md"), "utf8");
+  for (const text of ["Web owns planning and auditing", "before exporting the prompt", "Codex must not ask again",
+    "Codex trusts Web's supplied audit findings", "audit PASS grants no deployment permission"])
+    expect(entries.get("codex-with-chatgpt/references/workflow.md")!.toString().replace(/\s+/g, " ")).toContain(text);
+  expect(entries.get("codex-with-chatgpt/SKILL.md")!.toString()).toContain("already-authorized actions");
   expect(entries.get("codex-with-chatgpt/references/workflow.md")!.toString()).toBe(
     original.replace(/\[([^\]]+)\]\(workflow-async\.md(?:#[^)]*)?\)/g, "$1 (Codex Local only)"));
   expect(fs.readFileSync(path.join(source, "skill/references/workflow.md"), "utf8")).toBe(original);
   const expected = expectedWebSkill({ sourceRoot: source });
   const provenance = JSON.parse(expected.distribution.get("provenance.json")!.toString());
-  expect(provenance.host).toBe("chatgpt-web-skill"); expect(provenance.version).toBe("0.4.0");
+  expect(provenance.host).toBe("chatgpt-web-skill"); expect(provenance.version).toBe("0.5.0");
   expect(provenance.source.revision).toMatch(/^[a-f0-9]{40}$/);
   expect(provenance.archive).toEqual({ file: "skill.zip", sha256: first.sha256 });
   for (const [file, digest] of Object.entries(provenance.files)) expect(sha256(entries.get(file)!)).toBe(digest);

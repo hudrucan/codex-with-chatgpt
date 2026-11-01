@@ -26,7 +26,7 @@ and built helpers are compared by SHA-256; JavaScript and helper bundles are reb
 in memory. Different Git revisions are allowed when the checked runtime source and
 artifacts match. A missing file, changed source, stale artifact, symlink/junction,
 relative/traversing path, invalid Skill reference or unexpected Skill file stops
-packaging. The package derives version `0.4.0` from `package.json` and checks
+packaging. The package derives version `0.5.0` from `package.json` and checks
 the existing runtime version constant against it.
 
 The command writes only `dist/plugin-marketplace/`:
@@ -41,7 +41,7 @@ codex-with-chatgpt/
     SKILL.md
     agents/openai.yaml
     references/*.md
-codex-with-chatgpt-0.4.0.zip
+codex-with-chatgpt-0.5.0.zip
 SHA256SUMS
 ```
 
@@ -84,7 +84,7 @@ Use a process-only config override to ask the installed host to read the catalog
 codex -c 'marketplaces.hudrucan={source_type="local",source="D:/repos/codex-with-chatgpt/dist/plugin-marketplace"}' plugin list --marketplace hudrucan --available --json
 ```
 
-Expect one available `codex-with-chatgpt@hudrucan`, version `0.4.0`,
+Expect one available `codex-with-chatgpt@hudrucan`, version `0.5.0`,
 `installed: false`, `enabled: false`. This validates host catalog/manifest parsing;
 it does not prove installed Skill activation. No user configuration is persisted.
 The distribution's nested catalog is outside normal repository discovery.

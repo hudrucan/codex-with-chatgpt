@@ -14,7 +14,7 @@ it("builds self-contained terminal/send-only modules and leaves manual delivery 
     const out = path.join(temp, "bundle"), root = path.join(temp, "repo"), state = path.join(temp, "state");
     fs.mkdirSync(root); makeGitRepo(root);
     await buildC2C(out);
-    expect(fs.readdirSync(out).sort()).toEqual(["browser.mjs", "local.mjs"]);
+    expect(fs.readdirSync(out).sort()).toEqual(["http.mjs", "local.mjs"]);
     const helper = path.join(out, "local.mjs");
     const file = ts.createSourceFile("local.mjs", fs.readFileSync(helper, "utf8"), ts.ScriptTarget.Latest, true);
     const imports: string[] = [];
@@ -42,6 +42,19 @@ it("builds self-contained terminal/send-only modules and leaves manual delivery 
     expect(source.status, source.stderr).toBe(0);
     expect(JSON.parse(source.stdout).value).toBe(sourceFingerprint(root, workspaceId));
     expect(run("claim", ["helper-task"]).status).toBe(1);
+    expect(fs.existsSync(state)).toBe(false);
+
+    const missingTarget = await new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, [helper, "async"], {
+        cwd: temp, env: { ...process.env, C2C_STATE_DIR: state }, stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = ""; child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.resume();
+      child.stdin.on("error", () => {}); child.on("error", reject);
+      child.on("close", code => resolve({ code, stdout }));
+      child.stdin.write(JSON.stringify({ operation: "prepare", auto: true, handoff: "[C2C Handoff]\nFixture" }) + "\n");
+    });
+    expect(missingTarget.code).toBe(1);
+    expect(JSON.parse(missingTarget.stdout)).toEqual({ ok: false, error: "ASYNC_THREAD_REQUIRED", delivery: "not_sent" });
     expect(fs.existsSync(state)).toBe(false);
 
     const registration = JSON.stringify({ hubId: "hub-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

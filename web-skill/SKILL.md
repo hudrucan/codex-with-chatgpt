@@ -13,6 +13,11 @@ For C2C planning, prompts and handoff audits, read the
 [receiver](references/workflow-web.md). Reuse still-valid guidance already read.
 This Skill works without Lazier; it owns the C2C contract, not engineering policy.
 
+Web owns planning and auditing. For `auto=true`, obtain the user's conversation
+URL/ID before exporting a short prompt; reuse it in the workflow. Codex implements
+and tests autonomously, without repeated audit/approval for already-authorized actions.
+Follow the common contract for scope, delivery authorization and four-line handoffs.
+
 Use only the routed existing connector and explicit registered workspace/Hub.
 Verify the connector/workspace pair through `workspace_info` before first use.
 Reuse Project routing and the existing MCP connection available in the chat.

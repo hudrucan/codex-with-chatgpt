@@ -13,10 +13,10 @@ export async function buildC2C(outdir = path.join(root, "dist", "c2c"), { write 
     entryPoints: [path.join(sourceRoot, "src", "c2c", "local-command.ts")], outfile: path.join(outdir, "local.mjs"),
     bundle: true, platform: "node", format: "esm", target: "node20", logLevel: "silent", write,
   });
-  const browser = await build({
+  const http = await build({
     absWorkingDir: sourceRoot,
-    entryPoints: [path.join(sourceRoot, "src", "c2c", "browser.ts")], outfile: path.join(outdir, "browser.mjs"),
-    bundle: true, platform: "neutral", format: "esm", target: "es2022", logLevel: "silent", write,
+    entryPoints: [path.join(sourceRoot, "src", "c2c", "http.ts")], outfile: path.join(outdir, "http.mjs"),
+    bundle: true, platform: "node", format: "esm", target: "node20", logLevel: "silent", write,
   });
-  return [...(local.outputFiles ?? []), ...(browser.outputFiles ?? [])];
+  return [...(local.outputFiles ?? []), ...(http.outputFiles ?? [])];
 }

@@ -4,12 +4,15 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { once } from "node:events";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startBridge, type Bridge } from "../../src/bridge/server.js";
 import { AuditSession } from "../../src/c2c/session.js";
-import { createBrowserSender } from "../../src/c2c/browser.js";
+import { runSessionCommand } from "../../src/c2c/session-command.js";
+import { createCdpSender } from "../../src/c2c/cdp.js";
+import { cdpFixture, chat, endpoint } from "../helpers/cdp.js";
 import { MAX_AUDIT_MS, type CallbackTicket } from "../../src/c2c/protocol.js";
 import { WorkspaceRegistry } from "../../src/workspace/registry.js";
 import * as sourceAccess from "../../src/c2c/source.js";
@@ -37,38 +40,91 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   await session.close(); await client.close(); await bridge.close();
   cleanup(state); cleanup(root); delete process.env.C2C_STATE_DIR;
 });
 
-it.each(["missing browser", "missing tab", "stale URL", "stale composer", "missing composer", "draft"])(
+it.each(["missing conversation", "missing endpoint", "draft"])(
   "returns manual fallback before source hashing or registration for %s", async phase => {
     const transport = vi.spyOn(globalThis, "fetch"), scans = vi.spyOn(sourceAccess, "sourceFingerprint");
-    const browser = phase === "missing browser" ? undefined : { tabs: { selected: async () =>
-      phase === "missing tab" ? undefined : { id: "existing", url: async () => {
-        if (phase === "stale URL") throw new Error("browser.user is unavailable.");
-        return "https://chatgpt.com/c/12345678-abcd";
-      }, playwright: { getByRole: () => ({
-        innerText: async () => {
-          if (phase === "stale composer") throw new Error("browser.user is unavailable.");
-          if (phase === "missing composer") throw new Error("Composer missing");
-          return phase === "draft" ? "User draft" : "";
-        },
-        fill: vi.fn(), press: vi.fn(),
-      }) } },
-    } };
-    const code = phase.startsWith("stale") ? "ASYNC_BROWSER_BINDING_STALE"
-      : phase === "draft" ? "ASYNC_DRAFT_PRESENT"
-      : phase === "missing composer" ? "ASYNC_COMPOSER_UNAVAILABLE" : "ASYNC_THREAD_REQUIRED";
+    const { state: page } = cdpFixture();
+    if (phase === "draft") page.draft = "User draft";
+    const code = phase === "draft" ? "ASYNC_DRAFT_PRESENT" : phase === "missing endpoint" ? "ASYNC_CDP_ENDPOINT_REQUIRED" : "ASYNC_THREAD_REQUIRED";
     // Sender setup is the first step of the automatic flow, before terminal prepare.
     await expect((async () => {
-      await createBrowserSender(browser, "Observed composer");
+      await createCdpSender(phase === "missing conversation" ? "" : chat, phase === "missing endpoint" ? "" : endpoint);
       await session.prepare(handoff);
     })()).rejects.toMatchObject({ message: code, delivery: "not_sent" });
     expect(transport).not.toHaveBeenCalled(); expect(scans).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(state, "async-tasks"))).toBe(false);
   },
 );
+
+it("completes direct CDP delivery through one event-driven MCP callback wait", async () => {
+  const { state: page, callback } = cdpFixture();
+  const sender = await createCdpSender(chat, endpoint);
+  const prepared = await session.prepare(handoff);
+  page.onClick = async text => {
+    const ticket = JSON.parse(text.split("C2C_CALLBACK ")[1].split("\n")[0]);
+    expect((await submit({ ticket })).structuredContent).toEqual({ accepted: true });
+  };
+  const transport = vi.spyOn(globalThis, "fetch");
+  const waiting = session.wait();
+  await expect(sender.send(prepared, handoff)).resolves.toMatchObject({ sent: true });
+  await expect(waiting).resolves.toMatchObject({ ...pass, taskId: prepared.ticket.taskId, attemptId: prepared.ticket.attemptId });
+  await callback();
+  expect(transport.mock.calls.filter(([target]) => String(target).endsWith("/admin/c2c/wait"))).toHaveLength(1);
+  expect(page.fills).toBe(1); expect(page.clicks).toBe(1);
+  await sender.close({ completed: true });
+  expect(page.closedTargets).toEqual(["owned"]);
+});
+
+it("keeps auto tickets internal and generates task identity in the existing controller", async () => {
+  const { state: page, callback } = cdpFixture(), input = new PassThrough(), output = new PassThrough();
+  vi.stubEnv("C2C_CDP_ENDPOINT", endpoint);
+  const stdin = vi.spyOn(process, "stdin", "get").mockReturnValue(input as any);
+  const stdout = vi.spyOn(process, "stdout", "get").mockReturnValue(output as any);
+  let text = "", accepted = false;
+  output.on("data", chunk => { text += chunk; });
+  page.onClick = async message => {
+    const ticket = JSON.parse(message.split("C2C_CALLBACK ")[1].split("\n")[0]);
+    accepted = (await submit({ ticket })).structuredContent?.accepted === true;
+  };
+  try {
+    const running = runSessionCommand(), { taskId: _taskId, ...route } = options();
+    input.write(JSON.stringify({ operation: "prepare", auto: true, conversation: chat, options: route, handoff }) + "\n");
+    await running;
+    await callback();
+    expect(accepted).toBe(true);
+    const receipt = JSON.parse(text.trim());
+    expect(receipt).toMatchObject({ ok: true, value: { status: "PASS", complete: true, canContinue: false } });
+    expect(receipt.value.taskId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(text).not.toMatch(/capability|C2C_CALLBACK|ticket/);
+    expect(page.clicks).toBe(1);
+    expect(page.closedTargets).toEqual(["owned"]);
+  } finally { stdin.mockRestore(); stdout.mockRestore(); vi.unstubAllEnvs(); }
+});
+
+it("interrupts CDP between fill and send without clicking or closing the target/draft", async () => {
+  const { state: page } = cdpFixture(), input = new PassThrough(), output = new PassThrough();
+  vi.stubEnv("C2C_CDP_ENDPOINT", endpoint);
+  const stdin = vi.spyOn(process, "stdin", "get").mockReturnValue(input as any);
+  const stdout = vi.spyOn(process, "stdout", "get").mockReturnValue(output as any);
+  const transport = vi.spyOn(globalThis, "fetch");
+  page.afterAction = action => { if (action === "fill") input.write(Buffer.from([3])); };
+  try {
+    const running = runSessionCommand();
+    const interrupted = expect(running).rejects.toMatchObject({ message: "ASYNC_INTERRUPTED", delivery: "not_sent" });
+    input.write(JSON.stringify({ operation: "prepare", auto: true, conversation: chat, options: options(), handoff }) + "\n");
+    await interrupted;
+    expect(page.fills).toBe(1);
+    expect(page.actions).toEqual(["ready", "fill"]);
+    expect(page.clicks).toBe(0); expect(page.closedTargets).toEqual([]);
+    expect(page.draft).toContain(`${handoff}\n\nC2C_CALLBACK `);
+    expect(transport.mock.calls.filter(([url]) => String(url).endsWith("/admin/c2c/cancel"))).toHaveLength(1);
+  } finally { stdin.mockRestore(); stdout.mockRestore(); vi.unstubAllEnvs(); }
+});
 
 it("uses two scans per audit, one before each fix, and caps the task at three audits/two fixes", async () => {
   const scans = vi.spyOn(sourceAccess, "sourceFingerprint");

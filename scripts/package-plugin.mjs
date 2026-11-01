@@ -10,7 +10,7 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 const pluginName = "codex-with-chatgpt";
 const marketplaceName = "hudrucan";
 const skillFiles = ["SKILL.md", "agents/openai.yaml", ...[
-  "deprovision", "operations", "projects", "setup", "workflow", "workflow-async", "workflow-web",
+  "deprovision", "http-sender", "operations", "projects", "setup", "workflow", "workflow-async", "workflow-web",
 ].map(name => `references/${name}.md`)];
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 const json = value => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
